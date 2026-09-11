@@ -124,26 +124,16 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	getCompletions(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList | undefined {
-		const line = document.lineAt(position.line).text.slice(0, position.character);
-		const memberMatch = line.match(/(?:^|\s)(self|[A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/);
-		if (memberMatch) {
-			const receiverName = memberMatch[1];
-			const prefix = memberMatch[2] ?? "";
-			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), receiverName);
-			if (receiver) {
-				const items = this.types.getMembers(receiver).filter((symbol) => symbol.name.startsWith(prefix)).map((symbol) => this.toSymbolCompletion(symbol));
-				if (items.length) return new vscode.CompletionList(items, false);
-				return undefined;
-			}
-		}
-		const range = wordRange(document, position);
-		const prefix = range ? document.getText(range) : "";
-		const bindings = this.bindings.getVisibleBindings(document.uri.toString(), document.offsetAt(position));
-		const localItems = bindings.filter((binding) => binding.name.startsWith(prefix)).map((binding) => this.toBindingCompletion(binding));
-		const localNames = new Set(localItems.map((item) => String(item.label)));
-		const workspaceItems = this.symbols.workspaceSymbols(prefix).filter((symbol) => !localNames.has(symbol.name)).map((symbol) => this.toSymbolCompletion(symbol));
-		if (!localItems.length && !workspaceItems.length) return undefined;
-		return new vscode.CompletionList([...localItems, ...workspaceItems], false);
+		const result = this.semantic.getCompletions(document.uri.toString(), { offset: document.offsetAt(position) });
+		if (!result.value?.length) return undefined;
+		const items = result.value.map((item) => {
+			const completion = new vscode.CompletionItem(item.name, bindingKind(item.kind as Binding["kind"]));
+			completion.detail = item.kind === "function"
+				? `${item.name}()${item.returnType ? ` -> ${item.returnType}` : ""}`
+				: `${item.kind} ${item.name}${item.type ? `: ${item.type}` : ""}`;
+			return completion;
+		});
+		return new vscode.CompletionList(items, false);
 	}
 
 	getSignatureHelp(document: vscode.TextDocument, position: vscode.Position): vscode.SignatureHelp | undefined {
@@ -166,14 +156,6 @@ export class LanguageService implements vscode.Disposable {
 		help.activeSignature = 0;
 		help.activeParameter = Math.min(activeParameter, Math.max(0, signature.parameters.length - 1));
 		return help;
-	}
-
-	private memberExpression(document: vscode.TextDocument, position: vscode.Position): { receiver: string; member: string } | undefined {
-		const line = document.lineAt(position.line).text;
-		const before = line.slice(0, position.character);
-		const match = before.match(/([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/);
-		if (!match) return undefined;
-		return { receiver: match[1], member: match[2] };
 	}
 
 	private hoverForBinding(binding: Binding): vscode.Hover {
@@ -215,23 +197,11 @@ export class LanguageService implements vscode.Disposable {
 		return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 	}
 
-	private toBindingCompletion(binding: Binding): vscode.CompletionItem {
-		const item = new vscode.CompletionItem(binding.name, bindingKind(binding.kind));
-		item.detail = this.bindingLabel(binding);
-		return item;
-	}
-
-	private toSymbolCompletion(symbol: IndexedSymbol): vscode.CompletionItem {
-		const item = new vscode.CompletionItem(symbol.name, symbolKind(symbol.kind));
-		item.detail = this.symbolLabel(symbol);
-		return item;
-	}
-
 	private toLocation(symbol: IndexedSymbol): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Location {
+	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
