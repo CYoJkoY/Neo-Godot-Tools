@@ -1,3 +1,6 @@
+import { performance } from "node:perf_hooks";
+import { languageProfiler } from "../performance/profiler.js";
+
 export type ScheduledUpdate = {
 	uri: string;
 	version: number;
@@ -10,6 +13,7 @@ type PendingUpdate = ScheduledUpdate;
 export class UpdateScheduler {
 	private readonly pending = new Map<string, PendingUpdate>();
 	private readonly latestSequence = new Map<string, number>();
+	private readonly latestVersion = new Map<string, number>();
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private flushing = false;
 	private disposed = false;
@@ -25,6 +29,7 @@ export class UpdateScheduler {
 		if (this.disposed) return;
 		const previous = this.pending.get(update.uri);
 		if (previous && previous.version > update.version) return;
+		if (!previous && this.latestVersion.get(update.uri) === update.version && update.source === undefined) return;
 		const sequence = ++this.sequence;
 		this.latestSequence.set(update.uri, sequence);
 		this.pending.set(update.uri, { ...update, sequence });
@@ -33,6 +38,7 @@ export class UpdateScheduler {
 
 	cancel(uri: string): void {
 		this.pending.delete(uri);
+		this.latestVersion.delete(uri);
 		this.latestSequence.set(uri, ++this.sequence);
 		this.resolveIdleIfReady();
 	}
@@ -54,7 +60,12 @@ export class UpdateScheduler {
 				this.pending.clear();
 				for (const update of updates) {
 					if (!this.isCurrent(update)) continue;
+					const start = performance.now();
 					await this.apply(update);
+					if (this.isCurrent(update)) {
+						this.latestVersion.set(update.uri, update.version);
+						languageProfiler.record("scheduledUpdate", performance.now() - start);
+					}
 				}
 			}
 		} finally {
