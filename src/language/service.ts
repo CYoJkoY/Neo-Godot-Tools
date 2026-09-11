@@ -245,13 +245,15 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private updateText(uri: string, source: string, version = 0): void {
+		const previous = this.files.get(uri);
 		const affected = this.dependencies.getTransitiveDependents(uri);
-		this.files.update(uri, source, version);
+		const file = this.files.update(uri, source, version);
 		this.symbols.update(uri);
 		this.references.update(uri);
 		this.bindings.update(uri);
 		this.dependencies.update(uri);
-		this.types.invalidate([uri, ...affected]);
+		const apiChanged = previous?.apiFingerprint !== file.apiFingerprint;
+		this.types.invalidate(apiChanged ? [uri, ...affected] : [uri]);
 	}
 
 	private remove(uri: string | vscode.Uri): void {

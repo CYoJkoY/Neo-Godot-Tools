@@ -1,5 +1,6 @@
 import { GDScriptParseResult, parseGDScript } from "../analyzer/index.js";
 import { collectSymbols, IndexedFile } from "./symbol.js";
+import { createApiFingerprint } from "./semantic_snapshot.js";
 import { languageProfiler } from "../performance/profiler.js";
 
 export class FileIndex {
@@ -15,6 +16,7 @@ export class FileIndex {
 			ast: result.ast,
 			diagnostics: result.diagnostics,
 			symbols,
+			apiFingerprint: createApiFingerprint(result.ast, source, symbols),
 		};
 		this.files.set(uri, file);
 		return file;

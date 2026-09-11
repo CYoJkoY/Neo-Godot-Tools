@@ -118,7 +118,7 @@ export class TypeResolutionIndex {
 		const file = this.files.get(uri);
 		if (!file) return `missing:${uri}`;
 		const base = this.resolveExtends(file.ast.declarations);
-		return `${uri}@${file.version}[${base?.uri ? this.memberSignature(base.uri, visited) : ""}]`;
+		return `${uri}@${file.apiFingerprint}[${base?.uri ? this.memberSignature(base.uri, visited) : ""}]`;
 	}
 
 	private collectMembers(uri: string, visited: Set<string>): IndexedSymbol[] {
