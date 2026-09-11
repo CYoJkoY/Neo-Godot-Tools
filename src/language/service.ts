@@ -202,7 +202,7 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Location {
+	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
