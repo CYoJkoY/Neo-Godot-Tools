@@ -28,11 +28,25 @@ export function parse_release_tag(tag: string): ReleaseInfo {
 	};
 }
 
-function set_package_version(version: string): void {
+function read_package_version(): string {
 	const packagePath = path.resolve(process.cwd(), "package.json");
 	const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as Record<string, unknown>;
-	packageJson.version = version;
-	fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, "\t")}\n`);
+	const version = packageJson.version;
+
+	if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
+		throw new Error(`package.json version must be a clean X.Y.Z version, got: ${String(version)}`);
+	}
+
+	return version;
+}
+
+function validate_package_version(release: ReleaseInfo, packageVersion: string): void {
+	if (release.version !== packageVersion) {
+		throw new Error(
+			`Release tag ${release.tag} does not match package.json version ${packageVersion}. ` +
+			`Expected ${release.version}.`,
+		);
+	}
 }
 
 function write_output(name: string, value: string): void {
@@ -50,14 +64,15 @@ function main(): void {
 	}
 
 	const release = parse_release_tag(tag);
-	set_package_version(release.version);
+	const packageVersion = read_package_version();
+	validate_package_version(release, packageVersion);
 
-	write_output("version", release.version);
+	write_output("version", packageVersion);
 	write_output("development", String(release.isDevelopment));
 	write_output("development_number", String(release.developmentNumber ?? ""));
 	write_output("asset", `godot-tools-${release.tag}.vsix`);
 
-	console.log(JSON.stringify(release, null, 2));
+	console.log(JSON.stringify({ ...release, packageVersion }, null, 2));
 }
 
 main();
