@@ -26,25 +26,26 @@ function collectExtends(declarations: GDScriptDeclaration[]): string[] {
 	});
 }
 
+function candidateKeys(value: string): string[] {
+	const path = normalizePath(value);
+	const name = path.split("/").pop();
+	return name && name !== path ? [path, name] : [path];
+}
+
 export class DependencyGraph {
 	private readonly outgoing = new Map<string, DependencyEdge[]>();
 	private readonly incoming = new Map<string, Set<string>>();
+	private readonly unresolved = new Map<string, Set<string>>();
 
 	constructor(private readonly files: FileIndex) {}
 
-	update(uri: string): void {
-		this.remove(uri);
+	update(uri: string): string[] {
+		this.removeOutgoing(uri);
 		const file = this.files.get(uri);
-		if (!file) return;
+		if (!file) return [];
 		const targets = new Map<string, DependencyEdge>();
-		for (const value of collectExtends(file.ast.declarations)) {
-			const target = this.resolveTarget(value);
-			if (target && target !== uri) targets.set(target, { from: uri, to: target, reason: "extends" });
-		}
-		for (const value of collectPreloads(file.source)) {
-			const target = this.resolveTarget(value);
-			if (target && target !== uri) targets.set(target, { from: uri, to: target, reason: "preload" });
-		}
+		for (const value of collectExtends(file.ast.declarations)) this.addCandidate(uri, value, "extends", targets);
+		for (const value of collectPreloads(file.source)) this.addCandidate(uri, value, "preload", targets);
 		const edges = [...targets.values()];
 		this.outgoing.set(uri, edges);
 		for (const edge of edges) {
@@ -52,6 +53,7 @@ export class DependencyGraph {
 			dependents.add(uri);
 			this.incoming.set(edge.to, dependents);
 		}
+		return this.refreshForTarget(uri);
 	}
 
 	getDependencies(uri: string): readonly DependencyEdge[] { return this.outgoing.get(uri) ?? []; }
@@ -71,20 +73,63 @@ export class DependencyGraph {
 		return result;
 	}
 
-	remove(uri: string): void {
+	remove(uri: string): string[] {
+		const dependents = [...this.getDependents(uri)];
+		for (const dependent of dependents) {
+			const edges = this.outgoing.get(dependent) ?? [];
+			const remaining = edges.filter((edge) => edge.to !== uri);
+			if (remaining.length !== edges.length) {
+				this.outgoing.set(dependent, remaining);
+				for (const key of this.targetKeys(uri)) {
+					const candidates = this.unresolved.get(key) ?? new Set<string>();
+					candidates.add(dependent);
+					this.unresolved.set(key, candidates);
+				}
+			}
+		}
+		this.removeOutgoing(uri);
+		this.incoming.delete(uri);
+		for (const entries of this.incoming.values()) entries.delete(uri);
+		return dependents;
+	}
+
+	clear(): void {
+		this.outgoing.clear();
+		this.incoming.clear();
+		this.unresolved.clear();
+	}
+
+	private refreshForTarget(uri: string): string[] {
+		const candidates = new Set<string>();
+		for (const key of this.targetKeys(uri)) {
+			for (const candidate of this.unresolved.get(key) ?? []) candidates.add(candidate);
+		}
+		for (const candidate of candidates) this.update(candidate);
+		return [...candidates];
+	}
+
+	private addCandidate(uri: string, value: string, reason: DependencyEdge["reason"], targets: Map<string, DependencyEdge>): void {
+		const target = this.resolveTarget(value);
+		if (target && target !== uri) {
+			targets.set(target, { from: uri, to: target, reason });
+			return;
+		}
+		for (const key of candidateKeys(value)) {
+			const candidates = this.unresolved.get(key) ?? new Set<string>();
+			candidates.add(uri);
+			this.unresolved.set(key, candidates);
+		}
+	}
+
+	private removeOutgoing(uri: string): void {
 		for (const edge of this.outgoing.get(uri) ?? []) {
 			const dependents = this.incoming.get(edge.to);
 			dependents?.delete(uri);
 			if (dependents?.size === 0) this.incoming.delete(edge.to);
 		}
 		this.outgoing.delete(uri);
-		this.incoming.delete(uri);
-		for (const dependents of this.incoming.values()) dependents.delete(uri);
-	}
-
-	clear(): void {
-		this.outgoing.clear();
-		this.incoming.clear();
+		for (const candidates of this.unresolved.values()) candidates.delete(uri);
+		for (const [key, candidates] of this.unresolved) if (candidates.size === 0) this.unresolved.delete(key);
 	}
 
 	private resolveTarget(value: string): string | undefined {
@@ -97,6 +142,12 @@ export class DependencyGraph {
 		if (!name) return undefined;
 		const matches = [...this.files.values()].filter((file) => this.pathFromUri(file.uri).endsWith(`/${name}.gd`));
 		return matches.length === 1 ? matches[0].uri : undefined;
+	}
+
+	private targetKeys(uri: string): string[] {
+		const path = normalizePath(this.pathFromUri(uri));
+		const name = path.split("/").pop();
+		return name && name !== path ? [path, name] : [path];
 	}
 
 	private pathFromUri(uri: string): string {

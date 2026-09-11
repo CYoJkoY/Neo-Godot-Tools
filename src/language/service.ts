@@ -259,7 +259,7 @@ export class LanguageService implements vscode.Disposable {
 			this.bindings.update(uri);
 		}
 
-		const affected = change.kind === "api_changed" ? this.dependencies.getTransitiveDependents(uri) : [];
+		const affected = change.kind === "api_changed" || change.kind === "file_added" ? this.dependencies.getTransitiveDependents(uri) : [];
 		const semanticAffected = [uri, ...affected];
 		this.types.invalidate(semanticAffected);
 		this.semantic.invalidate(semanticAffected);
