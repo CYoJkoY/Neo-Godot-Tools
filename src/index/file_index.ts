@@ -7,6 +7,13 @@ export class FileIndex {
 	private readonly files = new Map<string, IndexedFile>();
 
 	update(uri: string, source: string, version = 0, parsed?: GDScriptParseResult): IndexedFile {
+		const previous = this.files.get(uri);
+		if (previous?.source === source && !parsed) {
+			if (previous.version === version) return previous;
+			const file = { ...previous, version };
+			this.files.set(uri, file);
+			return file;
+		}
 		const result = languageProfiler.measure("parse", () => parsed ?? parseGDScript(source));
 		const symbols = languageProfiler.measure("collectSymbols", () => collectSymbols(result.ast, uri));
 		const file: IndexedFile = {
