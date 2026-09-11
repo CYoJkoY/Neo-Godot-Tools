@@ -12,8 +12,10 @@ export class GDSignatureHelpProvider implements vscode.SignatureHelpProvider {
 	}
 
 	async provideSignatureHelp(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.SignatureHelpContext): Promise<vscode.SignatureHelp | undefined> {
-		const local = this.languageService.getSignatureHelp(document, position);
+		if (token.isCancellationRequested) return undefined;
+		const local = this.languageService.getSignatureHelp(document, position, token);
 		if (local) return local;
+		if (token.isCancellationRequested) return undefined;
 		return this.fallback.provide(document, position, context, token);
 	}
 }

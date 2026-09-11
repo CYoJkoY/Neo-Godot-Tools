@@ -16,7 +16,7 @@ files.update(baseUri, baseSource, 1);
 symbols.update(baseUri);
 bindings.update(baseUri);
 
-const playerSource = `class_name Player\nextends Base\nvar health: int\nfunc take_damage(amount: int) -> void:\n\thealth -= amount\nfunc make_resource():\n\treturn Resource.new()\n`;
+const playerSource = `class_name Player\nextends Base\nvar health: int\nfunc take_damage(amount: int) -> void:\n\thealth -= amount\nfunc make_resource():\n\treturn Resource.new()\nfunc make_node_path():\n\treturn NodePath("root/player")\n`;
 files.update(playerUri, playerSource, 1);
 symbols.update(playerUri);
 bindings.update(playerUri);
@@ -27,6 +27,8 @@ assert.equal(playerType?.uri, playerUri);
 assert.equal(types.getMember(playerType!, "health")?.name, "health");
 assert.equal(types.getMember(playerType!, "heal")?.name, "heal");
 assert.equal(dependencies.getDependencies(playerUri).length, 1);
+assert.equal(types.resolveName("NodePath")?.name, "NodePath");
+assert.equal(types.resolveName("NodePath")?.builtin, true);
 
 const mainSource = `extends Node\nvar player: Player\nvar spawned = preload("res://player.gd").new()\nfunc make_player():\n\tvar local_player = Player.new()\n\tlocal_player = Player.new()\n\treturn local_player\nfunc test():\n\tvar assigned\n\tassigned = Player.new()\n\tplayer.health = 10\n\tspawned.take_damage(1)\n\tvar returned = make_player()\n\treturned.heal()\n\tassigned.heal()\n`;
 files.update(mainUri, mainSource, 1);
@@ -51,6 +53,8 @@ assert.equal(types.getMember(types.resolveReceiver(mainUri, returnedOffset, "ret
 
 const resourceReturn = types.resolveMemberReturnType(playerType!, types.getMember(playerType!, "make_resource")!);
 assert.equal(resourceReturn?.name, "Resource");
+const nodePathReturn = types.resolveMemberReturnType(playerType!, types.getMember(playerType!, "make_node_path")!);
+assert.equal(nodePathReturn?.name, "NodePath");
 
 assert.equal(dependencies.getDependencies(mainUri).length, 1);
 assert.deepEqual(dependencies.getTransitiveDependents(baseUri), [playerUri, mainUri]);

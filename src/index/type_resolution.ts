@@ -12,16 +12,16 @@ export interface ResolvedType {
 }
 
 const BUILTIN_TYPES = new Set([
-	"bool", "int", "float", "String", "StringName", "Node", "Node2D", "Node3D", "Control", "Object",
+	"bool", "int", "float", "String", "StringName", "NodePath", "Node", "Node2D", "Node3D", "Control", "Object",
 	"RefCounted", "Resource", "Array", "Dictionary", "Callable", "Signal", "Variant", "Vector2", "Vector2i",
 	"Vector3", "Vector3i", "Vector4", "Vector4i", "Color", "Rect2", "Rect2i", "Transform2D", "Transform3D",
 	"Basis", "Quaternion", "Plane", "AABB", "RID", "PackedByteArray", "PackedInt32Array", "PackedInt64Array",
 	"PackedFloat32Array", "PackedFloat64Array", "PackedStringArray", "PackedVector2Array", "PackedVector3Array",
-	"PackedColorArray",
+	"PackedVector4Array", "PackedColorArray",
 ]);
 
 const CONSTRUCTOR_TYPES = new Set([
-	"StringName", "Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Vector4i", "Color", "Rect2", "Rect2i",
+	"StringName", "NodePath", "Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Vector4i", "Color", "Rect2", "Rect2i",
 	"Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB", "RID", "Array", "Dictionary", "Callable",
 ]);
 
@@ -91,6 +91,11 @@ function findContainingFunction(declarations: GDScriptDeclaration[], offset: num
 		}
 	}
 	return undefined;
+}
+
+function splitConditional(expression: string): [string, string] | undefined {
+	const match = expression.match(/^(.*?)\s+if\s+.*?\s+else\s+(.*?)$/s);
+	return match ? [match[1].trim(), match[2].trim()] : undefined;
 }
 
 export class TypeResolutionIndex {
@@ -177,7 +182,7 @@ export class TypeResolutionIndex {
 		const file = this.files.get(uri);
 		if (!file) return `missing:${uri}`;
 		const base = this.resolveExtends(file.ast.declarations);
-		return `${uri}@${file.apiFingerprint}[${base?.uri ? this.memberSignature(base.uri, visited) : ""}]`;
+		return `${uri}@${file.apiFingerprint}:${file.sourceFingerprint}[${base?.uri ? this.memberSignature(base.uri, visited) : ""}]`;
 	}
 
 	private collectMembers(uri: string, visited: Set<string>): IndexedSymbol[] {
@@ -218,10 +223,27 @@ export class TypeResolutionIndex {
 		const value = stripComments(expression);
 		const literal = literalType(value);
 		if (literal) return this.resolveName(literal) ?? { name: literal, builtin: true };
+
+		const conditional = splitConditional(value);
+		if (conditional) {
+			const left = this.resolveExpressionType(uri, conditional[0], offset, visited);
+			const right = this.resolveExpressionType(uri, conditional[1], offset, visited);
+			if (left && right && left.name === right.name) return left;
+			return undefined;
+		}
+
 		const preload = value.match(/^preload\s*\(\s*["']([^"']+\.gd)["']\s*\)\.new\s*\(\s*\)$/);
 		if (preload) return this.resolveScriptPath(preload[1]);
 		const load = value.match(/^load\s*\(\s*["']([^"']+)["']\s*\)$/);
 		if (load) return { name: "Resource", builtin: true };
+
+		const constructed = value.match(/^([A-Za-z_]\w*)\.new\s*\(.*\)$/s);
+		if (constructed) {
+			if (CONSTRUCTOR_TYPES.has(constructed[1])) return this.resolveName(constructed[1]) ?? { name: constructed[1], builtin: true };
+			const type = this.resolveName(constructed[1]);
+			if (type) return type;
+		}
+
 		const memberCall = value.match(/^([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(.*\)$/s);
 		if (memberCall) {
 			const receiver = this.resolveReceiver(uri, offset, memberCall[1]);
