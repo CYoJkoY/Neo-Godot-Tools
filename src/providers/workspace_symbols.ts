@@ -11,7 +11,8 @@ export class GDWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider
 		return this.service.getWorkspaceSymbols(query).map((symbol) => new vscode.SymbolInformation(
 			symbol.name,
 			this.kind(symbol.kind),
-			new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol)),
+			this.range(symbol),
+			vscode.Uri.parse(symbol.uri),
 			symbol.containerName,
 		));
 	}
