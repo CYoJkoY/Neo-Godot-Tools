@@ -249,12 +249,16 @@ export class LanguageService implements vscode.Disposable {
 		const previous = this.files.get(uri);
 		const previousDependencies = this.dependencies.getDependencies(uri);
 		const file = this.files.update(uri, source, version);
-		this.symbols.update(uri);
-		this.references.update(uri);
-		this.bindings.update(uri);
 		this.dependencies.update(uri);
 		const change = classifySemanticChange(previous, file, previousDependencies, this.dependencies.getDependencies(uri));
 		if (change.kind === "unchanged") return;
+
+		if (change.kind === "api_changed" || change.kind === "file_added") this.symbols.update(uri);
+		if (change.kind === "body_changed" || change.kind === "api_changed" || change.kind === "file_added") {
+			this.references.update(uri);
+			this.bindings.update(uri);
+		}
+
 		const affected = change.kind === "api_changed" ? this.dependencies.getTransitiveDependents(uri) : [];
 		const semanticAffected = [uri, ...affected];
 		this.types.invalidate(semanticAffected);
