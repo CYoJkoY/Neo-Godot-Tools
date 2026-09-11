@@ -121,6 +121,20 @@ export default class GDScriptLanguageClient extends LanguageClient {
 				{ scheme: "file", language: "gdscript" },
 				{ scheme: "untitled", language: "gdscript" },
 			],
+			middleware: {
+				// The extension registers its own interactive providers so that local semantic
+				// results are authoritative and the Godot LSP is used only as a fallback.
+				// Keep the LanguageClient's corresponding providers inactive to avoid VS Code
+				// merging two independent hover/definition/etc. results into the UI.
+				provideHover: async () => undefined,
+				provideDefinition: async () => undefined,
+				provideReferences: async () => undefined,
+				provideRenameEdits: async () => undefined,
+				provideCompletionItem: async () => undefined,
+				provideSignatureHelp: async () => undefined,
+				provideDocumentSymbols: async () => undefined,
+				provideWorkspaceSymbols: async () => undefined,
+			},
 		};
 
 		super("GDScriptLanguageClient", serverOptions, clientOptions);
