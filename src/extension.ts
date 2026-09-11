@@ -3,33 +3,26 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { attemptSettingsUpdate, get_extension_uri, clean_godot_path } from "./utils";
 import {
-	GDInlayHintsProvider,
-	GDHoverProvider,
-	GDDocumentDropEditProvider,
-	GDDocumentLinkProvider,
-	GDSemanticTokensProvider,
-	GDCompletionItemProvider,
-	GDDocumentationProvider,
-	GDDefinitionProvider,
-	GDTaskProvider,
+	GDInlayHintsProvider, GDHoverProvider, GDDocumentDropEditProvider, GDDocumentLinkProvider,
+	GDSemanticTokensProvider, GDCompletionItemProvider, GDDocumentationProvider, GDDefinitionProvider,
+	GDDocumentSymbolProvider, GDReferenceProvider, GDRenameProvider, GDWorkspaceSymbolProvider,
+	GDSignatureHelpProvider, GDTaskProvider,
 } from "./providers";
 import { ClientConnectionManager } from "./lsp";
 import { ScenePreviewProvider } from "./scene_tools";
 import { GodotDebugger } from "./debugger";
 import { DebugServer } from "./dev/debug_server";
 import { FormattingProvider } from "./formatter";
+import { LanguageService } from "./language/service";
+import { DefinitionFallback } from "./fallback/definition";
+import { ReferencesFallback } from "./fallback/references";
+import { RenameFallback } from "./fallback/rename";
+import { CompletionFallback } from "./fallback/completion";
+import { HoverFallback } from "./fallback/hover";
+import { SignatureHelpFallback } from "./fallback/signature_help";
 import {
-	get_configuration,
-	find_file,
-	find_project_file,
-	register_command,
-	set_context,
-	get_editor_data_dir,
-	get_project_dir,
-	get_project_version,
-	verify_godot_version,
-	convert_uri_to_resource_path,
-	is_debug_mode,
+	get_configuration, find_file, find_project_file, register_command, set_context, get_editor_data_dir,
+	get_project_dir, get_project_version, verify_godot_version, convert_uri_to_resource_path, is_debug_mode,
 } from "./utils";
 import { prompt_for_godot_executable } from "./utils/prompts";
 import { killSubProcesses, subProcess } from "./utils/subspawn";
@@ -37,6 +30,7 @@ import { killSubProcesses, subProcess } from "./utils/subspawn";
 interface Extension {
 	context?: vscode.ExtensionContext;
 	lsp?: ClientConnectionManager;
+	languageService?: LanguageService;
 	debug?: GodotDebugger;
 	scenePreviewProvider?: ScenePreviewProvider;
 	linkProvider?: GDDocumentLinkProvider;
@@ -46,6 +40,11 @@ interface Extension {
 	formattingProvider?: FormattingProvider;
 	docsProvider?: GDDocumentationProvider;
 	definitionProvider?: GDDefinitionProvider;
+	documentSymbolProvider?: GDDocumentSymbolProvider;
+	referenceProvider?: GDReferenceProvider;
+	renameProvider?: GDRenameProvider;
+	workspaceSymbolProvider?: GDWorkspaceSymbolProvider;
+	signatureHelpProvider?: GDSignatureHelpProvider;
 	semanticTokensProvider?: GDSemanticTokensProvider;
 	completionProvider?: GDCompletionItemProvider;
 	tasksProvider?: GDTaskProvider;
@@ -56,29 +55,31 @@ export const globals: Extension = {};
 
 export function activate(context: vscode.ExtensionContext) {
 	attemptSettingsUpdate(context);
-
 	globals.context = context;
 	globals.lsp = new ClientConnectionManager(context);
+	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback(), new RenameFallback());
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context);
 	globals.linkProvider = new GDDocumentLinkProvider(context);
 	globals.dropsProvider = new GDDocumentDropEditProvider(context);
-	globals.hoverProvider = new GDHoverProvider(context);
+	globals.hoverProvider = new GDHoverProvider(context, globals.languageService, new HoverFallback());
 	globals.inlayProvider = new GDInlayHintsProvider(context);
 	globals.formattingProvider = new FormattingProvider(context);
 	globals.docsProvider = new GDDocumentationProvider(context);
-	globals.definitionProvider = new GDDefinitionProvider(context);
+	globals.definitionProvider = new GDDefinitionProvider(context, globals.languageService);
+	globals.documentSymbolProvider = new GDDocumentSymbolProvider(context, globals.languageService);
+	globals.referenceProvider = new GDReferenceProvider(context, globals.languageService);
+	globals.renameProvider = new GDRenameProvider(context, globals.languageService);
+	globals.workspaceSymbolProvider = new GDWorkspaceSymbolProvider(context, globals.languageService);
+	globals.completionProvider = new GDCompletionItemProvider(context, globals.languageService, new CompletionFallback());
+	globals.signatureHelpProvider = new GDSignatureHelpProvider(context, globals.languageService, new SignatureHelpFallback());
 	// globals.semanticTokensProvider = new GDSemanticTokensProvider(context);
-	// globals.completionProvider = new GDCompletionItemProvider(context);
 	// globals.tasksProvider = new GDTaskProvider(context);
 
-	// Start dev debug server if in debug mode
 	if (is_debug_mode()) {
 		const devServer = new DebugServer();
 		devServer.start().then((port) => {
-			if (port > 0) {
-				globals.devServer = devServer;
-			}
+			if (port > 0) globals.devServer = devServer;
 		});
 	}
 
@@ -90,47 +91,27 @@ export function activate(context: vscode.ExtensionContext) {
 		register_command("switchSceneScript", switch_scene_script),
 		register_command("getGodotPath", get_godot_path),
 	);
-
 	set_context("godotFiles", ["gdscript", "gdscene", "gdresource", "gdshader"]);
 	set_context("sceneLikeFiles", ["gdscript", "gdscene"]);
-
-	get_project_version().then(async () => {
-		initial_setup();
-	});
+	get_project_version().then(async () => { initial_setup(); });
 }
 
 async function initial_setup() {
 	const projectVersion = await get_project_version();
-	if (projectVersion === undefined) {
-		// TODO: actually handle this?
-		return;
-	}
+	if (projectVersion === undefined) return;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
 	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
 	const godotPath = result.godotPath;
-
 	switch (result.status) {
-		case "SUCCESS": {
-			break;
-		}
-		case "WRONG_VERSION": {
-			const message = `The specified Godot executable, '${godotPath}' is the wrong version. 
-				The current project uses Godot v${projectVersion}, but the specified executable is Godot v${result.version}.
-				Extension features will not work correctly unless this is fixed.`;
-			prompt_for_godot_executable(message, settingName);
-			break;
-		}
-		case "INVALID_EXE": {
-			const message = `The specified Godot executable, '${godotPath}' is invalid. 
-				Extension features will not work correctly unless this is fixed.`;
-			prompt_for_godot_executable(message, settingName);
-			break;
-		}
+		case "SUCCESS": break;
+		case "WRONG_VERSION": prompt_for_godot_executable(`The specified Godot executable, '${godotPath}' is the wrong version. \n\t\t\t\tThe current project uses Godot v${projectVersion}, but the specified executable is Godot v${result.version}.\n\t\t\t\tExtension features will not work correctly unless this is fixed.`, settingName); break;
+		case "INVALID_EXE": prompt_for_godot_executable(`The specified Godot executable, '${godotPath}' is invalid. \n\t\t\t\tExtension features will not work correctly unless this is fixed.`, settingName); break;
 	}
 }
 
 export function deactivate(): Thenable<void> {
-	return new Promise<void>((resolve, reject) => {
+	return new Promise<void>((resolve) => {
+		globals.languageService?.dispose();
 		globals.lsp?.client.stop();
 		resolve();
 	});
@@ -138,132 +119,65 @@ export function deactivate(): Thenable<void> {
 
 async function copy_resource_path(uri: vscode.Uri) {
 	if (!uri) {
-		if (vscode.window.activeTextEditor) {
-			uri = vscode.window.activeTextEditor.document.uri;
-		} else {
-			return;
-		}
+		if (vscode.window.activeTextEditor) uri = vscode.window.activeTextEditor.document.uri;
+		else return;
 	}
-
 	const relative_path = await convert_uri_to_resource_path(uri);
-	if (relative_path) {
-		vscode.env.clipboard.writeText(relative_path);
-	}
+	if (relative_path) vscode.env.clipboard.writeText(relative_path);
 }
 
-async function list_classes() {
-	await globals.docsProvider?.list_native_classes();
-}
+async function list_classes() { await globals.docsProvider?.list_native_classes(); }
 
 async function switch_scene_script() {
-	if (!vscode.window.activeTextEditor) {
-		return;
-	}
+	if (!vscode.window.activeTextEditor) return;
 	let path = vscode.window.activeTextEditor.document.uri.fsPath;
-
-	if (path.endsWith(".tscn")) {
-		path = path.replace(".tscn", ".gd");
-	} else if (path.endsWith(".gd")) {
-		path = path.replace(".gd", ".tscn");
-	}
-
+	if (path.endsWith(".tscn")) path = path.replace(".tscn", ".gd");
+	else if (path.endsWith(".gd")) path = path.replace(".gd", ".tscn");
 	const file = await find_file(path);
-	if (file) {
-		vscode.window.showTextDocument(file);
-	}
+	if (file) vscode.window.showTextDocument(file);
 }
 
 async function open_workspace_with_editor() {
 	const projectDir = await get_project_dir();
 	const projectVersion = await get_project_version();
-	if (!projectDir || !projectVersion) {
-		return;
-	}
-
+	if (!projectDir || !projectVersion) return;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
 	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
 	const godotPath = result.godotPath;
-
 	switch (result.status) {
 		case "SUCCESS": {
 			let command = `"${godotPath}" --path "${projectDir}" -e`;
-			if (get_configuration("editor.verbose")) {
-				command += " -v";
-			}
+			if (get_configuration("editor.verbose")) command += " -v";
 			const existingTerminal = vscode.window.terminals.find((t) => t.name === "Godot Editor");
-			if (existingTerminal) {
-				existingTerminal.dispose();
-			}
-			const options: vscode.ExtensionTerminalOptions = {
-				name: "Godot Editor",
-				iconPath: get_extension_uri("resources/godot_icon.svg"),
-				pty: new GodotEditorTerminal(command),
-				isTransient: true,
-			};
+			if (existingTerminal) existingTerminal.dispose();
+			const options: vscode.ExtensionTerminalOptions = { name: "Godot Editor", iconPath: get_extension_uri("resources/godot_icon.svg"), pty: new GodotEditorTerminal(command), isTransient: true };
 			const terminal = vscode.window.createTerminal(options);
-			if (get_configuration("editor.revealTerminal")) {
-				terminal.show();
-			}
+			if (get_configuration("editor.revealTerminal")) terminal.show();
 			break;
 		}
-		case "WRONG_VERSION": {
-			const message = `Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`;
-			prompt_for_godot_executable(message, settingName);
-			break;
-		}
-		case "INVALID_EXE": {
-			const message = `Cannot launch Godot editor: '${settingName}' value of '${godotPath}' is not a valid Godot executable`;
-			prompt_for_godot_executable(message, settingName);
-			break;
-		}
+		case "WRONG_VERSION": prompt_for_godot_executable(`Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`, settingName); break;
+		case "INVALID_EXE": prompt_for_godot_executable(`Cannot launch Godot editor: '${settingName}' value of '${godotPath}' is not a valid Godot executable`, settingName); break;
 	}
 }
 
 async function open_godot_editor_settings() {
 	const dir = get_editor_data_dir();
 	const files = fs.readdirSync(dir).filter((v) => v.endsWith(".tres"));
-
 	const ver = await get_project_version() ?? "";
-
-	for (const file of files) {
-		if (file.includes(ver)) {
-			files.unshift(files.splice(files.indexOf(file), 1)[0]);
-			break;
-		}
-	}
-
+	for (const file of files) if (file.includes(ver)) { files.unshift(files.splice(files.indexOf(file), 1)[0]); break; }
 	const choices: vscode.QuickPickItem[] = [];
-	for (const file of files) {
-		const pick: vscode.QuickPickItem = {
-			label: file,
-			description: path.join(dir, file),
-		};
-		choices.push(pick);
-	}
-
+	for (const file of files) choices.push({ label: file, description: path.join(dir, file) });
 	vscode.window.showQuickPick(choices).then(async (item) => {
-		if (item === undefined) {
-			return;
-		}
-
+		if (item === undefined) return;
 		const _path = path.join(dir, item.label);
 		const doc = await vscode.workspace.openTextDocument(_path);
 		vscode.window.showTextDocument(doc);
 	});
 }
 
-/**
- * Returns the executable path for Godot based on the current project's version.
- * Created to allow other extensions to get the path without having to go
- * through the steps of determining the version to get the proper configuration
- * value (godotTools.editorPath.godot3/4).
- * @returns
- */
 async function get_godot_path(): Promise<string | undefined> {
 	const projectVersion = await get_project_version();
-	if (projectVersion === undefined) {
-		return undefined;
-	}
+	if (projectVersion === undefined) return undefined;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
 	return clean_godot_path(get_configuration(settingName));
 }
@@ -273,33 +187,13 @@ class GodotEditorTerminal implements vscode.Pseudoterminal {
 	onDidWrite: vscode.Event<string> = this.writeEmitter.event;
 	private closeEmitter = new vscode.EventEmitter<number>();
 	onDidClose?: vscode.Event<number> = this.closeEmitter.event;
-
 	constructor(private command: string) {}
-
 	open(initialDimensions: vscode.TerminalDimensions | undefined): void {
 		const proc = subProcess("GodotEditor", this.command, { shell: true, detached: true });
 		this.writeEmitter.fire("Starting Godot Editor process...\r\n");
-
-		proc.stdout.on("data", (data) => {
-			const out = data.toString().trim();
-			if (out) {
-				this.writeEmitter.fire(`${data}\r\n`);
-			}
-		});
-
-		proc.stderr.on("data", (data) => {
-			const out = data.toString().trim();
-			if (out) {
-				this.writeEmitter.fire(`${data}\r\n`);
-			}
-		});
-
-		proc.on("close", (code) => {
-			this.writeEmitter.fire(`Godot Editor stopped with exit code: ${code}\r\n`);
-		});
+		proc.stdout.on("data", (data) => { const out = data.toString().trim(); if (out) this.writeEmitter.fire(`${data}\r\n`); });
+		proc.stderr.on("data", (data) => { const out = data.toString().trim(); if (out) this.writeEmitter.fire(`${data}\r\n`); });
+		proc.on("close", (code) => this.writeEmitter.fire(`Godot Editor stopped with exit code: ${code}\r\n`));
 	}
-
-	close(): void {
-		killSubProcesses("GodotEditor");
-	}
+	close(): void { killSubProcesses("GodotEditor"); }
 }

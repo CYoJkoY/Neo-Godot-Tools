@@ -1,78 +1,48 @@
 import * as vscode from "vscode";
-import {
-	Uri,
-	Position,
-	TextDocument,
-	CancellationToken,
-	ExtensionContext,
-	HoverProvider,
-	MarkdownString,
-	Hover,
-} from "vscode";
 import { SceneParser } from "../scene_tools";
-import { convert_resource_path_to_uri, createLogger, convert_uid_to_uri, convert_uri_to_resource_path } from "../utils";
+import { convert_resource_path_to_uri, convert_uid_to_uri, convert_uri_to_resource_path } from "../utils";
+import { LanguageService } from "../language/service";
+import { HoverFallback } from "../fallback/hover";
 
-const log = createLogger("providers.hover");
-
-export class GDHoverProvider implements HoverProvider {
+export class GDHoverProvider implements vscode.HoverProvider {
 	public parser = new SceneParser();
 
-	constructor(private context: ExtensionContext) {
+	constructor(private readonly context: vscode.ExtensionContext, private readonly languageService?: LanguageService, private readonly fallback = new HoverFallback()) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },
 			{ language: "gdscript", scheme: "file" },
 		];
-		context.subscriptions.push(
-			vscode.languages.registerHoverProvider(selector, this),
-		);
+		context.subscriptions.push(vscode.languages.registerHoverProvider(selector, this));
 	}
 
-	async get_links(text: string): Promise<string> {
-		let links = "";
-		for (const match of text.matchAll(/res:\/\/[^"^']*/g)) {
-			const uri = await convert_resource_path_to_uri(match[0]);
-			if (uri instanceof Uri) {
-				links += `* [${match[0]}](${uri})\n`;
-			}
+	async provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Hover | undefined> {
+		if (document.languageId === "gdscript" && this.languageService) {
+			const local = this.languageService.getHover(document, position);
+			if (local) return local;
+			return this.fallback.provide(document, position, token);
 		}
-		for (const match of text.matchAll(/uid:\/\/[0-9a-z]*/g)) {
-			const uri = await convert_uid_to_uri(match[0]);
-			if (uri instanceof Uri) {
-				links += `* [${match[0]}](${uri})\n`;
-			}
-		}
-		return links;
+		return this.provideResourceHover(document, position);
 	}
 
-	async provideHover(document: TextDocument, position: Position, token: CancellationToken): Promise<Hover | undefined> {
+	private async provideResourceHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
 		if (["gdresource", "gdscene"].includes(document.languageId)) {
 			const scene = this.parser.parse_scene(document);
-
 			const wordPattern = /(?:Ext|Sub)Resource\(\s?"?(\w+)\s?"?\)/;
 			const word = document.getText(document.getWordRangeAtPosition(position, wordPattern));
-
 			if (word.startsWith("ExtResource")) {
 				const match = word.match(wordPattern);
-				if (!match) {
-					throw new Error("No match found for `ExtResource` in scene");
-				}
-				const id = match[1];
-				const resource = scene.externalResources.get(id);
-				if (!resource) {
-					throw new Error(`Resource not found in externalResources with id '${id}'`);
-				}
+				if (!match) return undefined;
+				const resource = scene.externalResources.get(match[1]);
+				if (!resource) return undefined;
 				const definition = resource.body;
-				const links = await this.get_links(definition);
-
-				const contents = new MarkdownString();
-				contents.appendMarkdown(links);
+				const links = await this.getLinks(definition);
+				const contents = new vscode.MarkdownString(links);
 				const uri = await convert_resource_path_to_uri(resource.path);
 				contents.appendMarkdown("\n---\n");
 				contents.appendCodeblock(definition, "gdresource");
 				if (resource.type === "Texture") {
-					contents.appendMarkdown("\n---\n");
-					contents.appendMarkdown(`<img src="${uri}" min-width=100px max-width=500px/>\n`);
+					contents.appendMarkdown(`\n---\n<img src="${uri}" min-width=100px max-width=500px/>\n`);
 					contents.supportHtml = true;
 					contents.isTrusted = true;
 				}
@@ -81,29 +51,16 @@ export class GDHoverProvider implements HoverProvider {
 					const text = (await vscode.workspace.openTextDocument(uri)).getText();
 					contents.appendCodeblock(text, "gdscript");
 				}
-				const hover = new Hover(contents);
-				return hover;
+				return new vscode.Hover(contents);
 			}
-
 			if (word.startsWith("SubResource")) {
 				const match = word.match(wordPattern);
-				if (!match) {
-					throw new Error("No match found for `ExtResource` in scene");
-				}
-				const id = match[1];
-
-				let definition = scene.subResources.get(id)?.body;
-				// don't display contents of giant arrays
+				if (!match) return undefined;
+				let definition = scene.subResources.get(match[1])?.body;
 				definition = definition?.replace(/Array\([0-9,\.\- ]*\)/, "Array(...)");
-
-				if (definition === undefined) {
-					definition = `Definition not found for id ${id}`;
-				}
-
-				const contents = new MarkdownString();
-				contents.appendCodeblock(definition, "gdresource");
-				const hover = new Hover(contents);
-				return hover;
+				const contents = new vscode.MarkdownString();
+				contents.appendCodeblock(definition ?? `Definition not found for id ${match[1]}`, "gdresource");
+				return new vscode.Hover(contents);
 			}
 		}
 
@@ -112,40 +69,40 @@ export class GDHoverProvider implements HoverProvider {
 			link = document.getText(document.getWordRangeAtPosition(position, /uid:\/\/[0-9a-z]*/));
 			if (link.startsWith("uid://")) {
 				const uri = await convert_uid_to_uri(link);
-				link = await convert_uri_to_resource_path(uri ?? Uri.parse(link));
+				link = await convert_uri_to_resource_path(uri ?? vscode.Uri.parse(link));
 			}
 		}
-
-		if (link.startsWith("res://")) {
-			let type = "";
-			if (link.endsWith(".gd")) {
-				type = "gdscript";
-			} else if (link.endsWith(".cs")) {
-				type = "csharp";
-			} else if (link.endsWith(".tscn")) {
-				type = "gdscene";
-			} else if (link.endsWith(".tres")) {
-				type = "gdresource";
-			} else if (link.endsWith(".png") || link.endsWith(".svg")) {
-				type = "image";
-			} else {
-				throw new Error(`Unsupported link type '${link}'`);
-			}
-
-			const uri = await convert_resource_path_to_uri(link);
-			const contents = new MarkdownString();
-			if (type === "image") {
-				contents.appendMarkdown(`<img src="${uri}" min-width=100px max-width=500px/>`);
-				contents.supportHtml = true;
-				contents.isTrusted = true;
-			} else {
-				const text = (await vscode.workspace.openTextDocument(uri)).getText();
-				contents.appendCodeblock(text, type);
-			}
-			const hover = new Hover(contents);
-			return hover;
+		if (!link.startsWith("res://")) return undefined;
+		let type = "";
+		if (link.endsWith(".gd")) type = "gdscript";
+		else if (link.endsWith(".cs")) type = "csharp";
+		else if (link.endsWith(".tscn")) type = "gdscene";
+		else if (link.endsWith(".tres")) type = "gdresource";
+		else if (link.endsWith(".png") || link.endsWith(".svg")) type = "image";
+		else return undefined;
+		const uri = await convert_resource_path_to_uri(link);
+		const contents = new vscode.MarkdownString();
+		if (type === "image") {
+			contents.appendMarkdown(`<img src="${uri}" min-width=100px max-width=500px/>`);
+			contents.supportHtml = true;
+			contents.isTrusted = true;
+		} else {
+			const text = (await vscode.workspace.openTextDocument(uri)).getText();
+			contents.appendCodeblock(text, type);
 		}
+		return new vscode.Hover(contents);
+	}
 
-		return undefined;
+	private async getLinks(text: string): Promise<string> {
+		let links = "";
+		for (const match of text.matchAll(/res:\/\/[^"^']*/g)) {
+			const uri = await convert_resource_path_to_uri(match[0]);
+			if (uri instanceof vscode.Uri) links += `* [${match[0]}](${uri})\n`;
+		}
+		for (const match of text.matchAll(/uid:\/\/[0-9a-z]*/g)) {
+			const uri = await convert_uid_to_uri(match[0]);
+			if (uri instanceof vscode.Uri) links += `* [${match[0]}](${uri})\n`;
+		}
+		return links;
 	}
 }

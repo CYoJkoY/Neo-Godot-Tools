@@ -1,41 +1,21 @@
 import * as vscode from "vscode";
-import {
-	Uri,
-	Position,
-	Range,
-	TextDocument,
-	CancellationToken,
-	ProviderResult,
-	CompletionContext,
-	CompletionList,
-	CompletionItem,
-	CompletionItemProvider,
-	ExtensionContext,
-} from "vscode";
-import { createLogger } from "../utils";
+import { CompletionFallback } from "../fallback/completion";
+import { LanguageService } from "../language/service";
 
-const log = createLogger("providers.completions");
-
-export class GDCompletionItemProvider implements CompletionItemProvider {
-	constructor(private context: ExtensionContext) {
+export class GDCompletionItemProvider implements vscode.CompletionItemProvider {
+	constructor(private readonly context: vscode.ExtensionContext, private readonly languageService: LanguageService, private readonly fallback = new CompletionFallback()) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },
 			{ language: "gdscript", scheme: "file" },
 		];
-		context.subscriptions.push(
-			vscode.languages.registerCompletionItemProvider(selector, this),
-		);
+		context.subscriptions.push(vscode.languages.registerCompletionItemProvider(selector, this));
 	}
 
-	provideCompletionItems(document: TextDocument, position: Position, token: CancellationToken, context: CompletionContext): ProviderResult<CompletionItem[] | CompletionList<CompletionItem>> {
-		const items = [];
-
-		const linePrefix = document.lineAt(position).text.slice(0, position.character);
-
-		log.debug("provideCompletionItems");
-		log.debug("linePrefix", linePrefix);
-
-		return items;
+	async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): Promise<vscode.CompletionList | vscode.CompletionItem[] | undefined> {
+		if (document.languageId !== "gdscript") return this.fallback.provide(document, position, context, token);
+		const local = this.languageService.getCompletions(document, position);
+		if (local) return local;
+		return this.fallback.provide(document, position, context, token);
 	}
 }

@@ -1,5 +1,5 @@
 {
-    "$schema": "https://biomejs.dev/schemas/1.9.3/schema.json",
+	"$schema": "https://biomejs.dev/schemas/1.9.3/schema.json",
 	"vcs": {
 		"defaultBranch": "master"
 	},
@@ -21,11 +21,13 @@
 			"style": {
 				"noUselessElse": "off",
 				"useImportType": "off",
-                "noParameterAssign": "warn"
+				"noParameterAssign": "warn",
+				"noUnusedTemplateLiteral": "off",
+				"noNonNullAssertion": "off"
 			},
-            "suspicious": {
-                "noExplicitAny": "off"
-            }
+			"suspicious": {
+				"noExplicitAny": "off"
+			}
 		}
 	}
 }

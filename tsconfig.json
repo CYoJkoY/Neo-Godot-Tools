@@ -6,22 +6,14 @@
 		"moduleDetection": "force",
 		"isolatedModules": true,
 		"outDir": "out",
-		"lib": [
-			"es2022",
-			"dom"
-		],
+		"lib": ["es2022", "dom"],
 		"sourceMap": true,
 		"rootDir": "src",
 		"strict": false,
 		"skipLibCheck": true,
-		"allowJs": true,
+		"allowJs": false,
 		"strictBindCallApply": true,
-		"strictNullChecks": true,
+		"strictNullChecks": true
 	},
-	"exclude": [
-		"node_modules",
-		"out",
-		"tools",
-		"media"
-	]
+	"exclude": ["node_modules", "out", "tools", "media", "**/*.test.ts"]
 }
