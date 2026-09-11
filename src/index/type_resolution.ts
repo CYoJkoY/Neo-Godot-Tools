@@ -94,7 +94,8 @@ function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 		equalsIndex++;
 		while (equalsIndex < tokens.length && tokens[equalsIndex].value !== "=") equalsIndex++;
 	}
-	if (tokens[equalsIndex]?.value !== "=") return undefined;
+	const isInferredAssignment = tokens[equalsIndex]?.value === ":=";
+	if (!isInferredAssignment && tokens[equalsIndex]?.value !== "=") return undefined;
 	const expressionTokens = tokens.slice(equalsIndex + 1);
 	return { kind: "assignment", name: name.value, expression: expressionTokens.length ? tokenText(expressionTokens) : undefined, expressionOffset: expressionTokens[0]?.start, offset: name.start };
 }
@@ -162,6 +163,7 @@ export class TypeResolutionIndex {
 	}
 	resolveMemberReturnType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
 		if (member.returnType) return this.resolveName(member.returnType);
+		if (member.type) return this.resolveName(member.type);
 		return member.kind === "function" ? this.resolveFunctionReturnType(member.uri, member.name, new Set<string>()) : undefined;
 	}
 	invalidate(uris: Iterable<string>): void {
@@ -243,6 +245,14 @@ export class TypeResolutionIndex {
 		if (memberCall) {
 			const receiver = this.resolveReceiver(uri, offset, memberCall[1]);
 			if (receiver) { const member = this.getMember(receiver, memberCall[2]); if (member) return this.resolveMemberReturnType(receiver, member); }
+		}
+		const memberAccess = value.match(/^([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)$/s);
+		if (memberAccess) {
+			const receiver = this.resolveReceiver(uri, offset, memberAccess[1]);
+			if (receiver) {
+				const member = this.getMember(receiver, memberAccess[2]);
+				if (member) return this.resolveMemberReturnType(receiver, member);
+			}
 		}
 		const call = topLevelCall(value);
 		if (call) {
