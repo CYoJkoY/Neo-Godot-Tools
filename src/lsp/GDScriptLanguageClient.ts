@@ -19,6 +19,8 @@ import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
 
+const BUILTIN_SYMBOL_TIMEOUT_MS = 300;
+
 enum ClientStatus {
 	PENDING = 0,
 	DISCONNECTED = 1,
@@ -46,12 +48,12 @@ type HoverResult = {
 	};
 	range: {
 		end: {
-			character: number;
-			line: number;
+		character: number;
+		line: number;
 		};
 		start: {
-			character: number;
-			line: number;
+		character: number;
+		line: number;
 		};
 	};
 };
@@ -118,9 +120,9 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 		const clientOptions: LanguageClientOptions = {
 			documentSelector: [
-				{ scheme: "file", language: "gdscript" },
-				{ scheme: "untitled", language: "gdscript" },
-			],
+			{ scheme: "file", language: "gdscript" },
+			{ scheme: "untitled", language: "gdscript" },
+		],
 			middleware: {
 				// The extension registers its own interactive providers so that local semantic
 				// results are authoritative and the Godot LSP is used only as a fallback.
@@ -239,13 +241,27 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		return message;
 	}
 
-	public async get_symbol_at_position(uri: vscode.Uri, position: vscode.Position) {
-		const params = {
-			textDocument: { uri: uri.toString() },
-			position: { line: position.line, character: position.character },
-		};
-		const response = await this.sendRequest("textDocument/hover", params);
-		return this.parse_hover_result(response as HoverResult);
+	public async get_symbol_at_position(uri: vscode.Uri, position: vscode.Position, token?: vscode.CancellationToken) {
+		if (token?.isCancellationRequested) return undefined;
+
+		const requestToken = new vscode.CancellationTokenSource();
+		const cancellation = token?.onCancellationRequested(() => requestToken.cancel());
+		const timeout = setTimeout(() => requestToken.cancel(), BUILTIN_SYMBOL_TIMEOUT_MS);
+		try {
+			const params = {
+				textDocument: { uri: uri.toString() },
+				position: { line: position.line, character: position.character },
+			};
+			const response = await this.sendRequest("textDocument/hover", params, requestToken.token);
+			if (token?.isCancellationRequested || !response) return undefined;
+			return this.parse_hover_result(response as HoverResult);
+		} catch {
+			return undefined;
+		} finally {
+			clearTimeout(timeout);
+			cancellation?.dispose();
+			requestToken.dispose();
+		}
 	}
 
 	private parse_hover_result(message: HoverResult) {
