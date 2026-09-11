@@ -6,6 +6,7 @@ import { RenameFallback } from "../fallback/rename";
 import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
 import { SemanticQueryEngine } from "./semantic/query_engine";
 import { isSafeLocalConfidence } from "./semantic/resolution_policy";
+import { getGDScriptBuiltin, getGDScriptBuiltins } from "./semantic/gdscript_builtins";
 import { languageProfiler } from "../performance/profiler";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
@@ -24,6 +25,15 @@ function bindingKind(kind: Binding["kind"]): vscode.CompletionItemKind {
 		case "signal": return vscode.CompletionItemKind.Event;
 		case "enum": return vscode.CompletionItemKind.Enum;
 	}
+}
+
+function isGlobalCompletionContext(document: vscode.TextDocument, position: vscode.Position): boolean {
+	const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
+	return !/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.\w*$/.test(before);
+}
+
+function parameterLabel(parameter: IndexedParameter): string {
+	return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 }
 
 export class LanguageService implements vscode.Disposable {
@@ -112,6 +122,13 @@ export class LanguageService implements vscode.Disposable {
 			const range = wordRange(document, position);
 			if (!range) return undefined;
 			const name = document.getText(range);
+			const builtin = getGDScriptBuiltin(name);
+			if (builtin) {
+				const markdown = new vscode.MarkdownString();
+				markdown.appendCodeblock(`${builtin.name}(${builtin.parameters.map(parameterLabel).join(", ")})${builtin.returnType ? ` -> ${builtin.returnType}` : ""}`, "gdscript");
+				markdown.appendMarkdown(`\n\n${builtin.description}`);
+				return new vscode.Hover(markdown, range);
+			}
 			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), name);
 			if (binding && result.confidence === "exact") return this.hoverForBinding(binding);
 			return undefined;
@@ -121,14 +138,27 @@ export class LanguageService implements vscode.Disposable {
 	getCompletions(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): vscode.CompletionList | undefined {
 		if (token?.isCancellationRequested) return undefined;
 		const result = languageProfiler.measure("semantic.completion", () => this.semantic.getCompletions(document.uri.toString(), { offset: document.offsetAt(position) }));
-		if (token?.isCancellationRequested || result.confidence !== "exact" || !result.value?.length) return undefined;
-		const items = result.value.map((item) => {
+		if (token?.isCancellationRequested) return undefined;
+		const items = result.value?.map((item) => {
 			const completion = new vscode.CompletionItem(item.name, bindingKind(item.kind as Binding["kind"]));
 			completion.detail = item.kind === "function"
 				? `${item.name}()${item.returnType ? ` -> ${item.returnType}` : ""}`
 				: `${item.kind} ${item.name}${item.type ? `: ${item.type}` : ""}`;
 			return completion;
-		});
+		}) ?? [];
+		if (isGlobalCompletionContext(document, position)) {
+			const word = wordRange(document, position);
+			const prefix = word ? document.getText(word) : "";
+			const existing = new Set(items.map((item) => item.label.toString()));
+			for (const builtin of getGDScriptBuiltins(prefix)) {
+				if (existing.has(builtin.name)) continue;
+				const completion = new vscode.CompletionItem(builtin.name, vscode.CompletionItemKind.Function);
+				completion.detail = `${builtin.name}(${builtin.parameters.map(parameterLabel).join(", ")})${builtin.returnType ? ` -> ${builtin.returnType}` : ""}`;
+				completion.documentation = new vscode.MarkdownString(builtin.description);
+				items.push(completion);
+			}
+		}
+		if (!items.length) return undefined;
 		return new vscode.CompletionList(items, false);
 	}
 
@@ -141,20 +171,26 @@ export class LanguageService implements vscode.Disposable {
 			const name = match[1];
 			const argumentText = match[2];
 			const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
+			const builtin = getGDScriptBuiltin(name);
+			if (builtin) return this.signatureHelpForParameters(builtin.name, builtin.parameters, builtin.returnType, activeParameter);
 			const callOffset = Math.max(0, document.offsetAt(position) - match[1].length - 1);
 			const binding = this.bindings.getBinding(document.uri.toString(), callOffset, name);
 			const symbols = binding?.kind === "function" ? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined) : this.symbols.find(name);
 			const functions = symbols.filter((symbol) => symbol.kind === "function");
 			if (functions.length !== 1) return undefined;
 			const symbol = functions[0];
-			const signature = new vscode.SignatureInformation(this.signatureLabel(symbol));
-			signature.parameters = (symbol.parameters ?? []).map((parameter) => new vscode.ParameterInformation(this.parameterLabel(parameter)));
-			const help = new vscode.SignatureHelp();
-			help.signatures = [signature];
-			help.activeSignature = 0;
-			help.activeParameter = Math.min(activeParameter, Math.max(0, signature.parameters.length - 1));
-			return help;
+			return this.signatureHelpForParameters(symbol.name, symbol.parameters ?? [], symbol.returnType, activeParameter);
 		});
+	}
+
+	private signatureHelpForParameters(name: string, parameters: IndexedParameter[], returnType: string | undefined, activeParameter: number): vscode.SignatureHelp {
+		const signature = new vscode.SignatureInformation(`${name}(${parameters.map(parameterLabel).join(", ")})${returnType ? ` -> ${returnType}` : ""}`);
+		signature.parameters = parameters.map((parameter) => new vscode.ParameterInformation(parameterLabel(parameter)));
+		const help = new vscode.SignatureHelp();
+		help.signatures = [signature];
+		help.activeSignature = 0;
+		help.activeParameter = Math.min(activeParameter, Math.max(0, signature.parameters.length - 1));
+		return help;
 	}
 
 	private hoverForBinding(binding: Binding): vscode.Hover {
@@ -188,12 +224,8 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private signatureLabel(symbol: IndexedSymbol): string {
-		const parameters = (symbol.parameters ?? []).map((parameter) => this.parameterLabel(parameter)).join(", ");
+		const parameters = (symbol.parameters ?? []).map(parameterLabel).join(", ");
 		return `${symbol.name}(${parameters})${symbol.returnType ? ` -> ${symbol.returnType}` : ""}`;
-	}
-
-	private parameterLabel(parameter: IndexedParameter): string {
-		return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 	}
 
 	private toLocation(symbol: IndexedSymbol): vscode.Location {
