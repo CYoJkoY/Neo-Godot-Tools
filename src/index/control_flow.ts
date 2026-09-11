@@ -38,7 +38,8 @@ function assignment(lines: LineInfo[], name: string, maxOffset: number): string 
 			equals++;
 			while (equals < tokens.length && tokens[equals].value !== "=") equals++;
 		}
-		if (tokens[equals]?.value !== "=") continue;
+		const isInferredAssignment = tokens[equals]?.value === ":=";
+		if (!isInferredAssignment && tokens[equals]?.value !== "=") continue;
 		const expression = tokens.slice(equals + 1).map((token) => token.value).join(" ").trim();
 		if (expression) result = expression;
 	}

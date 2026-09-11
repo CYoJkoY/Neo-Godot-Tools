@@ -11,11 +11,19 @@ function percentile(values: number[], percentileValue: number): number {
 }
 
 function sourceFor(index: number): string {
-	return `class_name Synthetic${index}\nextends Node\n\nfunc get_value() -> int:\n\treturn ${index}\n\nfunc use():\n\tvar value = get_value()\n\treturn value\n`;
+	return `class_name Synthetic${index}\nextends Node\n\nvar value: int = ${index}\n\nfunc get_value() -> int:\n\treturn value\n\nfunc use():\n\tvar local_value := get_value()\n\treturn local_value\n`;
 }
 
 function uriFor(index: number): string {
 	return `file:///synthetic/project/script_${index}.gd`;
+}
+
+function report(values: number[]): { p50: number; p95: number; p99: number } {
+	return {
+		p50: Number(percentile(values, 50).toFixed(2)),
+		p95: Number(percentile(values, 95).toFixed(2)),
+		p99: Number(percentile(values, 99).toFixed(2)),
+	};
 }
 
 for (const count of SCALES) {
@@ -37,12 +45,14 @@ for (const count of SCALES) {
 	const targetUri = uriFor(Math.floor(count / 2));
 	const target = files.get(targetUri);
 	if (!target) throw new Error(`missing benchmark target: ${targetUri}`);
-	const valueOffset = target.source.lastIndexOf("value") + 2;
+	const valueOffset = target.source.indexOf("local_value :=") + "local_value".length;
+	const completionOffset = target.source.length;
 
 	const editSamples: number[] = [];
-	for (let iteration = 0; iteration < 10; iteration++) {
+	for (let iteration = 0; iteration < 20; iteration++) {
 		const start = performance.now();
-		files.update(targetUri, `${target.source}\n# edit ${iteration}\n`, iteration + 2);
+		const edited = `${target.source}\n# edit ${iteration}\n`;
+		files.update(targetUri, edited, iteration + 2);
 		symbols.update(targetUri);
 		bindings.update(targetUri);
 		types.invalidate([targetUri]);
@@ -50,25 +60,40 @@ for (const count of SCALES) {
 		editSamples.push(performance.now() - start);
 	}
 
-	const querySamples: number[] = [];
-	for (let iteration = 0; iteration < 30; iteration++) {
-		const start = performance.now();
+	const querySamples = {
+		type: [] as number[],
+		definition: [] as number[],
+		hover: [] as number[],
+		completion: [] as number[],
+	};
+	semantic.getType(targetUri, { offset: valueOffset });
+	semantic.getDefinition(targetUri, { offset: valueOffset });
+	semantic.getHover(targetUri, { offset: valueOffset });
+	semantic.getCompletions(targetUri, { offset: completionOffset });
+	for (let iteration = 0; iteration < 50; iteration++) {
+		let start = performance.now();
 		semantic.getType(targetUri, { offset: valueOffset });
-		querySamples.push(performance.now() - start);
+		querySamples.type.push(performance.now() - start);
+		start = performance.now();
+		semantic.getDefinition(targetUri, { offset: valueOffset });
+		querySamples.definition.push(performance.now() - start);
+		start = performance.now();
+		semantic.getHover(targetUri, { offset: valueOffset });
+		querySamples.hover.push(performance.now() - start);
+		start = performance.now();
+		semantic.getCompletions(targetUri, { offset: completionOffset });
+		querySamples.completion.push(performance.now() - start);
 	}
 
 	console.log(JSON.stringify({
 		files: count,
 		coldIndexMs: Number(cold.toFixed(2)),
-		singleEditMs: {
-			p50: Number(percentile(editSamples, 50).toFixed(2)),
-			p95: Number(percentile(editSamples, 95).toFixed(2)),
-			p99: Number(percentile(editSamples, 99).toFixed(2)),
-		},
-		semanticTypeQueryMs: {
-			p50: Number(percentile(querySamples, 50).toFixed(2)),
-			p95: Number(percentile(querySamples, 95).toFixed(2)),
-			p99: Number(percentile(querySamples, 99).toFixed(2)),
+		singleEditMs: report(editSamples),
+		semanticMs: {
+			type: report(querySamples.type),
+			definition: report(querySamples.definition),
+			hover: report(querySamples.hover),
+			completion: report(querySamples.completion),
 		},
 	}));
 }
