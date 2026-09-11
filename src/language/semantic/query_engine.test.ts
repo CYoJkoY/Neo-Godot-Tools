@@ -67,4 +67,19 @@ describe("SemanticQueryEngine", () => {
 		expect(type.confidence).toBe("exact");
 		expect(engine.getMembers(type.value!).value).toEqual([member]);
 	});
+
+	it("uses the same local resolution boundary for hover", () => {
+		const engine = engineFor("player", {
+			binding: {
+				name: "player",
+				uri,
+				declarationRange: variable.range,
+				kind: "member",
+				type: "Player",
+			},
+		});
+		const result = engine.getHover(uri, { offset: 2 });
+		expect(result.confidence).toBe("exact");
+		expect(result.value?.name).toBe("player");
+	});
 });

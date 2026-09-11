@@ -71,6 +71,10 @@ export class SemanticQueryEngine {
 		return this.getSymbol(uri, position);
 	}
 
+	getHover(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
+		return this.getSymbol(uri, position);
+	}
+
 	getType(uri: string, position: SemanticPosition, expression?: string): ResolutionResult<ResolvedType> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
