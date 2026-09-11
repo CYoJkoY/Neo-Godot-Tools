@@ -3,6 +3,7 @@ import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, Refe
 import { DefinitionFallback } from "../fallback/definition";
 import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
+import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
 	return document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
@@ -43,6 +44,7 @@ export class LanguageService implements vscode.Disposable {
 	readonly types = new TypeResolutionIndex(this.files, this.symbols, this.bindings);
 	readonly dependencies = new DependencyGraph(this.files);
 	private readonly disposables: vscode.Disposable[] = [];
+	private readonly updateScheduler: UpdateScheduler;
 	private scanGeneration = 0;
 
 	constructor(
@@ -50,14 +52,15 @@ export class LanguageService implements vscode.Disposable {
 		private readonly referencesFallback: ReferencesFallback,
 		private readonly renameFallback: RenameFallback,
 	) {
+		this.updateScheduler = new UpdateScheduler(30, (update) => this.applyScheduledUpdate(update));
 		this.disposables.push(
-			vscode.workspace.onDidOpenTextDocument((document) => this.updateDocument(document)),
-			vscode.workspace.onDidChangeTextDocument((event) => this.updateDocument(event.document)),
-			vscode.workspace.onDidSaveTextDocument((document) => this.updateDocument(document)),
+			vscode.workspace.onDidOpenTextDocument((document) => this.scheduleDocument(document)),
+			vscode.workspace.onDidChangeTextDocument((event) => this.scheduleDocument(event.document)),
+			vscode.workspace.onDidSaveTextDocument((document) => this.scheduleDocument(document)),
 		);
 		const watcher = vscode.workspace.createFileSystemWatcher("**/*.gd");
-		watcher.onDidCreate((uri) => void this.updateUri(uri));
-		watcher.onDidChange((uri) => void this.updateUri(uri));
+		watcher.onDidCreate((uri) => this.scheduleUri(uri));
+		watcher.onDidChange((uri) => this.scheduleUri(uri));
 		watcher.onDidDelete((uri) => this.remove(uri));
 		this.disposables.push(watcher);
 		void this.rebuildWorkspaceIndex();
@@ -65,6 +68,7 @@ export class LanguageService implements vscode.Disposable {
 
 	dispose(): void {
 		this.scanGeneration++;
+		this.updateScheduler.dispose();
 		for (const disposable of this.disposables) disposable.dispose();
 		this.files.clear();
 		this.symbols.clear();
@@ -244,7 +248,7 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
+	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
@@ -252,9 +256,38 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Range(sourceRange.start.line, sourceRange.start.character, sourceRange.end.line, sourceRange.end.character);
 	}
 
-	private updateDocument(document: vscode.TextDocument): void {
+	private scheduleDocument(document: vscode.TextDocument): void {
 		if (document.languageId !== "gdscript" || document.uri.scheme !== "file") return;
-		this.updateText(document.uri.toString(), document.getText(), document.version);
+		this.updateScheduler.enqueue({ uri: document.uri.toString(), source: document.getText(), version: document.version });
+	}
+
+	private scheduleUri(uri: vscode.Uri): void {
+		const key = uri.toString();
+		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === key);
+		if (openDocument) {
+			this.scheduleDocument(openDocument);
+			return;
+		}
+		this.updateScheduler.enqueue({ uri: key, version: 0 });
+	}
+
+	private async applyScheduledUpdate(update: ScheduledUpdate): Promise<void> {
+		if (update.source !== undefined) {
+			this.updateText(update.uri, update.source, update.version);
+			return;
+		}
+		const uri = vscode.Uri.parse(update.uri);
+		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === update.uri);
+		if (openDocument) {
+			if (openDocument.version >= update.version) this.updateText(update.uri, openDocument.getText(), openDocument.version);
+			return;
+		}
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			this.updateText(update.uri, Buffer.from(bytes).toString("utf8"), update.version);
+		} catch {
+			this.remove(uri);
+		}
 	}
 
 	private updateText(uri: string, source: string, version = 0): void {
@@ -267,22 +300,9 @@ export class LanguageService implements vscode.Disposable {
 		this.types.invalidate([uri, ...affected]);
 	}
 
-	private async updateUri(uri: vscode.Uri): Promise<void> {
-		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
-		if (openDocument) {
-			this.updateDocument(openDocument);
-			return;
-		}
-		try {
-			const bytes = await vscode.workspace.fs.readFile(uri);
-			this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"));
-		} catch {
-			this.remove(uri);
-		}
-	}
-
 	private remove(uri: string | vscode.Uri): void {
 		const key = typeof uri === "string" ? uri : uri.toString();
+		this.updateScheduler.cancel(key);
 		const affected = this.dependencies.getTransitiveDependents(key);
 		this.dependencies.remove(key);
 		this.types.invalidate([key, ...affected]);
@@ -299,6 +319,20 @@ export class LanguageService implements vscode.Disposable {
 			if (generation !== this.scanGeneration) return;
 			await this.updateUri(uri);
 			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+	}
+
+	private async updateUri(uri: vscode.Uri): Promise<void> {
+		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
+		if (openDocument) {
+			this.scheduleDocument(openDocument);
+			return;
+		}
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"));
+		} catch {
+			this.remove(uri);
 		}
 	}
 }
