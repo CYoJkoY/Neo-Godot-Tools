@@ -5,21 +5,20 @@ Neo-Godot-Tools is moving from a Godot-LSP-first client to a local-first languag
 ## Boundaries
 
 ```text
-VS Code providers / LSP facade
-            |
-            v
-        Provider layer
-            |
-            v
-        Analyzer facade
-        /           \
-       /             \
-  Local analysis   Godot LSP fallback
-       |
-       v
-  Incremental index
-       |
-       v
+VS Code providers
+        |
+        v
+   LanguageService
+      /       \
+ Local index   Godot LSP fallback
+      |
+      v
+ Incremental workspace state
+      |
+      v
+    Analyzer
+      |
+      v
      Parser
 ```
 
@@ -29,11 +28,15 @@ Owns GDScript syntax and language-model construction. It must not import `vscode
 
 ### `index/`
 
-Owns workspace state derived from parsed documents: file records, symbols, references, and dependencies. The index is incremental and receives already-parsed documents from the analyzer. It must not know about LSP transport.
+Owns workspace state derived from parsed documents: file records, symbols, references, and dependencies. The index is incremental and receives parsed documents from the analyzer. It must not know about LSP transport or VS Code.
+
+### `language/`
+
+Owns the application-level language service that coordinates the index and fallback. `LanguageService` also owns the VS Code document/file-system integration needed to feed the pure index. It decides whether a local answer is sufficiently confident before asking Godot LSP.
 
 ### `providers/`
 
-Owns LSP/editor-facing behavior. Providers ask the analyzer/index for local answers first and do not encode parser details. VS Code types remain at this boundary.
+Owns VS Code editor-facing behavior. Providers convert indexed results into VS Code types and do not call `globals.lsp` directly for migrated operations.
 
 ### `fallback/`
 
@@ -57,11 +60,11 @@ The router should prefer a local result only when the local model has enough inf
 
 ## Incremental model
 
-A document change invalidates one file first. The future index layer will update that file's symbols and references, then use a dependency graph to invalidate only affected dependents. The extension host should remain responsive; parser/index work can later move to a `worker_threads` worker once the synchronous model is stable.
+A document change reparses only that document and replaces its `FileIndex` record. `SymbolIndex` removes the old contribution and adds the new one. The workspace scanner runs incrementally and yields between files so large projects do not monopolize the extension-host event loop. A future dependency graph will invalidate only affected dependents; parser/index work can later move to `worker_threads` once profiling proves it is CPU-bound.
 
 ## Phase 1
 
-Phase 1 deliberately does **not** replace existing LSP providers. It establishes the parser boundary first:
+Phase 1 deliberately did **not** replace existing LSP providers. It established the parser boundary first:
 
 - lexical tokens with source positions and indentation;
 - AST nodes for script/class declarations, `class_name`, `extends`, signals, enums, constants, variables, and functions;
@@ -70,25 +73,48 @@ Phase 1 deliberately does **not** replace existing LSP providers. It establishes
 - recoverable syntax diagnostics;
 - parser unit tests independent of VS Code and Godot.
 
-This keeps the migration reversible. Later phases can build the index on top of the AST without coupling the new subsystem to the current `GDScriptLanguageClient`.
-
 ## Phase 2
 
-Phase 2 adds the first persistent-in-memory workspace model without introducing filesystem or VS Code dependencies into the index:
+Phase 2 added the first persistent-in-memory workspace model without introducing filesystem or VS Code dependencies into the index:
 
 - `FileIndex` owns parsed file records keyed by URI;
 - each update replaces only the affected file record;
 - `collectSymbols()` converts analyzer declarations into index symbols, including nested class members;
 - `SymbolIndex` maintains both per-file symbols and a workspace name index;
 - symbol updates are incremental: remove the old file contribution, then add the new one;
-- workspace queries are case-insensitive substring searches over indexed symbols;
-- file deletion removes its symbols from the workspace index;
-- index tests verify replacement, removal, duplicate symbol names, nested declarations, and workspace queries.
+- workspace queries are case-insensitive substring searches;
+- file deletion removes its symbols from the workspace index.
 
-The index intentionally does not read the workspace itself. A later workspace scanner/document manager will own filesystem and `TextDocument` integration and feed parsed results into `FileIndex`. This keeps indexing deterministic and makes the same core usable for open documents, disk files, and future worker-thread execution.
+## Phase 3
 
-Phase 2 also deliberately does **not** wire providers to the new index yet. The next stage can therefore introduce local `documentSymbol`, `workspaceSymbol`, and definition resolution behind a small facade while preserving the existing Godot LSP behavior until each operation has a confidence-aware fallback path.
+Phase 3 connects the local model to real editor features while keeping Godot LSP as a fallback instead of the primary path.
+
+### Local document symbols
+
+`GDDocumentSymbolProvider` reads only the local `FileIndex`. It converts indexed declarations to VS Code `SymbolInformation`, including nested-class `containerName` metadata.
+
+### Local workspace symbols
+
+`GDWorkspaceSymbolProvider` queries `SymbolIndex` directly. The workspace scan indexes `.gd` files from the current workspace, while open documents always take precedence so unsaved edits are represented immediately.
+
+### Local-first definition
+
+`LanguageService.getDefinition()` resolves a symbol locally only when the result is unambiguous:
+
+1. exactly one matching declaration exists in the current file;
+2. otherwise exactly one matching declaration exists in the workspace;
+3. otherwise the request is delegated to `DefinitionFallback`.
+
+This deliberately avoids guessing when duplicate names or incomplete semantic information make the local result unsafe.
+
+### Godot LSP fallback
+
+`DefinitionFallback` is the only new definition path that talks to the Godot language client. It sends the standard `textDocument/definition` request and converts both `Location` and `LocationLink` responses into VS Code locations. Provider code therefore no longer needs to know the LSP transport details.
+
+### Incremental workspace synchronization
+
+`LanguageService` listens to opened/changed/saved documents and a `.gd` file-system watcher. Existing open documents are parsed from their in-memory text; closed files are read from disk. Deletion removes only the affected file and its symbol contribution.
 
 ## Compatibility
 
-The existing extension already targets Godot 4 in CI. The parser therefore avoids embedding engine-specific APIs and keeps grammar constructs represented as syntax rather than hard-coded engine types. Version-specific semantic rules belong above the parser so that Godot 3.x compatibility can be evaluated without rewriting the core syntax pipeline.
+The existing extension targets Godot 4 in CI and retains Godot 3.x-oriented configuration paths. The local parser remains engine-agnostic. Engine-specific semantics continue to belong to the fallback layer rather than being hard-coded into the analyzer or index.
