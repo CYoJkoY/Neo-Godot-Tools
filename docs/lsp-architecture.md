@@ -7,10 +7,10 @@ VS Code Providers
         │
         ▼
   LanguageService
-   /     |      \
-Hover Completion SignatureHelp
-   \     |      /
-    Symbol + Binding + Reference
+   /      |       \
+Local Index  Type Resolution  Dependency Graph
+   \      |       /
+ Symbol + Binding + Reference
               │
            Analyzer
               │
@@ -19,28 +19,56 @@ Hover Completion SignatureHelp
       Godot LSP fallback
 ```
 
-## Phase 6 — Local-first Hover / Completion / Signature Help
+## Phase 7 — Dependency Graph + Type Resolution Foundation
 
-Phase 6 extends the local-first boundary to three interactive editor features. The implementation does not perform global string matching as its primary mechanism.
+Phase 7 adds the semantic bridge between a binding and the script/class that provides its members. It is intentionally a conservative type-resolution layer, not a full GDScript type checker.
 
-### Hover
+### Type resolution
 
-Hover first resolves the identifier through `BindingIndex`. Binding metadata supplies scope-aware identity and local type information; `SymbolIndex` supplies declaration kind, container, return type, and function parameters. An unresolved or ambiguous symbol falls through to `textDocument/hover` through `HoverFallback`.
+`TypeResolutionIndex` resolves explicit annotation types against local `class_name` and inner-class symbols. Built-in Godot/GDScript types are recognized as terminal types without pretending that their engine members are locally known.
 
-### Completion
+A receiver can now be resolved from a binding or script-level declaration. This enables local member lookup for patterns such as `player.health` when `player` is explicitly typed as a locally indexed class. `self.member` remains local because its receiver is the current script.
 
-Completion starts with `BindingIndex.getVisibleBindings()` so parameters, locals, members, functions, and script-level declarations respect lexical shadowing. `SymbolIndex.workspaceSymbols()` supplements visible bindings with workspace declarations. `self.<member>` is handled locally because the receiver identity is explicit. Arbitrary `object.<member>` expressions remain fallback territory because resolving them safely requires type information that the current analyzer does not yet provide.
+Ambiguous, dynamic, native-engine, and otherwise unresolved types continue to use Godot LSP.
 
-### Signature help
+### Dependency graph
 
-Function declarations now retain parameter metadata in `IndexedSymbol`: parameter names, types, default values, and return type. For an unambiguous local function call, signature help is generated locally and the active parameter is derived from the current argument list. Native, dynamic, or ambiguous calls fall through to Godot LSP.
+`DependencyGraph` records local `extends` and `preload("res://...")` relationships. It maintains both outgoing dependencies and reverse dependents, so a changed script can identify the files whose semantic context may need invalidation.
 
-### Fallback boundary
+The graph is deliberately separate from the symbol index. A dependency edge describes file-to-file semantic coupling; a symbol describes a declaration inside a file.
 
-The fallback adapters own LSP transport details. Providers and `LanguageService` only decide whether local confidence is sufficient. This preserves the architecture's main performance goal: normal project-local interactions do not need to synchronously ask Godot's language server to analyze the workspace again.
+### Provider behavior
+
+Definition, hover, and completion now recognize typed member receivers before falling back to Godot LSP:
+
+```gdscript
+class_name Player
+var health: int
+```
+
+```gdscript
+var player: Player
+player.health
+```
+
+The local path is:
+
+```text
+receiver binding
+      ↓
+explicit type
+      ↓
+class_name / local class
+      ↓
+member symbol
+```
+
+### Invalidation boundary
+
+Every file update refreshes its dependency edges. Reverse dependencies are retained so later semantic caches can invalidate only affected files rather than rebuilding the whole workspace. Phase 7 does not yet introduce a persistent cache or background worker; those should be added only after profiling demonstrates a need.
 
 ## Deliberate limits
 
-Phase 6 is not a complete GDScript type checker. It deliberately does not infer arbitrary receiver types, resolve engine classes, inspect GDExtension APIs, or model every dynamic language construct. Those cases continue to use Godot LSP.
+Phase 7 does not attempt to infer arbitrary expressions, resolve every built-in engine member, evaluate control flow, or build a complete GDScript type lattice. `object.member` is local only when the receiver has a uniquely resolvable local type. Dynamic values and native engine APIs remain Godot LSP fallback cases.
 
-The next semantic layer should improve dependency/type information rather than replacing the local model with broader text matching.
+The next layer should build on this type/dependency graph for safer cross-file definitions, member completion, and semantic invalidation rather than returning to workspace-wide text matching.

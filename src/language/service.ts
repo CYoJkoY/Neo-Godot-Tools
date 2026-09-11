@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, ReferenceIndex, SymbolIndex } from "../index";
+import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, ReferenceIndex, SymbolIndex, TypeResolutionIndex, DependencyGraph } from "../index";
 import { DefinitionFallback } from "../fallback/definition";
 import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
@@ -40,6 +40,8 @@ export class LanguageService implements vscode.Disposable {
 	readonly symbols = new SymbolIndex(this.files);
 	readonly references = new ReferenceIndex(this.files);
 	readonly bindings = new BindingIndex(this.files);
+	readonly types = new TypeResolutionIndex(this.files, this.symbols, this.bindings);
+	readonly dependencies = new DependencyGraph(this.files);
 	private readonly disposables: vscode.Disposable[] = [];
 	private scanGeneration = 0;
 
@@ -68,12 +70,19 @@ export class LanguageService implements vscode.Disposable {
 		this.symbols.clear();
 		this.references.clear();
 		this.bindings.clear();
+		this.dependencies.clear();
 	}
 
 	getDocumentSymbols(uri: string): readonly IndexedSymbol[] { return this.files.get(uri)?.symbols ?? []; }
 	getWorkspaceSymbols(query: string): IndexedSymbol[] { return this.symbols.workspaceSymbols(query); }
 
 	async getDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Definition | undefined> {
+		const member = this.memberExpression(document, position);
+		if (member) {
+			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), member.receiver);
+			const symbol = receiver ? this.types.getMember(receiver, member.member) : undefined;
+			if (symbol) return this.toLocation(symbol);
+		}
 		const range = wordRange(document, position);
 		if (range) {
 			const name = document.getText(range);
@@ -111,6 +120,12 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	getHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
+		const member = this.memberExpression(document, position);
+		if (member) {
+			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), member.receiver);
+			const symbol = receiver ? this.types.getMember(receiver, member.member) : undefined;
+			if (symbol) return this.hoverForSymbol(symbol);
+		}
 		const range = wordRange(document, position);
 		if (!range) return undefined;
 		const name = document.getText(range);
@@ -122,15 +137,17 @@ export class LanguageService implements vscode.Disposable {
 
 	getCompletions(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList | undefined {
 		const line = document.lineAt(position.line).text.slice(0, position.character);
-		const memberMatch = line.match(/(?:^|\s)self\.([A-Za-z_]\w*)?$/);
+		const memberMatch = line.match(/(?:^|\s)(self|[A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/);
 		if (memberMatch) {
-			const prefix = memberMatch[1] ?? "";
-			const items = this.bindings.getVisibleBindings(document.uri.toString(), document.offsetAt(position))
-				.filter((binding) => binding.kind === "member" && binding.name.startsWith(prefix))
-				.map((binding) => this.toCompletion(binding));
-			return new vscode.CompletionList(items, false);
+			const receiverName = memberMatch[1];
+			const prefix = memberMatch[2] ?? "";
+			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), receiverName);
+			if (receiver) {
+				const items = this.types.getMembers(receiver).filter((symbol) => symbol.name.startsWith(prefix)).map((symbol) => this.toCompletion(symbol));
+				if (items.length) return new vscode.CompletionList(items, false);
+				return undefined;
+			}
 		}
-		if (line.match(/[A-Za-z_]\w*\.[A-Za-z_0-9]*$/)) return undefined;
 		const range = wordRange(document, position);
 		const prefix = range ? document.getText(range) : "";
 		const bindings = this.bindings.getVisibleBindings(document.uri.toString(), document.offsetAt(position));
@@ -148,7 +165,7 @@ export class LanguageService implements vscode.Disposable {
 		const name = match[1];
 		const argumentText = match[2];
 		const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
-		const callOffset = Math.max(0, position && document.offsetAt(position) - match[1].length - 1);
+		const callOffset = Math.max(0, document.offsetAt(position) - match[1].length - 1);
 		const binding = this.bindings.getBinding(document.uri.toString(), callOffset, name);
 		const symbols = binding?.kind === "function" ? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined) : this.symbols.find(name);
 		const functions = symbols.filter((symbol) => symbol.kind === "function");
@@ -161,6 +178,14 @@ export class LanguageService implements vscode.Disposable {
 		help.activeSignature = 0;
 		help.activeParameter = Math.min(activeParameter, Math.max(0, signature.parameters.length - 1));
 		return help;
+	}
+
+	private memberExpression(document: vscode.TextDocument, position: vscode.Position): { receiver: string; member: string } | undefined {
+		const line = document.lineAt(position.line).text;
+		const before = line.slice(0, position.character);
+		const match = before.match(/([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/);
+		if (!match) return undefined;
+		return { receiver: match[1], member: match[2] };
 	}
 
 	private hoverForBinding(binding: Binding): vscode.Hover {
@@ -236,6 +261,7 @@ export class LanguageService implements vscode.Disposable {
 		this.symbols.update(uri);
 		this.references.update(uri);
 		this.bindings.update(uri);
+		this.dependencies.update(uri);
 	}
 
 	private async updateUri(uri: vscode.Uri): Promise<void> {
@@ -254,6 +280,7 @@ export class LanguageService implements vscode.Disposable {
 
 	private remove(uri: string | vscode.Uri): void {
 		const key = typeof uri === "string" ? uri : uri.toString();
+		this.dependencies.remove(key);
 		this.bindings.remove(key);
 		this.references.remove(key);
 		this.symbols.remove(key);
