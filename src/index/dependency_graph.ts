@@ -13,7 +13,7 @@ function normalizePath(value: string): string {
 
 function collectPreloads(source: string): string[] {
 	const result: string[] = [];
-	const pattern = /preload\s*\(\s*[\"']([^\"']+)[\"']\s*\)/g;
+	const pattern = /preload\s*\(\s*["']([^"']+)["']\s*\)/g;
 	for (const match of source.matchAll(pattern)) result.push(match[1]);
 	return result;
 }
@@ -56,6 +56,20 @@ export class DependencyGraph {
 
 	getDependencies(uri: string): readonly DependencyEdge[] { return this.outgoing.get(uri) ?? []; }
 	getDependents(uri: string): readonly string[] { return [...(this.incoming.get(uri) ?? [])]; }
+
+	getTransitiveDependents(uri: string): string[] {
+		const result: string[] = [];
+		const visited = new Set<string>([uri]);
+		const queue = [...(this.incoming.get(uri) ?? [])];
+		while (queue.length) {
+			const current = queue.shift()!;
+			if (visited.has(current)) continue;
+			visited.add(current);
+			result.push(current);
+			queue.push(...(this.incoming.get(current) ?? []));
+		}
+		return result;
+	}
 
 	remove(uri: string): void {
 		for (const edge of this.outgoing.get(uri) ?? []) {

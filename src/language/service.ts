@@ -143,7 +143,7 @@ export class LanguageService implements vscode.Disposable {
 			const prefix = memberMatch[2] ?? "";
 			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), receiverName);
 			if (receiver) {
-				const items = this.types.getMembers(receiver).filter((symbol) => symbol.name.startsWith(prefix)).map((symbol) => this.toCompletion(symbol));
+				const items = this.types.getMembers(receiver).filter((symbol) => symbol.name.startsWith(prefix)).map((symbol) => this.toSymbolCompletion(symbol));
 				if (items.length) return new vscode.CompletionList(items, false);
 				return undefined;
 			}
@@ -151,9 +151,9 @@ export class LanguageService implements vscode.Disposable {
 		const range = wordRange(document, position);
 		const prefix = range ? document.getText(range) : "";
 		const bindings = this.bindings.getVisibleBindings(document.uri.toString(), document.offsetAt(position));
-		const localItems = bindings.filter((binding) => binding.name.startsWith(prefix)).map((binding) => this.toCompletion(binding));
+		const localItems = bindings.filter((binding) => binding.name.startsWith(prefix)).map((binding) => this.toBindingCompletion(binding));
 		const localNames = new Set(localItems.map((item) => String(item.label)));
-		const workspaceItems = this.symbols.workspaceSymbols(prefix).filter((symbol) => !localNames.has(symbol.name)).map((symbol) => this.toCompletion(symbol));
+		const workspaceItems = this.symbols.workspaceSymbols(prefix).filter((symbol) => !localNames.has(symbol.name)).map((symbol) => this.toSymbolCompletion(symbol));
 		if (!localItems.length && !workspaceItems.length) return undefined;
 		return new vscode.CompletionList([...localItems, ...workspaceItems], false);
 	}
@@ -227,13 +227,13 @@ export class LanguageService implements vscode.Disposable {
 		return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 	}
 
-	private toCompletion(binding: Binding): vscode.CompletionItem {
+	private toBindingCompletion(binding: Binding): vscode.CompletionItem {
 		const item = new vscode.CompletionItem(binding.name, bindingKind(binding.kind));
 		item.detail = this.bindingLabel(binding);
 		return item;
 	}
 
-	private toCompletion(symbol: IndexedSymbol): vscode.CompletionItem {
+	private toSymbolCompletion(symbol: IndexedSymbol): vscode.CompletionItem {
 		const item = new vscode.CompletionItem(symbol.name, symbolKind(symbol.kind));
 		item.detail = this.symbolLabel(symbol);
 		return item;

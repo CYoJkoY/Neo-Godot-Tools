@@ -7,29 +7,43 @@ const bindings = new BindingIndex(files);
 const types = new TypeResolutionIndex(files, symbols, bindings);
 const dependencies = new DependencyGraph(files);
 
-files.update("file:///workspace/player.gd", `class_name Player\nvar health: int\nfunc take_damage(amount: int) -> void:\n\thealth -= amount\n`);
-symbols.update("file:///workspace/player.gd");
-bindings.update("file:///workspace/player.gd");
+const baseUri = "file:///workspace/base.gd";
+const playerUri = "file:///workspace/player.gd";
+const mainUri = "file:///workspace/main.gd";
 
-autoTest();
+const baseSource = `class_name Base\nvar base_health: int\nfunc heal() -> void:\n\tbase_health += 1\n`;
+files.update(baseUri, baseSource);
+symbols.update(baseUri);
+bindings.update(baseUri);
 
-function autoTest(): void {
-	const playerType = types.resolveName("Player");
-	assert.equal(playerType?.uri, "file:///workspace/player.gd");
-	assert.equal(types.getMember(playerType!, "health")?.name, "health");
+const playerSource = `class_name Player\nextends Base\nvar health: int\nfunc take_damage(amount: int) -> void:\n\thealth -= amount\n`;
+files.update(playerUri, playerSource);
+symbols.update(playerUri);
+bindings.update(playerUri);
+dependencies.update(playerUri);
 
-	files.update("file:///workspace/main.gd", `extends Node\nvar player: Player\nfunc test():\n\tplayer.health = 10\n`);
-	symbols.update("file:///workspace/main.gd");
-	bindings.update("file:///workspace/main.gd");
-	dependencies.update("file:///workspace/main.gd");
-	const receiver = types.resolveReceiver("file:///workspace/main.gd", 72, "player");
-	assert.equal(receiver?.name, "Player");
-	assert.equal(types.getMember(receiver!, "health")?.name, "health");
+const playerType = types.resolveName("Player");
+assert.equal(playerType?.uri, playerUri);
+assert.equal(types.getMember(playerType!, "health")?.name, "health");
+assert.equal(types.getMember(playerType!, "heal")?.name, "heal");
+assert.equal(dependencies.getDependencies(playerUri).length, 1);
 
-	files.update("file:///workspace/other.gd", `var player = preload(\"res://player.gd\")\n`);
-	symbols.update("file:///workspace/other.gd");
-	dependencies.update("file:///workspace/other.gd");
-	assert.equal(dependencies.getDependencies("file:///workspace/other.gd").length, 1);
-	assert.equal(dependencies.getDependencies("file:///workspace/other.gd")[0].reason, "preload");
-	assert.equal(dependencies.getDependents("file:///workspace/player.gd").length, 1);
-}
+const mainSource = `extends Node\nvar player: Player\nvar spawned = preload("res://player.gd").new()\nfunc make_player() -> Player:\n\treturn Player.new()\nvar returned = make_player()\nfunc test():\n\tplayer.health = 10\n\tspawned.take_damage(1)\n\treturned.heal()\n`;
+files.update(mainUri, mainSource);
+symbols.update(mainUri);
+bindings.update(mainUri);
+dependencies.update(mainUri);
+
+const playerOffset = mainSource.indexOf("player.health");
+const spawnedOffset = mainSource.indexOf("spawned.take_damage");
+const returnedOffset = mainSource.indexOf("returned.heal");
+
+assert.equal(types.resolveReceiver(mainUri, playerOffset, "player")?.name, "Player");
+assert.equal(types.resolveReceiver(mainUri, spawnedOffset, "spawned")?.name, "Player");
+assert.equal(types.resolveReceiver(mainUri, returnedOffset, "returned")?.name, "Player");
+assert.equal(types.getMember(types.resolveReceiver(mainUri, spawnedOffset, "spawned")!, "take_damage")?.name, "take_damage");
+assert.equal(types.getMember(types.resolveReceiver(mainUri, returnedOffset, "returned")!, "returned")?.name, undefined);
+assert.equal(types.getMember(types.resolveReceiver(mainUri, returnedOffset, "returned")!, "heal")?.name, "heal");
+
+assert.equal(dependencies.getDependencies(mainUri).length, 1);
+assert.deepEqual(dependencies.getTransitiveDependents(baseUri), [playerUri, mainUri]);

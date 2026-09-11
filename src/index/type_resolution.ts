@@ -34,6 +34,12 @@ function findDeclarationType(file: ReturnType<FileIndex["get"]>, name: string): 
 	return visit(file.ast.declarations);
 }
 
+function findScriptClassName(file: ReturnType<FileIndex["get"]>): string | undefined {
+	if (!file) return undefined;
+	const declaration = file.ast.declarations.find((item) => item.kind === "class_name");
+	return declaration?.kind === "class_name" ? declaration.name : undefined;
+}
+
 export class TypeResolutionIndex {
 	constructor(
 		private readonly files: FileIndex,
@@ -49,25 +55,94 @@ export class TypeResolutionIndex {
 	}
 
 	resolveBinding(binding: Binding): ResolvedType | undefined {
-		if (!binding.type) return undefined;
-		return this.resolveName(binding.type);
+		if (binding.type) return this.resolveName(binding.type);
+		if (binding.kind !== "function" || !binding.returnType) return undefined;
+		return this.resolveName(binding.returnType);
 	}
 
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
 		if (name === "self") return { name: "self", uri, builtin: false };
+
+		const preload = this.resolvePreloadExpression(name);
+		if (preload) return preload;
+
 		const binding = this.bindings.getBinding(uri, offset, name);
-		if (binding) return this.resolveBinding(binding);
+		const bindingType = binding ? this.resolveBinding(binding) : undefined;
+		if (bindingType) return bindingType;
+
+		const expressionType = this.resolveInitializerType(uri, name);
+		if (expressionType) return expressionType;
+
 		const declarationType = findDeclarationType(this.files.get(uri), name);
 		return declarationType ? this.resolveName(declarationType) : undefined;
 	}
 
 	getMembers(type: ResolvedType): IndexedSymbol[] {
 		if (!type.uri) return [];
-		return this.files.get(type.uri)?.symbols.filter((symbol) => symbol.containerName === type.symbol?.name || !symbol.containerName) ?? [];
+		return this.collectMembers(type.uri, new Set<string>());
 	}
 
 	getMember(type: ResolvedType, name: string): IndexedSymbol | undefined {
 		const members = this.getMembers(type).filter((symbol) => symbol.name === name);
 		return members.length === 1 ? members[0] : undefined;
+	}
+
+	private collectMembers(uri: string, visited: Set<string>): IndexedSymbol[] {
+		if (visited.has(uri)) return [];
+		visited.add(uri);
+		const file = this.files.get(uri);
+		if (!file) return [];
+
+		const own = file.symbols.filter((symbol) => !symbol.containerName);
+		const inherited = this.resolveExtends(file.ast.declarations)?.uri
+			? this.collectMembers(this.resolveExtends(file.ast.declarations)!.uri!, visited)
+			: [];
+		const result = [...own];
+		for (const symbol of inherited) if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
+		return result;
+	}
+
+	private resolveExtends(declarations: GDScriptDeclaration[]): ResolvedType | undefined {
+		const declaration = declarations.find((item) => item.kind === "extends");
+		if (!declaration || declaration.kind !== "extends") return undefined;
+		if (declaration.name.startsWith("res://")) return this.resolveScriptPath(declaration.name);
+		return this.resolveName(declaration.name);
+	}
+
+	private resolveScriptPath(value: string): ResolvedType | undefined {
+		const path = value.replace(/^res:\/\//, "").replace(/\\/g, "/").replace(/^\/+/, "");
+		const matches = [...this.files.values()].filter((file) => {
+			try {
+				return decodeURIComponent(new URL(file.uri).pathname).replace(/^\/+/, "").endsWith(path);
+			} catch {
+				return file.uri.endsWith(path);
+			}
+		});
+		if (matches.length !== 1) return undefined;
+		const className = findScriptClassName(matches[0]);
+		const symbol = className ? this.symbols.find(className).find((item) => item.uri === matches[0].uri) : undefined;
+		return { name: className ?? path.replace(/\.gd$/, ""), uri: matches[0].uri, symbol, builtin: false };
+	}
+
+	private resolvePreloadExpression(expression: string): ResolvedType | undefined {
+		const match = expression.match(/^preload\s*\(\s*["']([^"']+\.gd)["']\s*\)\.new\(\)$/);
+		return match ? this.resolveScriptPath(match[1]) : undefined;
+	}
+
+	private resolveInitializerType(uri: string, name: string): ResolvedType | undefined {
+		const source = this.files.get(uri)?.source;
+		if (!source) return undefined;
+		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const pattern = new RegExp(`(?:^|\\n)\\s*var\\s+${escaped}\\s*(?:\\:\\s*[^=]+)?=\\s*([^\\n#]+)`);
+		const match = source.match(pattern);
+		if (!match) return undefined;
+		const expression = match[1].trim();
+		const preload = this.resolvePreloadExpression(expression);
+		if (preload) return preload;
+		const call = expression.match(/^([A-Za-z_]\\w*)\\s*\\([^)]*\\)$/);
+		if (!call) return undefined;
+		const functions = this.symbols.find(call[1]).filter((symbol) => symbol.kind === "function" && symbol.returnType);
+		if (functions.length !== 1) return undefined;
+		return this.resolveName(functions[0].returnType!);
 	}
 }
