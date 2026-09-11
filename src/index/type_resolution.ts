@@ -25,24 +25,9 @@ const CONSTRUCTOR_TYPES = new Set([
 	"Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB", "RID", "Array", "Dictionary", "Callable",
 ]);
 
-function findDeclarationType(file: ReturnType<FileIndex["get"]>, name: string): string | undefined {
+function findDeclaration(file: ReturnType<FileIndex["get"]>, name: string): GDScriptVariable | GDScriptConstant | undefined {
 	if (!file) return undefined;
-	const visit = (declarations: GDScriptDeclaration[]): string | undefined => {
-		for (const declaration of declarations) {
-			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name) return declaration.type;
-			if (declaration.kind === "class") {
-				const nested = visit(declaration.declarations);
-				if (nested) return nested;
-			}
-		}
-		return undefined;
-	};
-	return visit(file.ast.declarations);
-}
-
-function findDeclaration(file: ReturnType<FileIndex["get"]>, name: string): (GDScriptVariable | GDScriptConstant) | undefined {
-	if (!file) return undefined;
-	const visit = (declarations: GDScriptDeclaration[]): (GDScriptVariable | GDScriptConstant) | undefined => {
+	const visit = (declarations: GDScriptDeclaration[]): GDScriptVariable | GDScriptConstant | undefined => {
 		for (const declaration of declarations) {
 			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name) return declaration;
 			if (declaration.kind === "class") {
@@ -78,9 +63,34 @@ function literalType(expression: string): string | undefined {
 	return undefined;
 }
 
-function topLevelCall(expression: string): { name: string; argumentsText: string } | undefined {
-	const match = expression.match(/^([A-Za-z_]\w*)\s*\((.*)\)$/s);
-	return match ? { name: match[1], argumentsText: match[2] } : undefined;
+function topLevelCall(expression: string): { name: string } | undefined {
+	const match = expression.match(/^([A-Za-z_]\w*)\s*\(.*\)$/s);
+	return match ? { name: match[1] } : undefined;
+}
+
+function findFunctions(declarations: GDScriptDeclaration[], name: string): GDScriptFunction[] {
+	const result: GDScriptFunction[] = [];
+	for (const declaration of declarations) {
+		if (declaration.kind === "function" && declaration.name === name) result.push(declaration);
+		if (declaration.kind === "class") result.push(...findFunctions(declaration.declarations, name));
+	}
+	return result;
+}
+
+function findContainingFunction(declarations: GDScriptDeclaration[], offset: number): GDScriptFunction | undefined {
+	for (const declaration of declarations) {
+		if (
+			declaration.kind === "function" &&
+			declaration.bodyRange &&
+			declaration.bodyRange.start.offset <= offset &&
+			offset <= declaration.bodyRange.end.offset
+		) return declaration;
+		if (declaration.kind === "class") {
+			const nested = findContainingFunction(declaration.declarations, offset);
+			if (nested) return nested;
+		}
+	}
+	return undefined;
 }
 
 export class TypeResolutionIndex {
@@ -109,22 +119,23 @@ export class TypeResolutionIndex {
 		return result;
 	}
 
-	resolveBinding(binding: Binding): ResolvedType | undefined {
+	resolveBinding(binding: Binding, offset = binding.declarationRange.start.offset): ResolvedType | undefined {
 		if (binding.type) return this.resolveName(binding.type);
-		if (binding.kind !== "function") return undefined;
-		if (binding.returnType) return this.resolveName(binding.returnType);
-		return this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
+		if (binding.kind === "function") {
+			if (binding.returnType) return this.resolveName(binding.returnType);
+			return this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
+		}
+		return this.resolveInitializerType(binding.uri, binding.name, offset, new Set<string>());
 	}
 
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
 		if (name === "self") return { name: "self", uri, builtin: false };
 		const binding = this.bindings.getBinding(uri, offset, name);
-		const bindingType = binding ? this.resolveBinding(binding) : undefined;
-		if (bindingType) return bindingType;
-		const expressionType = this.resolveInitializerType(uri, name, new Set<string>());
-		if (expressionType) return expressionType;
-		const declarationType = findDeclarationType(this.files.get(uri), name);
-		return declarationType ? this.resolveName(declarationType) : undefined;
+		if (binding) {
+			const type = this.resolveBinding(binding, offset);
+			if (type) return type;
+		}
+		return this.resolveInitializerType(uri, name, offset, new Set<string>());
 	}
 
 	getMembers(type: ResolvedType): IndexedSymbol[] {
@@ -140,6 +151,12 @@ export class TypeResolutionIndex {
 	getMember(type: ResolvedType, name: string): IndexedSymbol | undefined {
 		const members = this.getMembers(type).filter((symbol) => symbol.name === name);
 		return members.length === 1 ? members[0] : undefined;
+	}
+
+	resolveMemberReturnType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
+		if (member.returnType) return this.resolveName(member.returnType);
+		if (member.kind !== "function") return undefined;
+		return this.resolveFunctionReturnType(member.uri, member.name, new Set<string>());
 	}
 
 	invalidate(uris: Iterable<string>): void {
@@ -179,8 +196,7 @@ export class TypeResolutionIndex {
 	private resolveExtends(declarations: GDScriptDeclaration[]): ResolvedType | undefined {
 		const declaration = declarations.find((item) => item.kind === "extends");
 		if (!declaration || declaration.kind !== "extends") return undefined;
-		if (declaration.name.startsWith("res://")) return this.resolveScriptPath(declaration.name);
-		return this.resolveName(declaration.name);
+		return declaration.name.startsWith("res://") ? this.resolveScriptPath(declaration.name) : this.resolveName(declaration.name);
 	}
 
 	private resolveScriptPath(value: string): ResolvedType | undefined {
@@ -198,7 +214,7 @@ export class TypeResolutionIndex {
 		return { name: className ?? path.replace(/\.gd$/, ""), uri: matches[0].uri, symbol, builtin: false };
 	}
 
-	private resolveExpressionType(uri: string, expression: string, visited: Set<string>): ResolvedType | undefined {
+	private resolveExpressionType(uri: string, expression: string, offset: number, visited: Set<string>): ResolvedType | undefined {
 		const value = stripComments(expression);
 		const literal = literalType(value);
 		if (literal) return this.resolveName(literal) ?? { name: literal, builtin: true };
@@ -208,10 +224,10 @@ export class TypeResolutionIndex {
 		if (load) return { name: "Resource", builtin: true };
 		const memberCall = value.match(/^([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(.*\)$/s);
 		if (memberCall) {
-			const receiver = this.resolveReceiver(uri, this.files.get(uri)?.source.length ?? 0, memberCall[1]);
+			const receiver = this.resolveReceiver(uri, offset, memberCall[1]);
 			if (receiver) {
 				const member = this.getMember(receiver, memberCall[2]);
-				if (member?.returnType) return this.resolveName(member.returnType);
+				if (member) return this.resolveMemberReturnType(receiver, member);
 			}
 		}
 		const call = topLevelCall(value);
@@ -219,36 +235,45 @@ export class TypeResolutionIndex {
 			if (CONSTRUCTOR_TYPES.has(call.name)) return this.resolveName(call.name) ?? { name: call.name, builtin: true };
 			const functions = this.symbols.find(call.name).filter((symbol) => symbol.kind === "function");
 			if (functions.length === 1) {
-				const functionSymbol = functions[0];
-				if (functionSymbol.returnType) return this.resolveName(functionSymbol.returnType);
-				return this.resolveFunctionReturnType(functionSymbol.uri, functionSymbol.name, visited);
+				const fn = functions[0];
+				if (fn.returnType) return this.resolveName(fn.returnType);
+				return this.resolveFunctionReturnType(fn.uri, fn.name, visited);
 			}
 		}
-		const direct = this.resolveName(value);
-		if (direct) return direct;
-		return undefined;
+		const binding = this.bindings.getBinding(uri, offset, value);
+		if (binding) return this.resolveBinding(binding, offset);
+		return this.resolveName(value);
 	}
 
-	private resolveInitializerType(uri: string, name: string, visited: Set<string>): ResolvedType | undefined {
-		if (visited.has(`${uri}:${name}`)) return undefined;
-		visited.add(`${uri}:${name}`);
+	private resolveInitializerType(uri: string, name: string, offset: number, visited: Set<string>): ResolvedType | undefined {
+		const key = `${uri}:${name}:${offset}`;
+		if (visited.has(key)) return undefined;
+		visited.add(key);
 		const file = this.files.get(uri);
 		if (!file) return undefined;
 		const declaration = findDeclaration(file, name);
 		if (declaration?.type) return this.resolveName(declaration.type);
-		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const patterns = [
-			new RegExp(`(?:^|\\n)\\s*var\\s+${escaped}\\s*=\\s*([^\\n#]+)`),
-			new RegExp(`(?:^|\\n)\\s*var\\s+${escaped}\\s*:\\s*[^=]+?=\\s*([^\\n#]+)`),
-			new RegExp(`(?:^|\\n)\\s*${escaped}\\s*=\\s*([^\\n#]+)`),
-		];
-		for (const pattern of patterns) {
-			const match = file.source.match(pattern);
-			if (!match) continue;
-			const result = this.resolveExpressionType(uri, match[1], visited);
+		if (declaration?.value) {
+			const result = this.resolveExpressionType(uri, declaration.value, declaration.range.start.offset, visited);
 			if (result) return result;
 		}
-		return undefined;
+		const functionDeclaration = findContainingFunction(file.ast.declarations, offset);
+		const searchStart = functionDeclaration?.bodyRange?.start.offset ?? 0;
+		const searchEnd = Math.min(offset, functionDeclaration?.bodyRange?.end.offset ?? file.source.length);
+		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const assignment = new RegExp(
+			`(?:^|\\n)\\s*(?:var\\s+)?${escaped}(?:\\s*:\\s*[^=]+)?\\s*=\\s*([^\\n#]+)`,
+			"g",
+		);
+		let latest: string | undefined;
+		let match: RegExpExecArray | null;
+		const source = file.source.slice(searchStart, searchEnd);
+		while (true) {
+			match = assignment.exec(source);
+			if (!match) break;
+			latest = match[1];
+		}
+		return latest ? this.resolveExpressionType(uri, latest, searchEnd, visited) : undefined;
 	}
 
 	private resolveFunctionReturnType(uri: string, name: string, visited: Set<string>): ResolvedType | undefined {
@@ -257,18 +282,31 @@ export class TypeResolutionIndex {
 		visited.add(key);
 		const file = this.files.get(uri);
 		if (!file) return undefined;
-		const functions = file.ast.declarations.flatMap((declaration) => this.findFunctions(declaration, name));
-		if (functions.length !== 1 || functions[0].returnType) return functions.length === 1 && functions[0].returnType ? this.resolveName(functions[0].returnType) : undefined;
+		const functions = findFunctions(file.ast.declarations, name);
+		if (functions.length !== 1) return undefined;
 		const fn = functions[0];
+		if (fn.returnType) return this.resolveName(fn.returnType);
 		if (!fn.bodyRange) return undefined;
 		const body = file.source.slice(fn.bodyRange.start.offset, fn.bodyRange.end.offset);
-		const match = body.match(/(?:^|\n)\s*return\s+([^\n#]+)/);
-		return match ? this.resolveExpressionType(uri, match[1], visited) : undefined;
-	}
-
-	private findFunctions(declaration: GDScriptDeclaration, name: string): GDScriptFunction[] {
-		if (declaration.kind === "function") return declaration.name === name ? [declaration] : [];
-		if (declaration.kind === "class") return declaration.declarations.flatMap((child) => this.findFunctions(child, name));
-		return [];
+		const pattern = /(?:^|\n)\s*return\s+([^\n#]+)/g;
+		const returns: Array<{ expression: string; offset: number }> = [];
+		let match: RegExpExecArray | null;
+		while (true) {
+			match = pattern.exec(body);
+			if (!match) break;
+			returns.push({
+				expression: match[1],
+				offset: fn.bodyRange.start.offset + match.index + match[0].lastIndexOf(match[1]),
+			});
+		}
+		if (!returns.length) return undefined;
+		let resolved: ResolvedType | undefined;
+		for (const item of returns) {
+			const type = this.resolveExpressionType(uri, item.expression, item.offset, visited);
+			if (!type) return undefined;
+			if (resolved && resolved.name !== type.name) return undefined;
+			resolved = type;
+		}
+		return resolved;
 	}
 }
