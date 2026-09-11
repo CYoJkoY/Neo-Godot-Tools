@@ -8,11 +8,11 @@ describe("indexed signatures", () => {
 		const symbols = new SymbolIndex(files);
 		files.update("file:///player.gd", "func heal(amount: int, factor: float = 1.0) -> int:\n\treturn int(amount * factor)\n");
 		symbols.update("file:///player.gd");
-		const function = symbols.find("heal")[0];
-		expect(function.parameters).toEqual([
+		const healFunction = symbols.find("heal")[0];
+		expect(healFunction.parameters).toEqual([
 			{ name: "amount", type: "int", defaultValue: undefined },
 			{ name: "factor", type: "float", defaultValue: "1.0" },
 		]);
-		expect(function.returnType).toBe("int");
+		expect(healFunction.returnType).toBe("int");
 	});
 });
