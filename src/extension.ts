@@ -12,6 +12,7 @@ import {
 	GDDocumentationProvider,
 	GDDefinitionProvider,
 	GDDocumentSymbolProvider,
+	GDReferenceProvider,
 	GDWorkspaceSymbolProvider,
 	GDTaskProvider,
 } from "./providers";
@@ -22,6 +23,7 @@ import { DebugServer } from "./dev/debug_server";
 import { FormattingProvider } from "./formatter";
 import { LanguageService } from "./language/service";
 import { DefinitionFallback } from "./fallback/definition";
+import { ReferencesFallback } from "./fallback/references";
 import {
 	get_configuration,
 	find_file,
@@ -52,6 +54,7 @@ interface Extension {
 	docsProvider?: GDDocumentationProvider;
 	definitionProvider?: GDDefinitionProvider;
 	documentSymbolProvider?: GDDocumentSymbolProvider;
+	referenceProvider?: GDReferenceProvider;
 	workspaceSymbolProvider?: GDWorkspaceSymbolProvider;
 	semanticTokensProvider?: GDSemanticTokensProvider;
 	completionProvider?: GDCompletionItemProvider;
@@ -66,7 +69,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	globals.context = context;
 	globals.lsp = new ClientConnectionManager(context);
-	globals.languageService = new LanguageService(new DefinitionFallback());
+	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback());
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context);
 	globals.linkProvider = new GDDocumentLinkProvider(context);
@@ -77,6 +80,7 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.docsProvider = new GDDocumentationProvider(context);
 	globals.definitionProvider = new GDDefinitionProvider(context, globals.languageService);
 	globals.documentSymbolProvider = new GDDocumentSymbolProvider(context, globals.languageService);
+	globals.referenceProvider = new GDReferenceProvider(context, globals.languageService);
 	globals.workspaceSymbolProvider = new GDWorkspaceSymbolProvider(context, globals.languageService);
 	// globals.semanticTokensProvider = new GDSemanticTokensProvider(context);
 	// globals.completionProvider = new GDCompletionItemProvider(context);
