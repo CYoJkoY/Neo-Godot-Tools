@@ -1,4 +1,4 @@
-import { GDScriptDeclaration } from "../analyzer/index.js";
+import { GDScriptConstant, GDScriptDeclaration, GDScriptFunction, GDScriptVariable } from "../analyzer/index.js";
 import { Binding, BindingIndex } from "./bindings.js";
 import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
@@ -20,11 +20,31 @@ const BUILTIN_TYPES = new Set([
 	"PackedColorArray",
 ]);
 
+const CONSTRUCTOR_TYPES = new Set([
+	"StringName", "Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Vector4i", "Color", "Rect2", "Rect2i",
+	"Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB", "RID", "Array", "Dictionary", "Callable",
+]);
+
 function findDeclarationType(file: ReturnType<FileIndex["get"]>, name: string): string | undefined {
 	if (!file) return undefined;
 	const visit = (declarations: GDScriptDeclaration[]): string | undefined => {
 		for (const declaration of declarations) {
 			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name) return declaration.type;
+			if (declaration.kind === "class") {
+				const nested = visit(declaration.declarations);
+				if (nested) return nested;
+			}
+		}
+		return undefined;
+	};
+	return visit(file.ast.declarations);
+}
+
+function findDeclaration(file: ReturnType<FileIndex["get"]>, name: string): (GDScriptVariable | GDScriptConstant) | undefined {
+	if (!file) return undefined;
+	const visit = (declarations: GDScriptDeclaration[]): (GDScriptVariable | GDScriptConstant) | undefined => {
+		for (const declaration of declarations) {
+			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name) return declaration;
 			if (declaration.kind === "class") {
 				const nested = visit(declaration.declarations);
 				if (nested) return nested;
@@ -41,6 +61,28 @@ function findScriptClassName(file: ReturnType<FileIndex["get"]>): string | undef
 	return declaration?.kind === "class_name" ? declaration.name : undefined;
 }
 
+function stripComments(expression: string): string {
+	return expression.replace(/\s+#.*$/, "").trim();
+}
+
+function literalType(expression: string): string | undefined {
+	const value = stripComments(expression);
+	if (/^(?:true|false)$/.test(value)) return "bool";
+	if (/^[-+]?\d+$/.test(value)) return "int";
+	if (/^[-+]?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(value)) return "float";
+	if (/^(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$/.test(value)) return "String";
+	if (value === "null") return "Variant";
+	if (value.startsWith("[") && value.endsWith("]")) return "Array";
+	if (value.startsWith("{") && value.endsWith("}")) return "Dictionary";
+	if (/^(?:func|lambda)\b/.test(value)) return "Callable";
+	return undefined;
+}
+
+function topLevelCall(expression: string): { name: string; argumentsText: string } | undefined {
+	const match = expression.match(/^([A-Za-z_]\w*)\s*\((.*)\)$/s);
+	return match ? { name: match[1], argumentsText: match[2] } : undefined;
+}
+
 export class TypeResolutionIndex {
 	private readonly nameCache = new Map<string, { signature: string; value: ResolvedType | null }>();
 	private readonly memberCache = new Map<string, { signature: string; members: IndexedSymbol[] }>();
@@ -52,34 +94,34 @@ export class TypeResolutionIndex {
 	) {}
 
 	resolveName(name: string): ResolvedType | undefined {
-		if (BUILTIN_TYPES.has(name)) return { name, builtin: true };
-		const matches = this.symbols.find(name).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class");
+		const normalized = name.trim().replace(/^const\s+/, "");
+		if (BUILTIN_TYPES.has(normalized)) return { name: normalized, builtin: true };
+		const matches = this.symbols.find(normalized).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class");
 		const signature = matches.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`).join("|");
-		const cached = this.nameCache.get(name);
+		const cached = this.nameCache.get(normalized);
 		if (cached && cached.signature === signature) return cached.value ?? undefined;
 		if (matches.length !== 1) {
-			this.nameCache.set(name, { signature, value: null });
+			this.nameCache.set(normalized, { signature, value: null });
 			return undefined;
 		}
-		const result = { name, uri: matches[0].uri, symbol: matches[0], builtin: false } satisfies ResolvedType;
-		this.nameCache.set(name, { signature, value: result });
+		const result = { name: normalized, uri: matches[0].uri, symbol: matches[0], builtin: false } satisfies ResolvedType;
+		this.nameCache.set(normalized, { signature, value: result });
 		return result;
 	}
 
 	resolveBinding(binding: Binding): ResolvedType | undefined {
 		if (binding.type) return this.resolveName(binding.type);
-		if (binding.kind !== "function" || !binding.returnType) return undefined;
-		return this.resolveName(binding.returnType);
+		if (binding.kind !== "function") return undefined;
+		if (binding.returnType) return this.resolveName(binding.returnType);
+		return this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
 	}
 
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
 		if (name === "self") return { name: "self", uri, builtin: false };
-		const preload = this.resolvePreloadExpression(name);
-		if (preload) return preload;
 		const binding = this.bindings.getBinding(uri, offset, name);
 		const bindingType = binding ? this.resolveBinding(binding) : undefined;
 		if (bindingType) return bindingType;
-		const expressionType = this.resolveInitializerType(uri, name);
+		const expressionType = this.resolveInitializerType(uri, name, new Set<string>());
 		if (expressionType) return expressionType;
 		const declarationType = findDeclarationType(this.files.get(uri), name);
 		return declarationType ? this.resolveName(declarationType) : undefined;
@@ -156,25 +198,77 @@ export class TypeResolutionIndex {
 		return { name: className ?? path.replace(/\.gd$/, ""), uri: matches[0].uri, symbol, builtin: false };
 	}
 
-	private resolvePreloadExpression(expression: string): ResolvedType | undefined {
-		const match = expression.match(/^preload\s*\(\s*["']([^"']+\.gd)["']\s*\)\.new\(\)$/);
-		return match ? this.resolveScriptPath(match[1]) : undefined;
+	private resolveExpressionType(uri: string, expression: string, visited: Set<string>): ResolvedType | undefined {
+		const value = stripComments(expression);
+		const literal = literalType(value);
+		if (literal) return this.resolveName(literal) ?? { name: literal, builtin: true };
+		const preload = value.match(/^preload\s*\(\s*["']([^"']+\.gd)["']\s*\)\.new\s*\(\s*\)$/);
+		if (preload) return this.resolveScriptPath(preload[1]);
+		const load = value.match(/^load\s*\(\s*["']([^"']+)["']\s*\)$/);
+		if (load) return { name: "Resource", builtin: true };
+		const memberCall = value.match(/^([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(.*\)$/s);
+		if (memberCall) {
+			const receiver = this.resolveReceiver(uri, this.files.get(uri)?.source.length ?? 0, memberCall[1]);
+			if (receiver) {
+				const member = this.getMember(receiver, memberCall[2]);
+				if (member?.returnType) return this.resolveName(member.returnType);
+			}
+		}
+		const call = topLevelCall(value);
+		if (call) {
+			if (CONSTRUCTOR_TYPES.has(call.name)) return this.resolveName(call.name) ?? { name: call.name, builtin: true };
+			const functions = this.symbols.find(call.name).filter((symbol) => symbol.kind === "function");
+			if (functions.length === 1) {
+				const functionSymbol = functions[0];
+				if (functionSymbol.returnType) return this.resolveName(functionSymbol.returnType);
+				return this.resolveFunctionReturnType(functionSymbol.uri, functionSymbol.name, visited);
+			}
+		}
+		const direct = this.resolveName(value);
+		if (direct) return direct;
+		return undefined;
 	}
 
-	private resolveInitializerType(uri: string, name: string): ResolvedType | undefined {
-		const source = this.files.get(uri)?.source;
-		if (!source) return undefined;
+	private resolveInitializerType(uri: string, name: string, visited: Set<string>): ResolvedType | undefined {
+		if (visited.has(`${uri}:${name}`)) return undefined;
+		visited.add(`${uri}:${name}`);
+		const file = this.files.get(uri);
+		if (!file) return undefined;
+		const declaration = findDeclaration(file, name);
+		if (declaration?.type) return this.resolveName(declaration.type);
 		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const pattern = new RegExp(`(?:^|\\n)\\s*var\\s+${escaped}\\s*(?:\\:\\s*[^=]+)?=\\s*([^\\n#]+)`);
-		const match = source.match(pattern);
-		if (!match) return undefined;
-		const expression = match[1].trim();
-		const preload = this.resolvePreloadExpression(expression);
-		if (preload) return preload;
-		const call = expression.match(/^([A-Za-z_]\w*)\s*\([^)]*\)$/);
-		if (!call) return undefined;
-		const functions = this.symbols.find(call[1]).filter((symbol) => symbol.kind === "function" && symbol.returnType);
-		if (functions.length !== 1) return undefined;
-		return this.resolveName(functions[0].returnType!);
+		const patterns = [
+			new RegExp(`(?:^|\\n)\\s*var\\s+${escaped}\\s*=\\s*([^\\n#]+)`),
+			new RegExp(`(?:^|\\n)\\s*var\\s+${escaped}\\s*:\\s*[^=]+?=\\s*([^\\n#]+)`),
+			new RegExp(`(?:^|\\n)\\s*${escaped}\\s*=\\s*([^\\n#]+)`),
+		];
+		for (const pattern of patterns) {
+			const match = file.source.match(pattern);
+			if (!match) continue;
+			const result = this.resolveExpressionType(uri, match[1], visited);
+			if (result) return result;
+		}
+		return undefined;
+	}
+
+	private resolveFunctionReturnType(uri: string, name: string, visited: Set<string>): ResolvedType | undefined {
+		const key = `${uri}:function:${name}`;
+		if (visited.has(key)) return undefined;
+		visited.add(key);
+		const file = this.files.get(uri);
+		if (!file) return undefined;
+		const functions = file.ast.declarations.flatMap((declaration) => this.findFunctions(declaration, name));
+		if (functions.length !== 1 || functions[0].returnType) return functions.length === 1 && functions[0].returnType ? this.resolveName(functions[0].returnType) : undefined;
+		const fn = functions[0];
+		if (!fn.bodyRange) return undefined;
+		const body = file.source.slice(fn.bodyRange.start.offset, fn.bodyRange.end.offset);
+		const match = body.match(/(?:^|\n)\s*return\s+([^\n#]+)/);
+		return match ? this.resolveExpressionType(uri, match[1], visited) : undefined;
+	}
+
+	private findFunctions(declaration: GDScriptDeclaration, name: string): GDScriptFunction[] {
+		if (declaration.kind === "function") return declaration.name === name ? [declaration] : [];
+		if (declaration.kind === "class") return declaration.declarations.flatMap((child) => this.findFunctions(child, name));
+		return [];
 	}
 }
