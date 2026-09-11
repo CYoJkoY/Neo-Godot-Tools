@@ -2,11 +2,25 @@
 
 Neo-Godot-Tools is a VS Code language and debugging toolchain for Godot. The current strategic priority is to make GDScript language intelligence **local-first, incremental, measurable, and reliable**, while retaining Godot's native LSP as a semantic fallback for cases the local analyzer cannot model safely.
 
-## 1. Current direction
+> **Status note:** This roadmap describes the implementation state of `master` after the Semantic Query Engine, provider migrations, incremental invalidation, and query-dependency cache work. The type-inference expansion currently under development is intentionally listed as **next**, not as completed work.
 
-The project already has a local GDScript parser/analyzer, symbol/binding/reference indexes, dependency-aware invalidation, update coalescing, profiling instrumentation, and a Godot LSP fallback path.
+## 1. Current architecture
 
-The target architecture is:
+The project has moved beyond the original LSP-audit stage. The current local path contains:
+
+- GDScript parser and AST model;
+- `FileIndex` with source/API snapshots;
+- `SymbolIndex`, `BindingIndex`, and `ReferenceIndex`;
+- `TypeResolutionIndex` for local type/member resolution;
+- dependency topology tracking with unresolved-target refresh;
+- semantic change classification and targeted invalidation;
+- `SemanticQueryEngine` as the semantic query boundary;
+- query-result caching with source/API and external query-dependency snapshots;
+- update coalescing and stale filesystem-update protection;
+- Godot LSP as the fallback/engine-semantic boundary;
+- runtime profiling for parser, indexing, scheduled updates, and LSP requests.
+
+Target flow:
 
 ```text
 VS Code Providers
@@ -17,245 +31,175 @@ VS Code Providers
         ▼
  Semantic Query Engine
         │
-   ┌────┴─────┐
-   ▼          ▼
-Incremental  Dependency
-Semantic DB    Graph
-   │
-   ▼
-Analyzer / Parser
-        │
-        ▼
+   ┌────┴──────────┐
+   ▼               ▼
+Incremental     Dependency
+Semantic DB       Graph
+   │               │
+   └──────┬────────┘
+          ▼
+   Parser / Analyzer
+          │
+          ▼
+ Godot LSP fallback
+```
+
+The objective is not to replace Godot LSP for ideological reasons. It is to make Godot LSP unnecessary for common project-level semantics while preserving it for engine-native, dynamic, ambiguous, or unsupported cases.
+
+## 2. Implementation status
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| A — LSP audit & observability | **Mostly complete** | Routing audit and runtime instrumentation exist; reproducible project-scale measurements remain. |
+| B — Semantic Query Engine | **Implemented** | Core query boundary and local caching are in place. |
+| C — Confidence-aware resolution | **Partially implemented** | `exact` / `inferred` / `partial` / `unknown` exist, but routing policy and semantic coverage still need refinement. |
+| D — Provider migration | **Mostly implemented** | Definition, hover, completion, references, rename, signature help, document symbols, and workspace symbols use local paths; edge-case fallback behavior remains to be hardened. |
+| E — Incremental semantic DB | **Substantially implemented** | Stable snapshots, API fingerprints, semantic indexes, and targeted invalidation are present; semantic coverage is still expanding. |
+| F — Dependency-aware invalidation | **Implemented foundation** | Semantic change classification, transitive invalidation, and incremental dependency topology refresh are present. |
+| G — Completion & interactive latency | **Partially implemented** | Local completion and dependency-aware caching exist; cancellation, rapid-typing benchmarks, and latency budgets remain. |
+| H — LSP transport hardening | **Partially implemented** | Transport boundary and request instrumentation exist; lifecycle, cancellation, stale-response, and failure semantics need further work. |
+| I — Large-project scalability | **Not started as a formal benchmark phase** | The architecture is incremental, but 100/500/1K/5K-file measurements are still required. |
+| J — Worker-thread evaluation | **Conditional / deferred** | Do not implement until profiling proves CPU-bound parser/index work is the bottleneck. |
+| K — Godot compatibility matrix | **Partial** | Existing engine validation exists, but explicit Godot 3.x/4.x semantic coverage needs to be formalized. |
+| L — Release quality | **Ongoing** | CI, packaging, version validation, and release workflow continue to evolve. |
+
+## 3. Completed architectural foundations
+
+### Semantic Query Engine
+
+Providers no longer need to duplicate semantic lookup logic. `SemanticQueryEngine` centralizes local resolution and exposes reusable operations for symbols, definitions, references, hover, and completion.
+
+```text
+Provider
+   ↓
+LanguageService
+   ↓
+SemanticQueryEngine
+   ├── SymbolIndex
+   ├── BindingIndex
+   ├── ReferenceIndex
+   └── TypeResolutionIndex
+```
+
+### API-aware invalidation
+
+Indexed files carry an API fingerprint derived from public symbol signatures and inheritance. Function-body-only edits therefore do not automatically invalidate transitive dependents.
+
+```text
+body edit
+   ↓
+API fingerprint unchanged
+   ↓
+current-file semantic state only
+```
+
+An API/inheritance change propagates through the dependency graph to affected dependents.
+
+### Semantic change classification
+
+Updates are classified as:
+
+```text
+unchanged
+body_changed
+api_changed
+dependency_changed
+file_added
+file_removed
+```
+
+This classification determines which secondary indexes and semantic caches actually need work.
+
+### Incremental dependency topology
+
+The dependency graph tracks both resolved edges and unresolved candidates. Adding a previously missing target refreshes only candidate dependents instead of rebuilding the workspace graph.
+
+### Query dependency snapshots
+
+Semantic cache entries now record the workspace state they actually depend on:
+
+```text
+current file snapshot
+        +
+symbol lookup signatures
+        +
+workspace completion signatures
+        +
+resolved receiver file snapshots
+```
+
+A cache entry is reused only while all recorded dependencies remain valid. This closes the correctness gap where an unchanged document could otherwise retain a stale result after another file changed the relevant workspace symbol set.
+
+## 4. Next implementation stage — Type inference expansion
+
+The next semantic milestone is to increase the useful coverage of `TypeResolutionIndex` without turning it into a full GDScript compiler.
+
+Priority areas:
+
+1. typed and untyped variable initializers;
+2. assignment-based type propagation;
+3. function return inference from `return` expressions;
+4. propagation through local function calls;
+5. `preload()` / script construction and `load()` handling;
+6. member return-type propagation;
+7. inheritance-aware member resolution;
+8. built-in Godot value types;
+9. AST/range-aware resolution instead of broad source regexes where correctness requires it.
+
+The intended rule is conservative:
+
+```text
+certain local type
+      ↓
+local semantic result
+
+ambiguous / unsupported / dynamic
+      ↓
 Godot LSP fallback
 ```
 
-The objective is not to replace Godot LSP for ideological reasons. It is to make Godot LSP unnecessary for the common project-level case while preserving it for hard semantic cases.
+Generic/union types, full control-flow analysis, and compiler-equivalent type inference remain out of scope until concrete use cases justify them.
 
-## 2. Development principles
+## 5. Confidence-aware routing
 
-### Local first
-
-Common project-level language operations should be answered locally whenever the result is sufficiently certain.
-
-### Godot LSP as semantic oracle
-
-Use Godot LSP for engine-native semantics, dynamic or ambiguous cases, unsupported constructs, and situations where the local model cannot provide a trustworthy answer.
-
-### Incremental by default
-
-A changed document must not trigger unnecessary workspace-wide parsing or semantic recomputation.
-
-### Measure before optimizing
-
-Do not add worker threads, persistent caches, or complex concurrency merely because they appear theoretically faster. Major performance changes require reproducible measurements.
-
-### Correctness before coverage
-
-A wrong local completion or definition is worse than a slower fallback. The local analyzer must fall back when confidence is insufficient.
-
-### Stable boundaries
-
-Keep parser, analyzer, semantic indexes, query engine, provider adapters, and Godot LSP transport separated. VS Code APIs should not leak into the core semantic model.
-
-## 3. Phase A — LSP audit and observability
-
-**Status: next**
-
-Establish exactly how the current language path behaves before another large refactor.
-
-Tasks:
-
-- enumerate every Godot LSP request and notification;
-- identify providers that still use Godot LSP for normal project symbols;
-- identify repeated parsing and indexing;
-- identify synchronous filesystem or CPU work on the extension host;
-- verify cancellation and stale-response behavior;
-- measure cold-start and incremental-update latency;
-- count Godot LSP requests per editor action.
-
-Required metrics:
-
-| Metric | Purpose |
-| --- | --- |
-| p50 / p95 / p99 latency | User-visible responsiveness |
-| parser time | Parsing bottleneck detection |
-| symbol collection time | AST-to-index cost |
-| index update time | Incremental update cost |
-| semantic recomputation time | Invalidation efficiency |
-| Godot LSP requests/action | Local-first effectiveness |
-| memory usage | Large-project scalability |
-| initial indexing time | Startup cost |
-
-## 4. Phase B — Semantic query engine
-
-**Status: planned**
-
-Create a small semantic query boundary so providers no longer implement independent lookup logic.
-
-Core operations should converge toward:
-
-```text
-getSymbol(uri, position)
-getDefinition(symbol)
-getType(expression)
-getMembers(type)
-getReferences(symbol)
-getHover(symbol)
-getCompletion(context)
-```
-
-Requirements:
-
-- deterministic results;
-- document-version aware queries;
-- selective cache invalidation;
-- deduplication of identical work;
-- explicit unknown/unsupported results;
-- a clean Godot LSP fallback boundary.
-
-## 5. Phase C — Confidence-aware semantic resolution
-
-**Status: planned**
-
-Use an explicit confidence model:
+The current semantic model already exposes confidence levels, but the routing policy should become explicit and consistent across providers:
 
 ```text
 exact
-inferred
-partial
-unknown
+  → return locally
+
+safe inferred
+  → return locally
+
+partial / ambiguous
+  → prefer fallback
+
+unknown / unsupported
+  → Godot LSP
 ```
 
-Routing:
+The important property is not maximum local coverage. It is avoiding confidently wrong editor results.
 
-```text
-local result
-    │
-    ├── exact / safe inferred ──> return locally
-    │
-    └── partial / unknown ──────> Godot LSP fallback
-```
+## 6. Provider completion state
 
-This prevents aggressive local inference from silently producing incorrect editor behavior.
+The local-first provider migration is now substantially beyond the original audit. The current target matrix is:
 
-## 6. Phase D — Provider migration
+| Capability | Local path | Remaining focus |
+| --- | --- | --- |
+| Definition | Semantic Query Engine | confidence/routing edge cases |
+| Hover | Semantic Query Engine | inferred-type coverage |
+| Completion | Semantic Query Engine | latency, cancellation, context precision |
+| References | Semantic Query Engine / BindingIndex | dynamic/unsupported cases |
+| Rename | BindingIndex | cross-file semantic edge cases |
+| Signature Help | local binding/symbol resolution | richer call parsing and fallback |
+| Document Symbols | FileIndex | richer symbol coverage |
+| Workspace Symbols | SymbolIndex | indexing scale |
 
-**Status: planned**
+## 7. Performance and scalability
 
-Migrate providers one capability at a time.
+The project already measures parser, symbol collection, scheduled updates, and Godot LSP request latency. The next step is evidence rather than another cache layer.
 
-Priority:
-
-1. definition;
-2. hover;
-3. completion;
-4. references;
-5. document symbols;
-6. workspace symbols;
-7. rename;
-8. signature help and other semantic features.
-
-Engineering targets for ordinary project code:
-
-| Capability | Local target |
-| --- | ---: |
-| Definition | ≥98% |
-| Hover | ≥95% |
-| Completion | ≥95% |
-| References | ≥95% |
-
-These are targets, not correctness guarantees. Unsafe cases must fall back.
-
-## 7. Phase E — Incremental semantic database
-
-**Status: planned**
-
-Strengthen the current file/index model into an incremental semantic database.
-
-Each indexed file should have a stable semantic snapshot containing:
-
-- symbols;
-- bindings;
-- references;
-- declarations;
-- inheritance;
-- signals;
-- constants;
-- exported members;
-- script dependencies;
-- semantic/API fingerprint.
-
-A function-body-only edit should not invalidate dependents when the public/API fingerprint is unchanged.
-
-## 8. Phase F — Dependency-aware invalidation
-
-**Status: planned**
-
-Distinguish at least:
-
-```text
-body change
-API change
-inheritance change
-dependency addition/removal
-file deletion
-```
-
-For example:
-
-```text
-Function body changed
-        ↓
-local file re-indexed
-        ↓
-API fingerprint unchanged
-        ↓
-no dependent semantic invalidation
-```
-
-An API or inheritance change should invalidate only affected dependents.
-
-## 9. Phase G — Completion and interactive latency
-
-**Status: planned**
-
-Completion is the most latency-sensitive provider because it runs during typing.
-
-Requirements:
-
-- no full-file parsing per keystroke when unnecessary;
-- reuse the current document snapshot;
-- cache by document version and semantic context;
-- cancel obsolete requests;
-- avoid routine completion requests to Godot LSP;
-- keep extension-host work within an interactive latency budget.
-
-Benchmarks must include rapid typing, not only isolated requests.
-
-## 10. Phase H — LSP transport hardening
-
-**Status: planned**
-
-After local-first routing is established, make the remaining Godot LSP path predictable.
-
-Requirements:
-
-- one well-defined connection lifecycle;
-- explicit initialization state;
-- request cancellation where supported;
-- stale-response rejection;
-- bounded failure behavior;
-- no duplicate clients for the same workspace;
-- clear distinction between transport failure and semantic unknown;
-- instrumentation for every fallback request.
-
-Do not hide LSP failures by suppressing errors. Fix the routing and lifecycle that cause them.
-
-## 11. Phase I — Large-project scalability
-
-**Status: planned**
-
-Benchmark at least:
+Required workloads:
 
 ```text
 100 files
@@ -264,49 +208,48 @@ Benchmark at least:
 5,000 files
 ```
 
-Test startup, document open, rapid typing, save, external changes, completion, hover, definition, references, rename, and dependency changes.
+Measure at least:
 
-Record p50/p95/p99 latency and memory usage for each workload.
+- cold startup/indexing;
+- document open;
+- single edit;
+- rapid typing;
+- save/external change;
+- completion;
+- hover;
+- definition;
+- references;
+- rename;
+- dependency/API change;
+- p50/p95/p99 latency;
+- extension-host CPU and memory;
+- Godot LSP requests per editor action.
 
-Only after measurement should persistent disk caching or worker-thread parsing be considered.
+Only after these measurements should persistent disk caching or worker threads be considered.
 
-## 12. Phase J — Worker-thread evaluation
+## 8. LSP hardening
 
-**Status: conditional**
+The remaining LSP work is about making fallback predictable rather than increasing its usage.
 
-`worker_threads` is not a default requirement.
+Required properties:
 
-Introduce workers only if profiling proves parser/index CPU is the dominant source of extension-host latency after scheduling, caching, and invalidation have been optimized.
+- one connection lifecycle per workspace context;
+- explicit initialization state;
+- request cancellation where supported;
+- stale-response rejection;
+- bounded failure behavior;
+- clear distinction between transport failure and semantic unknown;
+- instrumentation for every fallback request.
 
-If I/O, semantic invalidation, or Godot LSP fallback dominates, workers are not the correct solution.
+LSP failures must not be hidden by suppressing errors. The routing and lifecycle should be corrected instead.
 
-## 13. Phase K — Godot compatibility matrix
+## 9. Godot compatibility
 
-**Status: planned**
-
-Maintain explicit verification across supported Godot generations, especially Godot 3.x and 4.x.
-
-The local parser/analyzer must not accidentally assume a Godot 4-only syntax model when compatibility with Godot 3.x is expected.
+Maintain explicit semantic verification across supported Godot generations, especially Godot 3.x and 4.x. The analyzer must not accidentally encode a Godot 4-only syntax or type model where Godot 3.x support is expected.
 
 Engine-in-the-loop tests should cover representative versions in CI.
 
-## 14. Phase L — Release quality
-
-**Status: ongoing**
-
-Release engineering follows clean SemVer:
-
-```text
-package.json: 2.8.0
-stable tag:   v2.8.0
-dev tag:      v2.8.0.dev1
-```
-
-The source version remains clean; development numbering belongs to the Git tag and release metadata.
-
-Every release should pass lint, compile, unit tests, relevant engine tests, package validation, and release-version validation.
-
-## 15. Explicitly out of scope for now
+## 10. Explicitly out of scope for now
 
 Do not implement these merely for theoretical completeness:
 
@@ -318,9 +261,7 @@ Do not implement these merely for theoretical completeness:
 - worker threads before CPU profiling justifies them;
 - a second language server implementation solely for architectural purity.
 
-The objective is a fast, correct, maintainable language service for real Godot projects.
-
-## 16. Definition of architectural success
+## 11. Definition of architectural success
 
 Normal project editing should follow:
 
@@ -350,6 +291,4 @@ ambiguous/dynamic semantics
 local model unavailable
 ```
 
-The long-term metric is therefore not "replace Godot LSP". It is:
-
-> **Make Godot LSP unnecessary for the common case while preserving it as the authoritative fallback for hard cases.**
+> **Long-term metric:** Make Godot LSP unnecessary for the common case while preserving it as the authoritative fallback for hard cases.

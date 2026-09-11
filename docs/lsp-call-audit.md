@@ -2,222 +2,74 @@
 
 ## Purpose
 
-This document records the current language-feature routing before the Semantic Query Engine migration. The goal is to establish an evidence-based baseline: local analysis and indexes should answer ordinary project-code queries first, while Godot LSP remains the fallback for engine-native, dynamic, ambiguous, or unsupported semantics.
+This document records the current language-feature routing after the Semantic Query Engine and provider migration work. It is no longer a pre-migration audit: the main GDScript semantic path is already local-first.
 
-This audit is intentionally descriptive. It does not change provider behavior.
+The remaining audit goal is to measure how often Godot LSP is still needed and whether those calls are caused by legitimate semantic gaps or by incomplete local routing.
 
-## Current architecture
+## Current provider routing
+
+| Feature | Local path | Godot LSP fallback | State |
+| --- | --- | --- | --- |
+| Definition | `SemanticQueryEngine` → `LanguageService` | `DefinitionFallback` | **Local-first** |
+| Hover | `SemanticQueryEngine` → `LanguageService` | `HoverFallback` | **Local-first** |
+| Completion | `SemanticQueryEngine` → `LanguageService` | `CompletionFallback` | **Local-first** |
+| References | `SemanticQueryEngine` → `LanguageService` | `ReferencesFallback` | **Local-first** |
+| Rename | `BindingIndex` / local semantic path | `RenameFallback` | **Local-first** |
+| Signature Help | local binding/symbol resolution | `SignatureHelpFallback` | **Local-first** |
+| Document Symbols | `FileIndex` | not required for the current path | **Local** |
+| Workspace Symbols | `SymbolIndex.workspaceSymbols()` | intentionally filtered from LSP | **Local** |
+| Semantic Tokens | existing provider path | requires dedicated audit | **Separate** |
+| Inlay Hints | existing provider path | requires dedicated audit | **Separate** |
+| Resource/document features | resource-specific providers | outside GDScript semantic path | **Separate domain** |
+
+The key architectural change is that ordinary project-code semantic operations no longer need provider-specific LSP lookup logic.
+
+## Current local semantic stack
 
 ```text
 VS Code Provider
-      |
-      v
+      ↓
 LanguageService
-      |
-      +--> FileIndex
-      +--> SymbolIndex
-      +--> BindingIndex
-      +--> ReferenceIndex
-      +--> TypeResolutionIndex
-      +--> DependencyGraph
-      |
-      v
-Local semantic result
-      |
-      +---- resolved ----> VS Code result
-      |
-      +---- unresolved --> feature-specific Godot LSP fallback
+      ↓
+SemanticQueryEngine
+      ├── SymbolIndex
+      ├── BindingIndex
+      ├── ReferenceIndex
+      └── TypeResolutionIndex
+              ↓
+        DependencyGraph
+              ↓
+          FileIndex / AST
 ```
 
-The current `LanguageService` already owns the central local-first path for GDScript definition, references, rename, hover, completion, and signature help. Providers should remain thin adapters around this service.
-
-## Provider routing matrix
-
-| Feature | Provider entry point | Local path | Godot LSP fallback | Local-first status |
-| --- | --- | --- | --- | --- |
-| Definition | `GDDefinitionProvider` | `LanguageService.getDefinition()` for GDScript | `DefinitionFallback` | **Active** |
-| Hover | `GDHoverProvider` | `LanguageService.getHover()` for GDScript | `HoverFallback` | **Active** |
-| Completion | `GDCompletionItemProvider` | `LanguageService.getCompletions()` for GDScript | `CompletionFallback` | **Active** |
-| References | `GDReferenceProvider` | `LanguageService.getReferences()` | `ReferencesFallback` | **Active** |
-| Rename | `GDRenameProvider` | `LanguageService.getRenameEdits()` | `RenameFallback` | **Active** |
-| Signature help | `GDSignatureHelpProvider` | `LanguageService.getSignatureHelp()` | `SignatureHelpFallback` | **Active** |
-| Document symbols | `DocumentSymbolProvider` | Local indexed symbols | No equivalent local fallback required for the current path | **Local** |
-| Workspace symbols | `WorkspaceSymbolProvider` | `SymbolIndex.workspaceSymbols()` | Current LSP client filters `workspace/symbol` | **Local** |
-| Semantic tokens | `SemanticTokenProvider` | Existing provider path; requires separate audit | Not classified by this phase | **Audit required** |
-| Inlay hints | `InlayHintsProvider` | Existing provider path; requires separate audit | Not classified by this phase | **Audit required** |
-| Resource/document features | Resource-specific providers | Parser/resource utilities | Not part of GDScript semantic fallback | **Separate domain** |
-
-The first six rows are the critical migration surface for the local-first language service. The provider registry exports these providers from `src/providers/index.ts`.
+`UpdateScheduler` sits before `FileIndex` and coalesces text, save, and filesystem events. Semantic cache entries additionally record their external query dependencies.
 
 ## Godot LSP boundary
 
-`GDScriptLanguageClient` is the transport boundary. It currently filters unsupported outgoing requests and records request round-trip latency as `lsp.request.<method>` performance samples.
+`GDScriptLanguageClient` is the transport boundary. LSP request instrumentation records `lsp.request.<method>` latency for requests that are actually sent.
 
-Known request filtering:
+The local architecture intentionally keeps Godot LSP outside the hot path whenever local semantics are sufficiently certain.
 
-- `workspace/didChangeWatchedFiles` is discarded because the extension maintains its own file/update path.
-- `workspace/symbol` is discarded because workspace symbols are served locally and the Godot-side implementation is unnecessary for the current architecture.
+Known intentional filtering includes:
 
-The client also contains compatibility/result normalization for selected Godot responses, including hover markdown and document-link handling. These transformations belong to the transport boundary and should not be mixed into the local semantic engine.
+- `workspace/didChangeWatchedFiles`: the extension owns its own file/update path;
+- `workspace/symbol`: workspace symbols are served locally by `SymbolIndex`.
 
-## Current local semantic capabilities
-
-`LanguageService` currently has direct access to:
-
-- `FileIndex`
-- `SymbolIndex`
-- `BindingIndex`
-- `ReferenceIndex`
-- `TypeResolutionIndex`
-- `DependencyGraph`
-- `UpdateScheduler`
-
-Current query behavior is already local-first in the following order:
-
-### Definition
-
-1. Resolve member expression through `TypeResolutionIndex`.
-2. Resolve the word through `BindingIndex`.
-3. Resolve a unique file-local symbol.
-4. Resolve a unique workspace symbol.
-5. Call `DefinitionFallback`.
-
-### References
-
-1. Resolve the word through `BindingIndex`.
-2. Query binding references locally.
-3. Use `ReferencesFallback` only when the local binding/reference path cannot provide a result.
-
-### Rename
-
-1. Validate the new identifier.
-2. Resolve the local binding.
-3. Collect binding references locally.
-4. Build the workspace edit locally.
-5. Use `RenameFallback` when local binding/reference resolution is unavailable.
-
-### Hover
-
-1. Resolve member receiver/type locally.
-2. Resolve member symbol locally.
-3. Resolve a local binding.
-4. Resolve a unique workspace symbol.
-5. Use `HoverFallback` when local semantic information is insufficient.
-
-### Completion
-
-1. Resolve member receiver/type locally.
-2. Return locally indexed members.
-3. Otherwise return visible bindings and workspace symbols.
-4. Use `CompletionFallback` when local completion cannot answer the request.
-
-### Signature help
-
-1. Parse the active call expression locally.
-2. Resolve the function binding or workspace symbol.
-3. Build the signature from indexed parameters.
-4. Use `SignatureHelpFallback` when local resolution is insufficient.
-
-## Findings
-
-### 1. The project has already crossed the architectural boundary
-
-The main providers do not directly issue Godot LSP requests. They delegate GDScript semantic work to `LanguageService`, which contains the local indexes and feature-specific fallbacks. This is the correct direction and should be preserved.
-
-### 2. `LanguageService` is currently the semantic aggregation point
-
-It combines symbol, binding, reference, type, and dependency indexes in one class. This is functional, but it is also the next architectural pressure point: feature providers should eventually query a dedicated `SemanticQueryEngine` rather than accumulating semantic policy inside `LanguageService`.
-
-### 3. Fallback decisions are boolean rather than confidence-aware
-
-The current contract is effectively:
+Remaining LSP requests should be classified as one of:
 
 ```text
-local result exists -> return local result
-otherwise -> LSP fallback
+engine-native semantics
+unsupported local construct
+ambiguous / dynamic semantics
+local model unavailable
+transport / lifecycle operation
 ```
 
-There is no explicit distinction between `exact`, `inferred`, `partial`, and `unknown` results. This is the primary prerequisite for the next semantic-engine phase.
+A request that falls into none of these categories is a candidate for further local migration.
 
-### 4. Completion is the highest-risk interactive path
+## Confidence-aware routing
 
-Completion executes local type/member resolution on every provider request and falls back when it cannot produce a result. Before optimizing completion further, the semantic query boundary must make cacheability, document-version validity, and fallback reasons explicit.
-
-### 5. Workspace symbols are already intentionally local
-
-The LSP client filters `workspace/symbol`, while `LanguageService.getWorkspaceSymbols()` delegates to `SymbolIndex`. This is a concrete example of the desired end state: ordinary project-wide symbol lookup does not depend on Godot LSP.
-
-### 6. Resource-language features should not be forced into the GDScript semantic engine
-
-`gdresource` and `gdscene` currently have dedicated parser/document behavior. Their resource navigation and hover behavior should remain a separate domain unless an actual shared semantic requirement appears.
-
-## Phase A.2 baseline
-
-The audit establishes these current classifications:
-
-```text
-LOCAL-FIRST AND CENTRALIZED
-  Definition
-  Hover
-  Completion
-  References
-  Rename
-  Signature Help
-  Document Symbols
-  Workspace Symbols
-
-SEPARATE AUDIT REQUIRED
-  Semantic Tokens
-  Inlay Hints
-  Other engine-facing features
-
-TRANSPORT / COMPATIBILITY BOUNDARY
-  Godot LSP client
-```
-
-The remaining work in Phase A is therefore not to redesign every provider. It is to measure and formalize the local semantic boundary before introducing a new query abstraction.
-
-## Required measurements before Semantic Query Engine
-
-For representative GDScript workspaces, measure:
-
-- initial local indexing time
-- incremental update latency after a single edit
-- local parser time
-- symbol collection time
-- binding/reference/index update time
-- semantic recomputation count
-- Godot LSP requests per editor action
-- LSP request p50/p95/p99 latency by method
-- completion latency p50/p95/p99
-- definition latency p50/p95/p99
-- hover latency p50/p95/p99
-- references latency p50/p95/p99
-- rename latency p50/p95/p99
-- extension-host CPU and memory during active editing
-
-The most important derived metric is:
-
-```text
-Godot LSP requests / editor action
-```
-
-The target for ordinary project-code editing is approximately zero LSP requests for queries that the local semantic model can answer confidently.
-
-## Next implementation boundary
-
-The next code phase should introduce a narrow `SemanticQueryEngine` around the existing indexes without moving provider behavior all at once.
-
-Initial query surface:
-
-```text
-getSymbol(uri, position)
-getDefinition(symbol)
-getType(expression)
-getMembers(type)
-```
-
-The query layer should then return a confidence-aware result:
+The semantic query layer distinguishes:
 
 ```text
 exact
@@ -226,13 +78,140 @@ partial
 unknown
 ```
 
-Only after these primitives are stable should Definition, Hover, References, Completion, and Rename be migrated incrementally to the new abstraction.
+The intended policy is:
 
-## Non-goals for this phase
+```text
+exact / safe inferred
+        ↓
+   local result
+
+partial / unknown
+        ↓
+ Godot LSP fallback
+```
+
+This distinction matters because the goal is not to maximize local hit rate by returning speculative results. Incorrect semantic results are more damaging than a fallback request.
+
+## Cache and invalidation behavior
+
+The semantic query cache records:
+
+- current file source/API snapshot;
+- symbol lookup signatures;
+- workspace completion signatures;
+- resolved receiver file snapshots.
+
+Therefore a cached result can be invalidated even when the queried document itself is unchanged if the external symbol set or receiver semantic state changed.
+
+Cross-file API changes are also propagated through the dependency graph. Function-body-only edits do not invalidate transitive dependents when the API fingerprint remains unchanged.
+
+## What is now implemented
+
+The following migration steps are complete in `master`:
+
+1. semantic query boundary established;
+2. definition migrated;
+3. hover migrated;
+4. references migrated;
+5. completion migrated;
+6. API-aware invalidation added;
+7. semantic change classification added;
+8. precise secondary-index invalidation added;
+9. incremental dependency topology refresh added;
+10. semantic cache snapshot identity added;
+11. query dependency snapshots added.
+
+The original audit statement that these providers are still waiting for the query-engine migration is obsolete and should not be reintroduced.
+
+## Remaining audit work
+
+### 1. Measure real fallback usage
+
+Record Godot LSP request counts for representative editor actions:
+
+- completion while typing;
+- hover;
+- definition;
+- references;
+- rename;
+- signature help.
+
+The primary derived metric is:
+
+```text
+Godot LSP requests / editor action
+```
+
+For common project symbols, the desired value approaches zero.
+
+### 2. Classify fallback causes
+
+For each fallback request, determine whether it was caused by:
+
+- missing type inference;
+- dynamic dispatch;
+- unresolved inheritance/dependency;
+- engine-native type/API;
+- unsupported syntax;
+- ambiguous workspace symbol;
+- transport failure.
+
+This classification directly informs the next semantic implementation instead of adding speculative infrastructure.
+
+### 3. Audit separate provider domains
+
+Semantic tokens and inlay hints are not covered by the main GDScript semantic migration. Their current routing should be inspected independently before changing them.
+
+## Performance measurements
+
+The project already exposes runtime measurements for:
+
+- `parse`;
+- `collectSymbols`;
+- `scheduledUpdate`;
+- `lsp.request.<method>`.
+
+The remaining Phase A work is to collect reproducible measurements on realistic projects and compare local work against fallback latency.
+
+Required metrics:
+
+| Metric | Purpose |
+| --- | --- |
+| p50 / p95 / p99 | interactive responsiveness |
+| parser time | syntax processing cost |
+| symbol collection | AST-to-index cost |
+| scheduled update | event-to-index cost |
+| semantic recomputation | invalidation efficiency |
+| LSP requests/action | local-first effectiveness |
+| memory | project-scale behavior |
+| initial indexing | startup cost |
+
+## Next semantic boundary
+
+The next major gain should come from expanding local semantic coverage, not from another generic cache layer.
+
+Priority:
+
+```text
+Type inference
+    ↓
+Godot API semantic database
+    ↓
+confidence-aware provider routing
+    ↓
+completion latency / cancellation
+    ↓
+LSP transport hardening
+    ↓
+large-project benchmarks
+```
+
+The local analyzer should remain conservative. Unsupported or ambiguous expressions should continue to use Godot LSP rather than forcing an unsafe approximation.
+
+## Non-goals
 
 - Do not remove Godot LSP.
-- Do not add worker threads before profiling proves they are necessary.
-- Do not introduce a persistent disk cache.
-- Do not implement a complete GDScript compiler/type lattice.
-- Do not redesign resource/document providers merely for architectural symmetry.
-- Do not add LSP calls simply to improve coverage before measuring the local gap.
+- Do not treat every LSP request as a bug.
+- Do not add worker threads before CPU profiling proves they are necessary.
+- Do not introduce persistent disk caching before startup profiling justifies it.
+- Do not fold resource-language providers into the GDScript semantic engine without a concrete shared requirement.
