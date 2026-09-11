@@ -23,10 +23,10 @@ export class UpdateScheduler {
 
 	enqueue(update: Omit<ScheduledUpdate, "sequence">): void {
 		if (this.disposed) return;
-		const sequence = ++this.sequence;
-		this.latestSequence.set(update.uri, sequence);
 		const previous = this.pending.get(update.uri);
 		if (previous && previous.version > update.version) return;
+		const sequence = ++this.sequence;
+		this.latestSequence.set(update.uri, sequence);
 		this.pending.set(update.uri, { ...update, sequence });
 		this.schedule();
 	}
