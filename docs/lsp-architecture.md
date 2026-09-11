@@ -9,7 +9,7 @@ VS Code Providers
   LanguageService
    /      |       \
 Local Index  Type Resolution  Dependency Graph
-   \      |       /
+   \      |      /
  Symbol + Binding + Reference
               │
            Analyzer
@@ -19,52 +19,53 @@ Local Index  Type Resolution  Dependency Graph
       Godot LSP fallback
 ```
 
-## Phase 9 — Semantic cache and dependency-aware invalidation
+## Phase 10 — Semantic scheduling and incremental update coalescing
 
-Phase 9 adds a cache layer to the local semantic model without introducing persistent state or background workers prematurely. The goal is to make repeated Definition/Hover/Completion requests cheap while keeping results correct after incremental edits.
+Phase 10 adds an update scheduler between VS Code events and the local index. The goal is to prevent the same `.gd` file from being reparsed repeatedly during a burst of edits, and to prevent a slow filesystem read from overwriting a newer in-memory document.
 
-### Version-aware semantic cache
+### Per-file coalescing
 
-`TypeResolutionIndex` now caches two expensive classes of results:
+`UpdateScheduler` keeps at most one pending update per URI. Text-document changes, saves, and filesystem watcher events therefore converge on the newest queued version instead of producing one parse/index cycle per event.
 
-- script-name resolution;
-- inheritance-aware member collections.
-
-Name-cache entries are validated against the current symbol declaration signature. Member-cache entries carry a recursive file-version signature through the local `extends` chain. A change to a base script therefore makes cached members of derived scripts stale automatically.
-
-This avoids rebuilding inherited member lists on every editor request while preserving correctness across incremental updates.
-
-### Dependency-aware invalidation
-
-`DependencyGraph.getTransitiveDependents()` identifies all local scripts affected by a changed dependency. `LanguageService` captures that set before updating the dependency graph and invalidates semantic entries for the changed file and its dependents.
-
-Deletion follows the same boundary so removed scripts cannot leave stale semantic results behind.
+A short 30 ms debounce absorbs normal editor event bursts without making the local model feel stale during interactive editing.
 
 ```text
-change base.gd
-      │
-      ▼
-DependencyGraph
-      │
-      ├── player.gd
-      ├── enemy.gd
-      └── game.gd
-      │
-      ▼
-TypeResolutionIndex.invalidate()
-      │
-      ▼
-recompute only when queried
+text change v1 ─┐
+text change v2 ─┼─> UpdateScheduler ──> apply v2 once
+save v2 ────────┘
 ```
 
-The cache is intentionally demand-driven. We do not eagerly reparse every dependent file merely because an upstream symbol changed.
+### Version and generation safety
 
-### Incremental update boundary
+Document updates carry the VS Code document version. Older pending versions cannot replace a newer pending version. Filesystem watcher events use version `0`, so they cannot displace a newer open-document update.
 
-The update pipeline remains:
+Each scheduled item also has a monotonic sequence. If an asynchronous filesystem read is still running when a newer update arrives, the old item becomes stale and the service checks that sequence again before mutating the indexes.
+
+```text
+filesystem read v0 ────────┐
+                           │ slow I/O
+text change v7 ─> queue v7 ├─> v0 discarded
+                           │
+                           └──────────────> apply v7
+```
+
+This is important because debouncing alone does not solve races created by asynchronous file-system operations.
+
+### Event ownership
+
+Open GDScript documents are treated as the authoritative source for their URI. A filesystem watcher event for an open document is converted into the current document update rather than reading a potentially stale on-disk copy.
+
+Deletion cancels all pending work for the URI before removing its indexes and invalidating dependent semantic caches.
+
+### Interaction with Phase 9
+
+Scheduling does not change the semantic invalidation model. Once an update is accepted, the existing pipeline remains:
 
 ```text
 TextDocument / File Watcher
+          │
+          ▼
+   UpdateScheduler
           │
           ▼
        FileIndex
@@ -80,18 +81,21 @@ TextDocument / File Watcher
  TypeResolutionIndex
 ```
 
-A changed file is parsed and indexed once. Semantic caches are then invalidated at the dependency boundary. Subsequent requests recompute only the semantic result that is actually needed.
+Dependency-aware invalidation therefore still happens only after a coalesced update is committed. Dependents are not eagerly reparsed just because an upstream file changed.
 
-### Why workers are not added yet
+### Why workers are still not added
 
-The current architecture still performs parser/index updates synchronously. Phase 9 therefore does not add `worker_threads` merely for theoretical performance. The next decision should be based on profiling real projects:
+The scheduler reduces redundant work, but it does not move parsing to another thread. This is intentional. The next optimization should be driven by measurements rather than by adding concurrency prematurely.
 
-1. measure initial workspace indexing;
-2. measure single-file edit latency;
-3. measure repeated hover/completion latency with and without cache hits;
-4. measure CPU time spent in parser, bindings, references, and semantic resolution.
+Profile these separately:
 
-Only if parsing/indexing is demonstrably CPU-bound should the scheduler move work off the extension host thread.
+1. initial workspace discovery and indexing;
+2. parser time for one changed file;
+3. binding/reference/index update time;
+4. semantic cache invalidation and recomputation;
+5. extension-host latency during rapid edits.
+
+If parser/index CPU time is the dominant cost after coalescing, `worker_threads` becomes the next architectural option. If I/O or Godot LSP fallback dominates, moving the parser to a worker would not address the real bottleneck.
 
 ## Provider behavior
 
@@ -115,6 +119,4 @@ Native engine classes, dynamic values, ambiguous class names, unsupported expres
 
 ## Deliberate limits
 
-Phase 9 does not add persistent disk caches, a full GDScript type lattice, control-flow analysis, generic/union types, or engine API indexing. Cache entries are derived entirely from the in-memory indexes and are discarded with the language service.
-
-The next stage should focus on **semantic scheduling and profiling**, especially coalescing bursts of text changes and moving only proven CPU-heavy indexing work off the VS Code extension host thread. Rust should remain a profiling-driven option rather than an architectural prerequisite.
+Phase 10 does not add persistent disk caches, a full GDScript type lattice, control-flow analysis, generic/union types, engine API indexing, or worker threads. The scheduler is deliberately small and independent of VS Code so its correctness can be tested without the extension host.
