@@ -18,13 +18,23 @@ import { languageProfiler } from "../performance/profiler";
 import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
+const STALE_SENSITIVE_METHODS = new Set([
+	"textDocument/completion",
+	"textDocument/hover",
+	"textDocument/definition",
+	"textDocument/references",
+	"textDocument/rename",
+	"textDocument/signatureHelp",
+]);
 
-export enum ClientStatus {
+enum ClientStatus {
 	PENDING = 0,
 	DISCONNECTED = 1,
 	CONNECTED = 2,
 	REJECTED = 3,
 }
+
+export { ClientStatus };
 
 export enum TargetLSP {
 	HEADLESS = 0,
@@ -96,6 +106,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	public lastPortTried = -1;
 	public sentMessages = new Map();
 	private readonly requestStarts = new Map<string | number, number>();
+	private readonly latestRequestByMethod = new Map<string, string | number>();
 	private rejected = false;
 
 	events = new EventEmitter();
@@ -109,7 +120,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 	constructor() {
 		const serverOptions: ServerOptions = () => {
-			return new Promise((resolve, reject) => {
+			return new Promise((resolve) => {
 				resolve({ reader: this.io.reader, writer: this.io.writer });
 			});
 		};
@@ -136,21 +147,12 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		this.status = ClientStatus.PENDING;
 
 		let port = get_configuration("lsp.serverPort");
-		if (this.port !== -1) {
-			port = this.port;
-		}
-
-		if (this.target === TargetLSP.EDITOR) {
-			if (port === 6005 || port === 6008) {
-				port = 6005;
-			}
-		}
-
+		if (this.port !== -1) port = this.port;
+		if (this.target === TargetLSP.EDITOR && (port === 6005 || port === 6008)) port = 6005;
 		this.lastPortTried = port;
 
 		const host = get_configuration("lsp.serverHost");
 		log.info(`attempting to connect to LSP at ${host}:${port}`);
-
 		this.io.connect(host, port);
 	}
 
@@ -161,51 +163,25 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		defaultValue: T,
 		showNotification?: boolean,
 	): T {
-		if (type.method === "textDocument/documentSymbol") {
-			if (
-				error.message.includes("selectionRange must be contained in fullRange")
-			) {
-				log.warn(
-					`Request failed for method "${type.method}", suppressing notification - see issue #820`
-				);
-				return super.handleFailedRequest(
-					type,
-					token,
-					error,
-					defaultValue,
-					false
-				);
-			}
+		if (type.method === "textDocument/documentSymbol" && error.message.includes("selectionRange must be contained in fullRange")) {
+			log.warn(`Request failed for method "${type.method}", suppressing notification - see issue #820`);
+			return super.handleFailedRequest(type, token, error, defaultValue, false);
 		}
-		return super.handleFailedRequest(
-			type,
-			token,
-			error,
-			defaultValue,
-			showNotification
-		);
+		return super.handleFailedRequest(type, token, error, defaultValue, showNotification);
 	}
 
 	private request_filter(message: RequestMessage) {
 		if (this.rejected) {
-			if (message.method === "shutdown") {
-				return message;
-			}
+			if (message.method === "shutdown") return message;
 			return false;
 		}
 
-		// discard outgoing messages that we know aren't supported
-		if (message.method === "workspace/didChangeWatchedFiles") {
-			return false;
-		}
-		if (message.method === "workspace/symbol") {
-			// Fixed on server side since Godot 4.5
-			return false;
-		}
+		if (message.method === "workspace/didChangeWatchedFiles" || message.method === "workspace/symbol") return false;
 
 		this.sentMessages.set(message.id, message);
 		if (message.id !== null) {
 			this.requestStarts.set(message.id, performance.now());
+			if (STALE_SENSITIVE_METHODS.has(message.method)) this.latestRequestByMethod.set(message.method, message.id);
 		}
 		return message;
 	}
@@ -219,70 +195,43 @@ export default class GDScriptLanguageClient extends LanguageClient {
 				this.requestStarts.delete(message.id);
 				this.sentMessages.delete(message.id);
 			}
+			if (sentMessage && STALE_SENSITIVE_METHODS.has(sentMessage.method)) {
+				const latest = this.latestRequestByMethod.get(sentMessage.method);
+				if (latest !== undefined && latest !== message.id) {
+					log.debug(`discarding stale LSP response for ${sentMessage.method} (request ${String(message.id)}; latest ${String(latest)})`);
+					return false;
+				}
+				if (latest === message.id) this.latestRequestByMethod.delete(sentMessage.method);
+			}
 		}
 		if (sentMessage?.method === "textDocument/hover") {
-			// fix markdown contents
 			let value: string = (message as HoverResponseMesssage).result.contents.value;
 			if (value) {
-				// this is a dirty hack to fix language server sending us prerendered
-				// markdown but not correctly stripping leading #'s, leading to
-				// docstrings being displayed as titles
 				value = value.replace(/\n[#]+/g, "\n");
-
-				// fix bbcode line breaks
 				value = value.replaceAll("`br`", "\n\n");
-
-				// fix bbcode code boxes
 				value = value.replace("`codeblocks`", "");
 				value = value.replace("`/codeblocks`", "");
 				value = value.replace("`gdscript`", "\nGDScript:\n```gdscript");
 				value = value.replace("`/gdscript`", "```");
 				value = value.replace("`csharp`", "\nC#:\n```csharp");
 				value = value.replace("`/csharp`", "```");
-
 				(message as HoverResponseMesssage).result.contents.value = value;
 			}
 		} else if (sentMessage?.method === "textDocument/documentLink") {
-			const results: DocumentLinkResult[] = (
-				message as DocumentLinkResponseMessage
-			).result;
-
-			if (!results) {
-				return message;
-			}
-
+			const results: DocumentLinkResult[] = (message as DocumentLinkResponseMessage).result;
+			if (!results) return message;
 			const final_result: DocumentLinkResult[] = [];
-			// at this point, Godot's LSP server does not
-			// return a valid path for resources identified
-			// by "uid://""
-			//
-			// this is a dirty hack to remove any "uid://"
-			// document links.
-			//
-			// to provide links for these, we will be relying on
-			// the internal DocumentLinkProvider instead.
-			for (const result of results) {
-				if (!result.target.startsWith("uid://")) {
-					final_result.push(result);
-				}
-			}
-
+			for (const result of results) if (!result.target.startsWith("uid://")) final_result.push(result);
 			(message as DocumentLinkResponseMessage).result = final_result;
 		}
-
 		return message;
 	}
 
 	private async check_workspace(message: ChangeWorkspaceNotification) {
 		const server_path = path.normalize(message.params.path);
 		const client_path = path.normalize((await get_project_dir()) ?? "");
-
-		// Allow the client workspace to be a subfolder of the server's project.
-		// The LSP server reports the real project root (where project.godot lives),
-		// but the user may have opened a subfolder of the project in VS Code.
 		const is_subfolder = client_path.startsWith(server_path + path.sep);
 		const is_same = client_path === server_path;
-
 		if (!is_same && !is_subfolder) {
 			log.warn("Connected LSP is a different workspace");
 			this.io.socket?.resetAndDestroy();
@@ -291,33 +240,12 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	}
 
 	private notification_filter(message: NotificationMessage) {
-		if (message.method === "gdscript_client/changeWorkspace") {
-			this.check_workspace(message as ChangeWorkspaceNotification);
-		}
-		if (message.method === "gdscript/capabilities") {
-			globals.docsProvider?.register_capabilities(message);
-		}
-
-		// if (message.method === "textDocument/publishDiagnostics") {
-		// 	for (const diagnostic of message.params.diagnostics) {
-		// 		if (diagnostic.code === 6) {
-		// 			log.debug("UNUSED_SIGNAL", diagnostic);
-		//             return;
-		// 		}
-		// 		if (diagnostic.code === 2) {
-		// 			log.debug("UNUSED_VARIABLE", diagnostic);
-		//             return;
-		// 		}
-		// 	}
-		// }
-
+		if (message.method === "gdscript_client/changeWorkspace") this.check_workspace(message as ChangeWorkspaceNotification);
+		if (message.method === "gdscript/capabilities") globals.docsProvider?.register_capabilities(message);
 		return message;
 	}
 
-	public async get_symbol_at_position(
-		uri: vscode.Uri,
-		position: vscode.Position
-	) {
+	public async get_symbol_at_position(uri: vscode.Uri, position: vscode.Position) {
 		const params = {
 			textDocument: { uri: uri.toString() },
 			position: { line: position.line, character: position.character },
@@ -328,41 +256,30 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 	private parse_hover_result(message: HoverResult) {
 		const contents = message.contents;
-
 		let decl: string;
-		if (Array.isArray(contents)) {
-			decl = contents[0];
-		} else {
-			decl = contents.value;
-		}
-		if (!decl) {
-			return "";
-		}
+		if (Array.isArray(contents)) decl = contents[0];
+		else decl = contents.value;
+		if (!decl) return "";
 		decl = decl.split("\n")[0].trim();
-
 		let match: RegExpMatchArray | null;
 		let result: string | undefined = undefined;
 		match = decl.match(/(?:func|const) (@?\w+)\.(\w+)/);
-		if (match) {
-			result = `${match[1]}.${match[2]}`;
-		}
-
+		if (match) result = `${match[1]}.${match[2]}`;
 		match = decl.match(/<Native> class (\w+)/);
-		if (match) {
-			result = `${match[1]}`;
-		}
-
+		if (match) result = `${match[1]}`;
 		return result;
 	}
 
 	private on_connected() {
 		this.status = ClientStatus.CONNECTED;
-
 		const host = get_configuration("lsp.serverHost");
 		log.info(`connected to LSP at ${host}:${this.lastPortTried}`);
 	}
 
 	private on_disconnected() {
+		this.latestRequestByMethod.clear();
+		this.requestStarts.clear();
+		this.sentMessages.clear();
 		if (this.rejected) {
 			this.status = ClientStatus.REJECTED;
 			return;
@@ -370,12 +287,10 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		if (this.target === TargetLSP.EDITOR) {
 			const host = get_configuration("lsp.serverHost");
 			let port = get_configuration("lsp.serverPort");
-
 			if (port === 6005 || port === 6008) {
 				if (this.lastPortTried === 6005) {
 					port = 6008;
 					log.info(`attempting to connect to LSP at ${host}:${port}`);
-
 					this.lastPortTried = port;
 					this.io.connect(host, port);
 					return;

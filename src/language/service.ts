@@ -5,6 +5,7 @@ import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
 import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
 import { SemanticQueryEngine } from "./semantic/query_engine";
+import { isSafeLocalConfidence } from "./semantic/resolution_policy";
 import { languageProfiler } from "../performance/profiler";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
@@ -75,7 +76,7 @@ export class LanguageService implements vscode.Disposable {
 	async getDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Definition | undefined> {
 		if (token.isCancellationRequested) return undefined;
 		const result = languageProfiler.measure("semantic.definition", () => this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }));
-		if (result.value && (result.confidence === "exact" || result.confidence === "inferred")) return this.toLocation(result.value);
+		if (result.value && isSafeLocalConfidence(result.confidence)) return this.toLocation(result.value);
 		if (token.isCancellationRequested) return undefined;
 		return languageProfiler.measureAsync("lsp.fallback.definition", () => this.definitionFallback.provide(document, position, token));
 	}
@@ -107,7 +108,7 @@ export class LanguageService implements vscode.Disposable {
 	getHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
 		return languageProfiler.measure("semantic.hover", () => {
 			const result = this.semantic.getHover(document.uri.toString(), { offset: document.offsetAt(position) });
-			if (result.value && (result.confidence === "exact" || result.confidence === "inferred")) return this.hoverForSymbol(result.value);
+			if (result.value && isSafeLocalConfidence(result.confidence)) return this.hoverForSymbol(result.value);
 			const range = wordRange(document, position);
 			if (!range) return undefined;
 			const name = document.getText(range);

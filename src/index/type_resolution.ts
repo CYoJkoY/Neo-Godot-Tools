@@ -1,5 +1,6 @@
 import { GDScriptConstant, GDScriptDeclaration, GDScriptFunction, GDScriptToken, GDScriptVariable, lexGDScript } from "../analyzer/index.js";
 import { Binding, BindingIndex } from "./bindings.js";
+import { collectControlFlowAssignments } from "./control_flow.js";
 import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
 import { SymbolIndex } from "./symbol_index.js";
@@ -264,6 +265,18 @@ export class TypeResolutionIndex {
 		if (declaration?.value) { const result = this.resolveExpressionType(uri, declaration.value, declaration.range.start.offset, visited); if (result) return result; }
 		const functionDeclaration = findContainingFunction(file.ast.declarations, offset);
 		if (!functionDeclaration) return undefined;
+		const controlFlow = collectControlFlowAssignments(file.source, functionDeclaration.bodyRange, name, offset);
+		if (controlFlow !== undefined) {
+			if (!controlFlow.length) return undefined;
+			let resolved: ResolvedType | undefined;
+			for (const expression of controlFlow) {
+				const type = this.resolveExpressionType(uri, expression, offset, new Set(visited));
+				if (!type) return undefined;
+				if (resolved && resolved.name !== type.name) return undefined;
+				resolved = type;
+			}
+			if (resolved) return resolved;
+		}
 		const statements = this.getBodyStatements(uri, functionDeclaration);
 		let latest: LocalStatement | undefined;
 		for (const statement of statements) if (statement.kind === "assignment" && statement.name === name && statement.offset <= offset) latest = statement;
