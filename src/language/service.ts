@@ -115,19 +115,16 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	getHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
-		const member = this.memberExpression(document, position);
-		if (member) {
-			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), member.receiver);
-			const symbol = receiver ? this.types.getMember(receiver, member.member) : undefined;
-			if (symbol) return this.hoverForSymbol(symbol);
+		const result = this.semantic.getHover(document.uri.toString(), { offset: document.offsetAt(position) });
+		if (result.value && (result.confidence === "exact" || result.confidence === "inferred")) {
+			return this.hoverForSymbol(result.value);
 		}
 		const range = wordRange(document, position);
 		if (!range) return undefined;
 		const name = document.getText(range);
 		const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), name);
-		if (binding) return this.hoverForBinding(binding);
-		const symbols = this.symbols.find(name);
-		return symbols.length === 1 ? this.hoverForSymbol(symbols[0]) : undefined;
+		if (binding && result.confidence === "exact") return this.hoverForBinding(binding);
+		return undefined;
 	}
 
 	getCompletions(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList | undefined {
