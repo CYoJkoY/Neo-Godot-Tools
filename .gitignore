@@ -2,6 +2,7 @@ out
 node_modules
 *.vsix
 .vscode-test
+.vscode-test.js
 workspace.code-workspace
 .history
 .godot
