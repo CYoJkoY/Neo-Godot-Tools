@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, ReferenceIndex, SymbolIndex, TypeResolutionIndex, DependencyGraph } from "../index";
+import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, ReferenceIndex, SymbolIndex, TypeResolutionIndex, DependencyGraph, classifySemanticChange } from "../index";
 import { DefinitionFallback } from "../fallback/definition";
 import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
@@ -247,14 +247,16 @@ export class LanguageService implements vscode.Disposable {
 
 	private updateText(uri: string, source: string, version = 0): void {
 		const previous = this.files.get(uri);
-		const affected = this.dependencies.getTransitiveDependents(uri);
+		const previousDependencies = this.dependencies.getDependencies(uri);
 		const file = this.files.update(uri, source, version);
 		this.symbols.update(uri);
 		this.references.update(uri);
 		this.bindings.update(uri);
 		this.dependencies.update(uri);
-		const apiChanged = previous?.apiFingerprint !== file.apiFingerprint;
-		const semanticAffected = apiChanged ? [uri, ...affected] : [uri];
+		const change = classifySemanticChange(previous, file, previousDependencies, this.dependencies.getDependencies(uri));
+		if (change.kind === "unchanged") return;
+		const affected = change.kind === "api_changed" ? this.dependencies.getTransitiveDependents(uri) : [];
+		const semanticAffected = [uri, ...affected];
 		this.types.invalidate(semanticAffected);
 		this.semantic.invalidate(semanticAffected);
 	}
