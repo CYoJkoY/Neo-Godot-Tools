@@ -2,9 +2,10 @@ export type ScheduledUpdate = {
 	uri: string;
 	version: number;
 	source?: string;
+	sequence: number;
 };
 
-type PendingUpdate = ScheduledUpdate & { sequence: number };
+type PendingUpdate = ScheduledUpdate;
 
 export class UpdateScheduler {
 	private readonly pending = new Map<string, PendingUpdate>();
@@ -20,7 +21,7 @@ export class UpdateScheduler {
 		private readonly apply: (update: ScheduledUpdate) => void | Promise<void>,
 	) {}
 
-	enqueue(update: ScheduledUpdate): void {
+	enqueue(update: Omit<ScheduledUpdate, "sequence">): void {
 		if (this.disposed) return;
 		const sequence = ++this.sequence;
 		this.latestSequence.set(update.uri, sequence);
@@ -36,8 +37,8 @@ export class UpdateScheduler {
 		this.resolveIdleIfReady();
 	}
 
-	isCurrent(uri: string, sequence: number): boolean {
-		return !this.disposed && this.latestSequence.get(uri) === sequence;
+	isCurrent(update: ScheduledUpdate): boolean {
+		return !this.disposed && this.latestSequence.get(update.uri) === update.sequence;
 	}
 
 	async flush(): Promise<void> {
@@ -52,7 +53,7 @@ export class UpdateScheduler {
 				const updates = [...this.pending.values()];
 				this.pending.clear();
 				for (const update of updates) {
-					if (!this.isCurrent(update.uri, update.sequence)) continue;
+					if (!this.isCurrent(update)) continue;
 					await this.apply(update);
 				}
 			}
