@@ -14,8 +14,7 @@ describe("DependencyGraph", () => {
 		expect(graph.getDependencies(sourceUri)).toEqual([]);
 
 		files.update(targetUri, "class_name Base");
-		graph.update(targetUri);
-		expect(graph.refreshForTarget(targetUri)).toEqual([sourceUri]);
+		expect(graph.update(targetUri)).toEqual([sourceUri]);
 		expect(graph.getDependencies(sourceUri)).toEqual([
 			{ from: sourceUri, to: targetUri, reason: "preload" },
 		]);

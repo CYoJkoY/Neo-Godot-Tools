@@ -32,6 +32,7 @@ export interface IndexedFile {
 	uri: string;
 	version: number;
 	source: string;
+	sourceFingerprint: string;
 	ast: GDScriptScript;
 	diagnostics: GDScriptDiagnostic[];
 	symbols: IndexedSymbol[];
