@@ -20,12 +20,25 @@ function engineFor(source: string, options?: {
 	resolvedType?: ResolvedType;
 	members?: IndexedSymbol[];
 	references?: Array<{ bindingId: string; name: string; uri: string; range: IndexedSymbol["range"] }>;
+	symbolSignature?: { value: string };
+	workspaceSignature?: { value: string };
 }): SemanticQueryEngine {
-	const file = { uri, version: 1, source, ast: {} as never, diagnostics: [], symbols: options?.fileSymbols ?? [variable] };
+	const file = {
+		uri,
+		version: 1,
+		source,
+		sourceFingerprint: `source:${source}`,
+		apiFingerprint: `api:${source}`,
+		ast: {} as never,
+		diagnostics: [],
+		symbols: options?.fileSymbols ?? [variable],
+	};
 	const files = { get: () => file } as unknown as FileIndex;
 	const symbols = {
 		find: () => options?.workspace ?? [],
+		signature: () => options?.symbolSignature?.value ?? "symbols",
 		workspaceSymbols: () => options?.workspace ?? [],
+		workspaceSignature: () => options?.workspaceSignature?.value ?? "workspace",
 	} as unknown as SymbolIndex;
 	const bindings = {
 		getBinding: () => options?.binding,
@@ -70,6 +83,15 @@ describe("SemanticQueryEngine", () => {
 		const first = engine.getSymbol(uri, { offset: 2 });
 		expect(engine.getSymbol(uri, { offset: 2 })).toBe(first);
 		engine.invalidate([uri]);
+		expect(engine.getSymbol(uri, { offset: 2 })).not.toBe(first);
+	});
+
+	it("invalidates a symbol cache entry when its global symbol dependency changes", () => {
+		const dependency = { value: "v1" };
+		const engine = engineFor("player", { symbolSignature: dependency });
+		const first = engine.getSymbol(uri, { offset: 2 });
+		expect(engine.getSymbol(uri, { offset: 2 })).toBe(first);
+		dependency.value = "v2";
 		expect(engine.getSymbol(uri, { offset: 2 })).not.toBe(first);
 	});
 
@@ -146,6 +168,15 @@ describe("SemanticQueryEngine", () => {
 		const first = engine.getCompletions(uri, { offset: 2 });
 		expect(engine.getCompletions(uri, { offset: 2 })).toBe(first);
 		engine.invalidate([uri]);
+		expect(engine.getCompletions(uri, { offset: 2 })).not.toBe(first);
+	});
+
+	it("invalidates completion cache entries when the workspace candidate set changes", () => {
+		const dependency = { value: "v1" };
+		const engine = engineFor("pl", { workspaceSignature: dependency });
+		const first = engine.getCompletions(uri, { offset: 2 });
+		expect(engine.getCompletions(uri, { offset: 2 })).toBe(first);
+		dependency.value = "v2";
 		expect(engine.getCompletions(uri, { offset: 2 })).not.toBe(first);
 	});
 

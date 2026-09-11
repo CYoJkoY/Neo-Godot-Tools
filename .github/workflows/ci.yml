@@ -22,17 +22,18 @@ jobs:
       - name: Install fgvm (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          curl -fLO https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-linux-x64.tar.gz
+          curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors -o fgvm-linux-x64.tar.gz https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-linux-x64.tar.gz
           tar -xzf fgvm-linux-x64.tar.gz
           chmod +x fgvm
           sudo mv fgvm /usr/local/bin/fgvm
 
       - name: Install fgvm (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-win-x64.zip" -OutFile "fgvm.zip"
+          curl.exe --fail --location --retry 5 --retry-delay 3 --retry-all-errors --output fgvm.zip https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-win-x64.zip
           Expand-Archive -Path "fgvm.zip" -DestinationPath "C:\fgvm"
-          echo "C:\fgvm" | Out-File -Encoding ascii -FilePath $env:GITHUB_PATH
+          "C:\fgvm" | Out-File -Encoding ascii -FilePath $env:GITHUB_PATH -Append
 
       - name: Cache Godot installations
         uses: actions/cache@v4

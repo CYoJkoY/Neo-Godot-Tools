@@ -20,6 +20,17 @@ export interface SemanticCompletionItem {
 	uri: string;
 }
 
+interface QueryDependencySnapshot {
+	files: ReadonlyMap<string, string>;
+	symbolQueries: ReadonlyMap<string, string>;
+	workspaceQueries: ReadonlyMap<string, string>;
+}
+
+interface CacheEntry<T> {
+	dependencies: QueryDependencySnapshot;
+	result: T;
+}
+
 function wordAt(source: string, offset: number): { name: string; start: number; end: number } | undefined {
 	const clamped = Math.max(0, Math.min(offset, source.length));
 	let start = clamped;
@@ -54,8 +65,8 @@ function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
 }
 
 export class SemanticQueryEngine {
-	private readonly symbolCache = new Map<string, { snapshot: string; result: ResolutionResult<IndexedSymbol> }>();
-	private readonly completionCache = new Map<string, { snapshot: string; result: ResolutionResult<readonly SemanticCompletionItem[]> }>();
+	private readonly symbolCache = new Map<string, CacheEntry<ResolutionResult<IndexedSymbol>>>();
+	private readonly completionCache = new Map<string, CacheEntry<ResolutionResult<readonly SemanticCompletionItem[]>>>();
 
 	constructor(
 		private readonly files: FileIndex,
@@ -66,11 +77,10 @@ export class SemanticQueryEngine {
 
 	getSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
 		const key = `${uri}:${position.offset}`;
-		const snapshot = this.snapshot(uri);
 		const cached = this.symbolCache.get(key);
-		if (cached?.snapshot === snapshot) return cached.result;
+		if (cached && this.dependenciesValid(cached.dependencies)) return cached.result;
 		const result = this.resolveSymbol(uri, position);
-		this.symbolCache.set(key, { snapshot, result });
+		this.symbolCache.set(key, { dependencies: this.captureSymbolDependencies(uri, position), result });
 		return result;
 	}
 
@@ -98,11 +108,10 @@ export class SemanticQueryEngine {
 
 	getCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
 		const key = `${uri}:${position.offset}`;
-		const snapshot = this.snapshot(uri);
 		const cached = this.completionCache.get(key);
-		if (cached?.snapshot === snapshot) return cached.result;
+		if (cached && this.dependenciesValid(cached.dependencies)) return cached.result;
 		const result = this.resolveCompletions(uri, position);
-		this.completionCache.set(key, { snapshot, result });
+		this.completionCache.set(key, { dependencies: this.captureCompletionDependencies(uri, position), result });
 		return result;
 	}
 
@@ -130,19 +139,68 @@ export class SemanticQueryEngine {
 	invalidate(uris: Iterable<string>): void {
 		const affected = new Set(uris);
 		if (!affected.size) return;
-		for (const key of this.symbolCache.keys()) {
-			const separator = key.lastIndexOf(":");
-			if (separator >= 0 && affected.has(key.slice(0, separator))) this.symbolCache.delete(key);
+		for (const [key, entry] of this.symbolCache) {
+			if ([...entry.dependencies.files.keys()].some((uri) => affected.has(uri))) this.symbolCache.delete(key);
 		}
-		for (const key of this.completionCache.keys()) {
-			const separator = key.lastIndexOf(":");
-			if (separator >= 0 && affected.has(key.slice(0, separator))) this.completionCache.delete(key);
+		for (const [key, entry] of this.completionCache) {
+			if ([...entry.dependencies.files.keys()].some((uri) => affected.has(uri))) this.completionCache.delete(key);
 		}
 	}
 
 	clear(): void {
 		this.symbolCache.clear();
 		this.completionCache.clear();
+	}
+
+	private captureSymbolDependencies(uri: string, position: SemanticPosition): QueryDependencySnapshot {
+		const files = new Map<string, string>();
+		this.captureFile(files, uri);
+		const file = this.files.get(uri);
+		const word = file ? wordAt(file.source, position.offset) : undefined;
+		const symbolQueries = new Map<string, string>();
+		if (word) symbolQueries.set(word.name, this.symbols.signature(word.name));
+		const memberReceiver = this.memberReceiver(file, word);
+		if (memberReceiver) {
+			symbolQueries.set(memberReceiver.name, this.symbols.signature(memberReceiver.name));
+			const receiver = this.types.resolveReceiver(uri, word!.start, memberReceiver.name);
+			if (receiver?.uri) this.captureFile(files, receiver.uri);
+		}
+		return { files, symbolQueries, workspaceQueries: new Map() };
+	}
+
+	private captureCompletionDependencies(uri: string, position: SemanticPosition): QueryDependencySnapshot {
+		const files = new Map<string, string>();
+		this.captureFile(files, uri);
+		const file = this.files.get(uri);
+		const word = file ? wordAt(file.source, position.offset) : undefined;
+		const workspaceQueries = new Map<string, string>();
+		const memberReceiver = this.memberReceiver(file, word);
+		if (memberReceiver) {
+			const receiver = this.types.resolveReceiver(uri, word!.start, memberReceiver.name);
+			if (receiver?.uri) this.captureFile(files, receiver.uri);
+			return { files, symbolQueries: new Map([[memberReceiver.name, this.symbols.signature(memberReceiver.name)]]), workspaceQueries };
+		}
+		const prefix = word?.name ?? "";
+		workspaceQueries.set(prefix, this.symbols.workspaceSignature(prefix));
+		return { files, symbolQueries: new Map(), workspaceQueries };
+	}
+
+	private memberReceiver(file: ReturnType<FileIndex["get"]>, word: { name: string; start: number; end: number } | undefined): { name: string } | undefined {
+		if (!file || !word) return undefined;
+		const prefix = file.source.slice(0, word.start);
+		const match = prefix.match(/([A-Za-z_]\w*)\.$/);
+		return match ? { name: match[1] } : undefined;
+	}
+
+	private captureFile(target: Map<string, string>, uri: string): void {
+		target.set(uri, this.snapshot(uri));
+	}
+
+	private dependenciesValid(dependencies: QueryDependencySnapshot): boolean {
+		for (const [uri, snapshot] of dependencies.files) if (this.snapshot(uri) !== snapshot) return false;
+		for (const [name, signature] of dependencies.symbolQueries) if (this.symbols.signature(name) !== signature) return false;
+		for (const [query, signature] of dependencies.workspaceQueries) if (this.symbols.workspaceSignature(query) !== signature) return false;
+		return true;
 	}
 
 	private snapshot(uri: string): string {
