@@ -38,6 +38,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 	private reconnectionAttempts = 0;
 	private reconnectTimer?: ReturnType<typeof setInterval>;
 	private lifecycleGeneration = 0;
+	private clientGeneration = 0;
 	private disposed = false;
 
 	private target: TargetLSP = TargetLSP.EDITOR;
@@ -75,6 +76,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 	dispose(): void {
 		this.disposed = true;
 		this.lifecycleGeneration++;
+		this.clientGeneration++;
 		if (this.reconnectTimer) clearInterval(this.reconnectTimer);
 		this.reconnectTimer = undefined;
 		this.stop_language_server();
@@ -89,9 +91,15 @@ export class ClientConnectionManager implements vscode.Disposable {
 		this.client?.io?.removeAllListeners();
 		this.client?.events?.removeAllListeners();
 		void this.client?.stop();
-		this.client = new GDScriptLanguageClient();
-		this.client.port = port;
-		this.client.events.on("status", this.on_client_status_changed.bind(this));
+
+		const clientGeneration = ++this.clientGeneration;
+		const client = new GDScriptLanguageClient();
+		client.port = port;
+		client.events.on("status", (status) => {
+			if (this.disposed || clientGeneration !== this.clientGeneration) return;
+			this.on_client_status_changed(status);
+		});
+		this.client = client;
 	}
 
 	private async start_headless_and_connect(): Promise<void> {

@@ -17,7 +17,8 @@ The local semantic path now contains:
 - query-result caching with source/API and external query-dependency snapshots;
 - update coalescing and stale filesystem-update protection;
 - Godot LSP as the fallback/engine-semantic boundary;
-- runtime profiling for parser, indexing, scheduled updates, semantic queries, and LSP requests.
+- runtime profiling for parser, indexing, scheduled updates, semantic queries, and LSP requests;
+- a real-project semantic benchmark runner and versioned Godot 3/4 compatibility fixtures.
 
 Target flow:
 
@@ -49,17 +50,17 @@ The objective is not to replace Godot LSP for ideological reasons. It is to make
 
 | Phase | Status | Notes |
 | --- | --- | --- |
-| A — LSP audit & observability | **Mostly complete** | Routing audit and runtime instrumentation exist; real project measurements remain. |
+| A — LSP audit & observability | **Implemented foundation** | Provider/LSP profiling exists; empirical fallback measurements remain. |
 | B — Semantic Query Engine | **Implemented** | Core query boundary, local resolution, and query-local caching are in place. |
-| C — Confidence-aware resolution | **Implemented foundation** | Exact/inferred/partial/unknown exist with centralized definition/hover routing; semantic coverage continues to expand. |
+| C — Confidence-aware resolution | **Implemented foundation** | Exact/inferred/partial/unknown exist with centralized routing; semantic coverage continues to expand. |
 | D — Provider migration | **Mostly implemented** | Definition, hover, completion, references, rename, signature help, document symbols, and workspace symbols use local paths; fallback edge cases remain. |
 | E — Incremental semantic DB | **Substantially implemented** | Stable snapshots, API fingerprints, semantic indexes, and targeted invalidation are present. |
 | F — Dependency-aware invalidation | **Implemented foundation** | Semantic classification, transitive invalidation, and unresolved dependency refresh are present. |
-| G — Completion & interactive latency | **Implemented foundation** | Local completion, dependency-aware caching, cancellation checks, profiling, and stale-result protection exist; real rapid-typing budgets remain to be measured. |
-| H — LSP transport hardening | **Substantially implemented** | Lifecycle generation guards, cancellation boundaries, stale-response rejection, and request instrumentation exist; failure-path validation remains. |
-| I — Large-project scalability | **Benchmark infrastructure implemented** | Synthetic 100/500/1K/5K workloads exist; real project measurements remain required. |
+| G — Completion & interactive latency | **Implemented foundation** | Local completion, dependency-aware caching, cancellation checks, profiling, stale-result protection, and a rapid-typing benchmark exist; real budgets remain to be measured. |
+| H — LSP transport hardening | **Implemented foundation** | Lifecycle generation guards, cancellation boundaries, stale-response rejection, request instrumentation, and stale-client event rejection exist; failure-path validation remains. |
+| I — Large-project scalability | **Benchmark infrastructure implemented** | Synthetic and real-project benchmark runners exist; representative real-project measurements remain required. |
 | J — Worker-thread evaluation | **Conditional / deferred** | Implement only if profiling proves parser/index work is CPU-bound. |
-| K — Godot compatibility matrix | **Partial** | CI exercises Godot 4.5.1 and 4.7; explicit Godot 3.x semantic coverage still needs to be formalized where support is required. |
+| K — Godot compatibility matrix | **Fixture foundation implemented** | CI exercises Godot 4.5.1 and 4.7; representative Godot 3/4 semantic fixtures are now formalized. Expand from observed compatibility failures. |
 | L — Release quality | **Ongoing** | CI, packaging, version validation, and release workflow continue to evolve. |
 
 ## 3. Local type inference coverage
@@ -128,7 +129,7 @@ The important property is not maximum local coverage. It is avoiding confidently
 
 ## 6. Performance and scalability
 
-The repository now contains both real-project and synthetic semantic benchmarks.
+The repository now contains both synthetic and real-project semantic benchmarks.
 
 Required workloads:
 
@@ -157,9 +158,9 @@ Measure at least:
 - extension-host CPU and memory;
 - Godot LSP requests per editor action.
 
-Current synthetic scale benchmarks measure cold indexing, incremental edits, and warm semantic type/definition/hover/completion queries. Real project measurements are the next evidence gate.
+`tools/semantic_project_benchmark.ts` now measures cold indexing, incremental edits, rapid-typing updates, and warm local semantic type/definition/hover/completion queries directly against a real Godot project.
 
-Only after those measurements should persistent disk caching or worker threads be considered.
+The remaining evidence gate is empirical: run it against representative real projects and compare p95/p99 against the budgets below. Only after those measurements should persistent disk caching or worker threads be considered.
 
 ## 7. LSP hardening
 
@@ -171,6 +172,7 @@ Required properties:
 - explicit initialization state;
 - request cancellation where supported;
 - stale-response rejection;
+- stale-client event rejection after reconnect/replacement;
 - bounded failure behavior;
 - clear distinction between transport failure and semantic unknown;
 - instrumentation for every fallback request.
@@ -181,20 +183,19 @@ LSP failures must not be hidden by suppressing errors. Routing and lifecycle sho
 
 CI currently exercises Godot 4.5.1 and 4.7. The semantic analyzer should remain syntax/model compatible with the Godot generations the extension claims to support.
 
-The next compatibility step is a small versioned fixture suite covering representative Godot 3.x and 4.x syntax and semantic cases, without coupling the local analyzer to a single engine generation.
+Representative versioned fixtures now cover Godot 3-style `export`, `onready`, `yield`, inferred declarations, and Godot 4-style annotations, `@export`, `@onready`, typed returns, `await`, and inferred declarations. The fixture suite is intentionally small and should grow from real compatibility failures.
 
 ## 9. Next development gate
 
-The next large engineering batch should combine the evidence and compatibility work rather than adding speculative infrastructure:
+The architecture-heavy portion of the roadmap is now complete enough to switch to evidence-driven optimization. The next batch is validation and targeted correction:
 
-1. run the benchmark suite against real Godot projects;
-2. expose provider-boundary and fallback-frequency measurements;
-3. add rapid-typing interactive benchmarks;
-4. formalize Godot 3.x/4.x semantic fixtures where support is required;
-5. improve expression/range parsing only where real projects demonstrate missing local coverage;
-6. harden LSP failure and cancellation behavior from measured failure cases.
-
-Persistent disk semantic caches and worker threads remain conditional on those measurements.
+1. run `tools/semantic_project_benchmark.ts` against representative real Godot projects;
+2. collect p50/p95/p99 latency, extension-host CPU/memory, and LSP fallback frequency during real editing;
+3. add provider-level routing counters if profiler data cannot answer a specific question;
+4. add a fixture whenever a real Godot 3.x/4.x project exposes a syntax or semantic regression;
+5. improve expression/range parsing only for measured local-coverage gaps;
+6. harden LSP failure/cancellation behavior from measured failure cases;
+7. re-evaluate persistent disk caching and worker threads only if the measurements justify them.
 
 ## 10. Explicitly out of scope for now
 
