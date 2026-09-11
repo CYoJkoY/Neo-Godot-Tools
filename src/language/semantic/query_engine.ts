@@ -75,6 +75,20 @@ export class SemanticQueryEngine {
 		return this.getSymbol(uri, position);
 	}
 
+	getReferences(uri: string, position: SemanticPosition, includeDeclaration: boolean): ResolutionResult<ReturnType<BindingIndex["findReferences"]>> {
+		const file = this.files.get(uri);
+		if (!file) return { confidence: "unknown" };
+		const word = wordAt(file.source, position.offset);
+		if (!word) return { confidence: "unknown" };
+		const binding = this.bindings.getBinding(uri, word.start, word.name);
+		if (!binding) return { confidence: "unknown" };
+		const references = this.bindings.findReferences(binding.id).filter((reference) => {
+			if (includeDeclaration) return true;
+			return reference.uri !== binding.uri || reference.range.start.offset !== binding.declarationRange.start.offset;
+		});
+		return { value: references, confidence: "exact" };
+	}
+
 	getType(uri: string, position: SemanticPosition, expression?: string): ResolutionResult<ResolvedType> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };

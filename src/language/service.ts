@@ -92,13 +92,9 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	async getReferences(document: vscode.TextDocument, position: vscode.Position, includeDeclaration: boolean, token: vscode.CancellationToken): Promise<vscode.Location[] | undefined> {
-		const range = wordRange(document, position);
-		if (!range) return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
-		const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
-		if (!binding) return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
-		const references = this.bindings.findReferences(binding.id);
-		if (!references.length) return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
-		return references.filter((reference) => includeDeclaration || reference.range.start.offset !== binding.declarationRange.start.offset || reference.uri !== binding.uri).map((reference) => this.toReferenceLocation(reference));
+		const result = this.semantic.getReferences(document.uri.toString(), { offset: document.offsetAt(position) }, includeDeclaration);
+		if (result.value && result.confidence === "exact") return result.value.map((reference) => this.toReferenceLocation(reference));
+		return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
 	}
 
 	async getRenameEdits(document: vscode.TextDocument, position: vscode.Position, newName: string, token: vscode.CancellationToken): Promise<vscode.WorkspaceEdit | undefined> {
@@ -235,7 +231,7 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
+	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
