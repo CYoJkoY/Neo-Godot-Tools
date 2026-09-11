@@ -13,9 +13,11 @@ export class GDCompletionItemProvider implements vscode.CompletionItemProvider {
 	}
 
 	async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): Promise<vscode.CompletionList | vscode.CompletionItem[] | undefined> {
+		if (token.isCancellationRequested) return undefined;
 		if (document.languageId !== "gdscript") return this.fallback.provide(document, position, context, token);
-		const local = this.languageService.getCompletions(document, position);
+		const local = this.languageService.getCompletions(document, position, token);
 		if (local) return local;
+		if (token.isCancellationRequested) return undefined;
 		return this.fallback.provide(document, position, context, token);
 	}
 }

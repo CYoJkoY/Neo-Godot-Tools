@@ -133,6 +133,7 @@ export class SemanticQueryEngine {
 	getMembers(type: ResolvedType): ResolutionResult<readonly IndexedSymbol[]> {
 		if (type.builtin || !type.uri) return { confidence: "unknown" };
 		const members = this.types.getMembers(type);
+		if (!members.length) return { confidence: "unknown" };
 		return { value: members, confidence: "exact" };
 	}
 
@@ -244,8 +245,9 @@ export class SemanticQueryEngine {
 		const memberMatch = prefix.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.$/);
 		if (memberMatch) {
 			const receiver = this.types.resolveReceiver(uri, wordStart, memberMatch[1]);
-			if (!receiver) return { confidence: "unknown" };
+			if (!receiver || receiver.builtin) return { confidence: "unknown" };
 			const members = this.types.getMembers(receiver);
+			if (!members.length) return { confidence: "unknown" };
 			const memberPrefix = word?.name ?? "";
 			return {
 				value: members.filter((member) => member.name.startsWith(memberPrefix)).map(completionFromSymbol),
