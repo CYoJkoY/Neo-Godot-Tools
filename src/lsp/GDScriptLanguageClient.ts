@@ -18,14 +18,6 @@ import { languageProfiler } from "../performance/profiler";
 import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
-const STALE_SENSITIVE_METHODS = new Set([
-	"textDocument/completion",
-	"textDocument/hover",
-	"textDocument/definition",
-	"textDocument/references",
-	"textDocument/rename",
-	"textDocument/signatureHelp",
-]);
 
 enum ClientStatus {
 	PENDING = 0,
@@ -106,7 +98,6 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	public lastPortTried = -1;
 	public sentMessages = new Map();
 	private readonly requestStarts = new Map<string | number, number>();
-	private readonly latestRequestByMethod = new Map<string, string | number>();
 	private rejected = false;
 
 	events = new EventEmitter();
@@ -179,10 +170,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		if (message.method === "workspace/didChangeWatchedFiles" || message.method === "workspace/symbol") return false;
 
 		this.sentMessages.set(message.id, message);
-		if (message.id !== null) {
-			this.requestStarts.set(message.id, performance.now());
-			if (STALE_SENSITIVE_METHODS.has(message.method)) this.latestRequestByMethod.set(message.method, message.id);
-		}
+		if (message.id !== null) this.requestStarts.set(message.id, performance.now());
 		return message;
 	}
 
@@ -194,14 +182,6 @@ export default class GDScriptLanguageClient extends LanguageClient {
 				languageProfiler.record(`lsp.request.${sentMessage.method}`, performance.now() - startedAt);
 				this.requestStarts.delete(message.id);
 				this.sentMessages.delete(message.id);
-			}
-			if (sentMessage && STALE_SENSITIVE_METHODS.has(sentMessage.method)) {
-				const latest = this.latestRequestByMethod.get(sentMessage.method);
-				if (latest !== undefined && latest !== message.id) {
-					log.debug(`discarding stale LSP response for ${sentMessage.method} (request ${String(message.id)}; latest ${String(latest)})`);
-					return false;
-				}
-				if (latest === message.id) this.latestRequestByMethod.delete(sentMessage.method);
 			}
 		}
 		if (sentMessage?.method === "textDocument/hover") {
@@ -277,7 +257,6 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	}
 
 	private on_disconnected() {
-		this.latestRequestByMethod.clear();
 		this.requestStarts.clear();
 		this.sentMessages.clear();
 		if (this.rejected) {
