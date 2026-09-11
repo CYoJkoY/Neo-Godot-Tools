@@ -1,6 +1,6 @@
 import { GDScriptDeclaration, GDScriptFunction, GDScriptToken, SourceRange, lexGDScript } from "../analyzer/index.js";
-import { FileIndex, IndexedFile } from "./file_index";
-import { IndexedSymbol } from "./symbol";
+import { FileIndex } from "./file_index";
+import { IndexedFile, IndexedSymbol } from "./symbol";
 
 export type BindingKind = "parameter" | "local" | "member" | "function" | "class" | "constant" | "class_name" | "signal" | "enum";
 
@@ -208,7 +208,7 @@ export class BindingIndex {
 		const names = new Set<string>();
 		let scope: Scope | undefined = findInnermostScope(root, offset);
 		while (scope) {
-			for (const [name, entries] of scope.bindings) {
+			for (const [name] of scope.bindings) {
 				if (names.has(name)) continue;
 				const binding = findBinding(scope, name, offset);
 				if (!binding) continue;
