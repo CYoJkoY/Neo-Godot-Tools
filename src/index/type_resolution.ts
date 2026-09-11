@@ -41,6 +41,9 @@ function findScriptClassName(file: ReturnType<FileIndex["get"]>): string | undef
 }
 
 export class TypeResolutionIndex {
+	private readonly nameCache = new Map<string, { signature: string; value: ResolvedType | null }>();
+	private readonly memberCache = new Map<string, { signature: string; members: IndexedSymbol[] }>();
+
 	constructor(
 		private readonly files: FileIndex,
 		private readonly symbols: SymbolIndex,
@@ -50,8 +53,16 @@ export class TypeResolutionIndex {
 	resolveName(name: string): ResolvedType | undefined {
 		if (BUILTIN_TYPES.has(name)) return { name, builtin: true };
 		const matches = this.symbols.find(name).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class");
-		if (matches.length !== 1) return undefined;
-		return { name, uri: matches[0].uri, symbol: matches[0], builtin: false };
+		const signature = matches.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`).join("|");
+		const cached = this.nameCache.get(name);
+		if (cached?.signature === signature) return cached.value ?? undefined;
+		if (matches.length !== 1) {
+			this.nameCache.set(name, { signature, value: null });
+			return undefined;
+		}
+		const result = { name, uri: matches[0].uri, symbol: matches[0], builtin: false } satisfies ResolvedType;
+		this.nameCache.set(name, { signature, value: result });
+		return result;
 	}
 
 	resolveBinding(binding: Binding): ResolvedType | undefined {
@@ -62,24 +73,25 @@ export class TypeResolutionIndex {
 
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
 		if (name === "self") return { name: "self", uri, builtin: false };
-
 		const preload = this.resolvePreloadExpression(name);
 		if (preload) return preload;
-
 		const binding = this.bindings.getBinding(uri, offset, name);
 		const bindingType = binding ? this.resolveBinding(binding) : undefined;
 		if (bindingType) return bindingType;
-
 		const expressionType = this.resolveInitializerType(uri, name);
 		if (expressionType) return expressionType;
-
 		const declarationType = findDeclarationType(this.files.get(uri), name);
 		return declarationType ? this.resolveName(declarationType) : undefined;
 	}
 
 	getMembers(type: ResolvedType): IndexedSymbol[] {
 		if (!type.uri) return [];
-		return this.collectMembers(type.uri, new Set<string>());
+		const signature = this.memberSignature(type.uri, new Set<string>());
+		const cached = this.memberCache.get(type.uri);
+		if (cached?.signature === signature) return cached.members;
+		const members = this.collectMembers(type.uri, new Set<string>());
+		this.memberCache.set(type.uri, { signature, members });
+		return members;
 	}
 
 	getMember(type: ResolvedType, name: string): IndexedSymbol | undefined {
@@ -87,16 +99,35 @@ export class TypeResolutionIndex {
 		return members.length === 1 ? members[0] : undefined;
 	}
 
+	invalidate(uris: Iterable<string>): void {
+		const affected = new Set(uris);
+		for (const [uri] of this.memberCache) if (affected.has(uri)) this.memberCache.delete(uri);
+		for (const [name, cached] of this.nameCache) if (cached.value?.uri && affected.has(cached.value.uri)) this.nameCache.delete(name);
+		if (affected.size) for (const [name, cached] of this.nameCache) if (cached.value === null) this.nameCache.delete(name);
+	}
+
+	clear(): void {
+		this.nameCache.clear();
+		this.memberCache.clear();
+	}
+
+	private memberSignature(uri: string, visited: Set<string>): string {
+		if (visited.has(uri)) return `cycle:${uri}`;
+		visited.add(uri);
+		const file = this.files.get(uri);
+		if (!file) return `missing:${uri}`;
+		const base = this.resolveExtends(file.ast.declarations);
+		return `${uri}@${file.version}[${base?.uri ? this.memberSignature(base.uri, visited) : ""}]`;
+	}
+
 	private collectMembers(uri: string, visited: Set<string>): IndexedSymbol[] {
 		if (visited.has(uri)) return [];
 		visited.add(uri);
 		const file = this.files.get(uri);
 		if (!file) return [];
-
 		const own = file.symbols.filter((symbol) => !symbol.containerName);
-		const inherited = this.resolveExtends(file.ast.declarations)?.uri
-			? this.collectMembers(this.resolveExtends(file.ast.declarations)!.uri!, visited)
-			: [];
+		const base = this.resolveExtends(file.ast.declarations);
+		const inherited = base?.uri ? this.collectMembers(base.uri, visited) : [];
 		const result = [...own];
 		for (const symbol of inherited) if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
 		return result;
@@ -139,7 +170,7 @@ export class TypeResolutionIndex {
 		const expression = match[1].trim();
 		const preload = this.resolvePreloadExpression(expression);
 		if (preload) return preload;
-		const call = expression.match(/^([A-Za-z_]\\w*)\\s*\\([^)]*\\)$/);
+		const call = expression.match(/^([A-Za-z_]\w*)\s*\([^)]*\)$/);
 		if (!call) return undefined;
 		const functions = this.symbols.find(call[1]).filter((symbol) => symbol.kind === "function" && symbol.returnType);
 		if (functions.length !== 1) return undefined;

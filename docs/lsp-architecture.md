@@ -19,67 +19,79 @@ Local Index  Type Resolution  Dependency Graph
       Godot LSP fallback
 ```
 
-## Phase 8 — Cross-file semantic resolution
+## Phase 9 — Semantic cache and dependency-aware invalidation
 
-Phase 8 turns the Phase 7 type/dependency foundation into a usable cross-file semantic path without attempting to become a complete GDScript type checker.
+Phase 9 adds a cache layer to the local semantic model without introducing persistent state or background workers prematurely. The goal is to make repeated Definition/Hover/Completion requests cheap while keeping results correct after incremental edits.
 
-### Script type inference
+### Version-aware semantic cache
 
-Local types can now be recovered from several safe forms:
+`TypeResolutionIndex` now caches two expensive classes of results:
 
-- explicit annotations such as `var player: Player`;
-- `preload("res://player.gd").new()` initializers;
-- explicitly typed function return values such as `func make_player() -> Player` followed by `var player = make_player()`;
-- `self` for the current script.
+- script-name resolution;
+- inheritance-aware member collections.
 
-The resolver maps a local script path to its unique `class_name` when available. Ambiguous paths or classes remain unresolved.
+Name-cache entries are validated against the current symbol declaration signature. Member-cache entries carry a recursive file-version signature through the local `extends` chain. A change to a base script therefore makes cached members of derived scripts stale automatically.
 
-### Inheritance-aware members
+This avoids rebuilding inherited member lists on every editor request while preserving correctness across incremental updates.
 
-A locally resolved script now exposes its own members plus members inherited from a locally resolvable `extends` target. Child declarations override inherited names. Cyclic inheritance is guarded by a visited set.
+### Dependency-aware invalidation
 
-This makes patterns such as the following stay entirely local:
+`DependencyGraph.getTransitiveDependents()` identifies all local scripts affected by a changed dependency. `LanguageService` captures that set before updating the dependency graph and invalidates semantic entries for the changed file and its dependents.
 
-```gdscript
-class_name Base
-var base_health: int
+Deletion follows the same boundary so removed scripts cannot leave stale semantic results behind.
+
+```text
+change base.gd
+      │
+      ▼
+DependencyGraph
+      │
+      ├── player.gd
+      ├── enemy.gd
+      └── game.gd
+      │
+      ▼
+TypeResolutionIndex.invalidate()
+      │
+      ▼
+recompute only when queried
 ```
 
-```gdscript
-class_name Player
-extends Base
-var health: int
+The cache is intentionally demand-driven. We do not eagerly reparse every dependent file merely because an upstream symbol changed.
+
+### Incremental update boundary
+
+The update pipeline remains:
+
+```text
+TextDocument / File Watcher
+          │
+          ▼
+       FileIndex
+          │
+    ┌─────┼──────────────┐
+    ▼     ▼              ▼
+ Symbols Bindings    References
+          │
+          ▼
+   DependencyGraph
+          │
+          ▼
+ TypeResolutionIndex
 ```
 
-A `Player` receiver can therefore resolve both `health` and `base_health` without asking Godot LSP.
+A changed file is parsed and indexed once. Semantic caches are then invalidated at the dependency boundary. Subsequent requests recompute only the semantic result that is actually needed.
 
-### Cross-file receiver examples
+### Why workers are not added yet
 
-```gdscript
-var player: Player
-player.health
-```
+The current architecture still performs parser/index updates synchronously. Phase 9 therefore does not add `worker_threads` merely for theoretical performance. The next decision should be based on profiling real projects:
 
-```gdscript
-var player = preload("res://player.gd").new()
-player.take_damage(10)
-```
+1. measure initial workspace indexing;
+2. measure single-file edit latency;
+3. measure repeated hover/completion latency with and without cache hits;
+4. measure CPU time spent in parser, bindings, references, and semantic resolution.
 
-```gdscript
-func make_player() -> Player:
-	return Player.new()
-
-var player = make_player()
-player.health
-```
-
-The resolver deliberately does not infer arbitrary expressions, control-flow-dependent types, or native engine APIs. Those cases continue to use Godot LSP.
-
-### Dependency invalidation
-
-`DependencyGraph` now exposes transitive reverse dependents. A change to a base script can identify the local scripts whose semantic caches may become stale without rebuilding the entire workspace.
-
-Phase 8 still performs synchronous per-file index updates. The dependency graph is an invalidation boundary, not yet a background scheduler or persistent cache.
+Only if parsing/indexing is demonstrably CPU-bound should the scheduler move work off the extension host thread.
 
 ## Provider behavior
 
@@ -90,7 +102,9 @@ local binding / expression
           ↓
      local script type
           ↓
-   inherited local members
+   cached semantic members
+          ↓
+ inherited local members
           ↓
       local symbol
           ↓
@@ -101,6 +115,6 @@ Native engine classes, dynamic values, ambiguous class names, unsupported expres
 
 ## Deliberate limits
 
-Phase 8 does not implement a complete GDScript type lattice, control-flow analysis, generic types, union types, lambda capture analysis, or engine API indexing. It also does not guess the type of an unannotated arbitrary expression.
+Phase 9 does not add persistent disk caches, a full GDScript type lattice, control-flow analysis, generic/union types, or engine API indexing. Cache entries are derived entirely from the in-memory indexes and are discarded with the language service.
 
-The next optimization target should be semantic cache invalidation and parser/index scheduling, followed by profiling before introducing worker threads or considering a Rust implementation.
+The next stage should focus on **semantic scheduling and profiling**, especially coalescing bursts of text changes and moving only proven CPU-heavy indexing work off the VS Code extension host thread. Rust should remain a profiling-driven option rather than an architectural prerequisite.

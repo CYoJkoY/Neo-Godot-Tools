@@ -71,6 +71,7 @@ export class LanguageService implements vscode.Disposable {
 		this.references.clear();
 		this.bindings.clear();
 		this.dependencies.clear();
+		this.types.clear();
 	}
 
 	getDocumentSymbols(uri: string): readonly IndexedSymbol[] { return this.files.get(uri)?.symbols ?? []; }
@@ -257,11 +258,13 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private updateText(uri: string, source: string, version = 0): void {
+		const affected = this.dependencies.getTransitiveDependents(uri);
 		this.files.update(uri, source, version);
 		this.symbols.update(uri);
 		this.references.update(uri);
 		this.bindings.update(uri);
 		this.dependencies.update(uri);
+		this.types.invalidate([uri, ...affected]);
 	}
 
 	private async updateUri(uri: vscode.Uri): Promise<void> {
@@ -280,7 +283,9 @@ export class LanguageService implements vscode.Disposable {
 
 	private remove(uri: string | vscode.Uri): void {
 		const key = typeof uri === "string" ? uri : uri.toString();
+		const affected = this.dependencies.getTransitiveDependents(key);
 		this.dependencies.remove(key);
+		this.types.invalidate([key, ...affected]);
 		this.bindings.remove(key);
 		this.references.remove(key);
 		this.symbols.remove(key);

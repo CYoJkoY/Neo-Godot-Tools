@@ -12,12 +12,12 @@ const playerUri = "file:///workspace/player.gd";
 const mainUri = "file:///workspace/main.gd";
 
 const baseSource = `class_name Base\nvar base_health: int\nfunc heal() -> void:\n\tbase_health += 1\n`;
-files.update(baseUri, baseSource);
+files.update(baseUri, baseSource, 1);
 symbols.update(baseUri);
 bindings.update(baseUri);
 
 const playerSource = `class_name Player\nextends Base\nvar health: int\nfunc take_damage(amount: int) -> void:\n\thealth -= amount\n`;
-files.update(playerUri, playerSource);
+files.update(playerUri, playerSource, 1);
 symbols.update(playerUri);
 bindings.update(playerUri);
 dependencies.update(playerUri);
@@ -29,7 +29,7 @@ assert.equal(types.getMember(playerType!, "heal")?.name, "heal");
 assert.equal(dependencies.getDependencies(playerUri).length, 1);
 
 const mainSource = `extends Node\nvar player: Player\nvar spawned = preload("res://player.gd").new()\nfunc make_player() -> Player:\n\treturn Player.new()\nvar returned = make_player()\nfunc test():\n\tplayer.health = 10\n\tspawned.take_damage(1)\n\treturned.heal()\n`;
-files.update(mainUri, mainSource);
+files.update(mainUri, mainSource, 1);
 symbols.update(mainUri);
 bindings.update(mainUri);
 dependencies.update(mainUri);
@@ -47,3 +47,16 @@ assert.equal(types.getMember(types.resolveReceiver(mainUri, returnedOffset, "ret
 
 assert.equal(dependencies.getDependencies(mainUri).length, 1);
 assert.deepEqual(dependencies.getTransitiveDependents(baseUri), [playerUri, mainUri]);
+
+const cachedPlayerMembers = types.getMembers(playerType!);
+assert.equal(cachedPlayerMembers.some((symbol) => symbol.name === "base_health"), true);
+const changedBaseSource = `class_name Base\nvar shield: int\nfunc heal() -> void:\n\tshield += 1\n`;
+files.update(baseUri, changedBaseSource, 2);
+symbols.update(baseUri);
+bindings.update(baseUri);
+types.invalidate([baseUri, ...dependencies.getTransitiveDependents(baseUri)]);
+const refreshedPlayerType = types.resolveName("Player");
+const refreshedPlayerMembers = types.getMembers(refreshedPlayerType!);
+assert.equal(refreshedPlayerMembers.some((symbol) => symbol.name === "base_health"), false);
+assert.equal(refreshedPlayerMembers.some((symbol) => symbol.name === "shield"), true);
+assert.notEqual(refreshedPlayerMembers, cachedPlayerMembers);
