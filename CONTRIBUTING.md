@@ -1,102 +1,140 @@
 # Contributing
 
-### Building from source
-
-#### Requirements
+## Development requirements
 
 - [npm](https://www.npmjs.com/get-npm)
-- [fgvm](https://fgvm.dev) — Godot version manager (for engine-in-the-loop tests)
-- A Godot installation (via fgvm or manual) for running the extension against
+- [fgvm](https://fgvm.dev) — Godot version manager for engine-in-the-loop tests
+- A Godot installation, managed by fgvm or installed manually
 
-#### Process
+## Development workflow
 
-1. Open a command prompt/terminal and browse to the location of this repository on your local filesystem.
-2. Download dependencies by using the command `npm install`
-3. When done, package a VSIX file by using the command `npm run package`.
-4. Install it by opening Visual Studio Code, opening the Extensions tab, clicking on the More actions (**...**) button in the top right, and choose **Install from VSIX...** and find the compiled VSIX file.
+1. Start from an up-to-date `master` branch.
+2. Create a short-lived branch for one logical change.
+3. Inspect the affected architecture before editing.
+4. Implement the complete change rather than committing each debugging step.
+5. Run focused tests while developing.
+6. Run the full relevant validation suite before opening the PR.
+7. Review the final diff for unrelated changes and generated files.
+8. Consolidate temporary commits into logical public commits.
+9. Open a pull request against `master`.
+10. Merge only after CI is green and the PR is coherent.
 
-When developing for the extension, you can open this project in Visual Studio Code and debug the extension by using the **Run Extension** launch configuration instead of going through steps 3 and 4. It will launch a new instance of Visual Studio Code that has the extension running. You can then open a Godot project folder and debug the extension or GDScript debugger.
+Branch names and commit messages follow [Git Workflow and Commit Convention](docs/git-workflow.md).
 
-Additionally, if you create a `workspace.code-workspace` file, you can use the **Run Extension with workspace file** launch configuration to quickly change what folder your Extension Host is running in, and quickly change the settings passed to the debug environment
+For a single coherent change, the preferred public history is one logical commit. Multiple commits are appropriate only when each commit is independently meaningful and reviewable.
 
-An example `workspace.code-workspace` file:
-```jsonc
-{
-	"folders": [
-		{
-			// "path": "."
-			"path": "P:/project1"
-			// "path": "P:/project2"
-			// "path": "P:/folder/project3"
-		}
-	],
-    "settings": {
-		"godotTools.editorPath.godot3": "godot3.dev.exe",
-		"godotTools.editorPath.godot4": "godot4.dev.exe",
-		// "godotTools.editorPath.godot4": "godot4.custom.exe"
-		// "godotTools.editorPath.godot4": "Godot_v4.1.1-stable_win64.exe",
-		"godotTools.lsp.headless": false
-	}
-}
+## Building from source
+
+Download dependencies:
+
+```bash
+npm install
 ```
 
-### Testing
+Package a VSIX:
 
-#### Unit tests (no engine required)
+```bash
+npm run package
+```
 
-Formatter snapshot tests and pure TypeScript unit tests run without a Godot installation:
+When developing the extension, open the repository in Visual Studio Code and use the `Run Extension` launch configuration. It launches a separate Extension Host with the extension loaded.
+
+If you create `workspace.code-workspace`, the `Run Extension with workspace file` launch configuration can be used to test against a selected Godot project and settings.
+
+## Testing
+
+### Unit tests
+
+Formatter snapshot tests and pure TypeScript tests run without a Godot installation:
 
 ```bash
 npm test
 ```
 
-This launches a VS Code test instance and runs all tests in `out/**/*.test.js`. The formatter tests and utility tests don't need Godot, but the debugger integration tests do.
+### Engine-in-the-loop tests
 
-#### Engine-in-the-loop tests
-
-Debugger integration tests launch a real Godot instance, set breakpoints, and inspect variables through the custom debug protocol. These require a Godot binary managed by [fgvm](https://fgvm.dev).
-
-Install fgvm (see [fgvm.dev](https://fgvm.dev) for installation instructions), then install a Godot version:
+Debugger integration tests require a Godot binary managed by fgvm:
 
 ```bash
 fgvm install 4.7
-```
-
-Run the test suite against a specific Godot version:
-
-```bash
 npm run test:engine -- 4.7
 ```
 
-Run only tests matching a name pattern:
+Run a specific test pattern:
 
 ```bash
 npm run test:engine -- 4.7 "typed dict"
 npm run test:engine -- 4.7 "built-in types"
 ```
 
-Run against Godot 3:
+For Godot 3:
 
 ```bash
 fgvm install 3.6.2
 npm run test:engine -- 3.6.2 --godot3
 ```
 
-The test runner (`tools/run_tests.ts`) resolves the Godot binary from fgvm's installation directory, writes the correct `editorPath` setting into the test project, compiles the extension, and runs the test suite.
+The test runner (`tools/run_tests.ts`) resolves the Godot binary from fgvm, writes the appropriate test settings, compiles the extension, and runs the suite.
 
-#### CI
+### CI
 
-CI runs a matrix of OS × Godot version (currently Ubuntu and Windows, against Godot 4.7 and 4.5.1). Godot installations are cached across runs using `actions/cache`. Adding a new engine version to CI is just adding a string to the `godot_version` matrix in `.github/workflows/ci.yml`.
+CI runs the relevant OS × Godot-version matrix defined in `.github/workflows/ci.yml`. Keep the matrix representative of the supported Godot versions, especially across Godot 3.x and 4.x compatibility boundaries.
 
-### Development debug server
+Do not weaken CI checks to make a failing change pass. Fix the underlying project code, tests, or configuration.
 
-When the extension is running in debug mode (`VSCODE_DEBUG_MODE=true`, which the dev launch profiles set automatically), a development HTTP server starts on port 7331. This provides runtime inspection of the extension's internal state:
+## LSP development
 
-- `GET /state` — dump of major subsystem states (LSP, debugger, scene preview, formatter)
-- `GET /debugger` — debugger subsystem state (session, controller, variables manager)
+The intended GDScript language architecture is documented in:
+
+- [LSP architecture](docs/lsp-architecture.md)
+- [Development roadmap](docs/development-roadmap.md)
+- [Language performance profiling](docs/performance-profiling.md)
+
+The current direction is local-first:
+
+```text
+VS Code Providers
+        ↓
+LanguageService
+        ↓
+Semantic Query Engine
+        ↓
+Incremental Index / Dependency Graph
+        ↓
+Analyzer / Parser
+        ↓
+Godot LSP fallback
+```
+
+The local model should answer common project-level queries. Godot LSP remains the semantic fallback for engine-native, dynamic, ambiguous, or unsupported cases.
+
+LSP changes should include tests and measurements when they affect scheduling, parsing, indexing, semantic resolution, provider routing, or fallback behavior.
+
+Do not introduce worker threads, persistent caches, or additional concurrency without profiling evidence that the change addresses the actual bottleneck.
+
+## Performance work
+
+Performance changes must be measurable. Prefer p50/p95/p99 latency, CPU time, memory usage, parser/index timings, and Godot LSP request counts over subjective claims.
+
+The repository contains a reproducible language benchmark. Use it when changing parser, analyzer, index, scheduling, or semantic-query performance.
+
+## Release development
+
+`package.json` always contains a clean SemVer version such as `2.8.0`.
+
+Stable tags use `v2.8.0`; development tags use `v2.8.0.dev1`, `v2.8.0.dev2`, and so on. The development suffix belongs to the Git tag/release metadata and must not be written into `package.json`.
+
+Release validation must reject a tag whose base version does not match `package.json` and must not mutate the source version.
+
+## Development debug server
+
+When the extension is running in debug mode (`VSCODE_DEBUG_MODE=true`), a development HTTP server starts on port 7331. It provides runtime inspection of extension state:
+
+- `GET /state` — major subsystem state
+- `GET /debugger` — debugger state
 - `GET /debugger/scene-tree` — parsed scene tree
 - `GET /debugger/inspector` — inspector state
-- `POST /eval` — eval arbitrary code in extension context (`{"code": "globals.debug.constructor.name"}`)
-- `POST /reload` — reload the VS Code window (picks up recompiled code)
+- `POST /eval` — evaluate development-only code in extension context
+- `POST /reload` — reload the VS Code window
 
-This is a development tool, not a production feature. It's gated behind the debug flag and excluded from linting. See `src/dev/debug_server.ts`.
+This server is a development-only tool, gated behind the debug flag and excluded from linting. See `src/dev/debug_server.ts`.
