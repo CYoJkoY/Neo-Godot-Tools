@@ -15,6 +15,7 @@ const playerType: ResolvedType = { name: "Player", uri, symbol: variable, builti
 function engineFor(source: string, options?: {
 	fileSymbols?: IndexedSymbol[];
 	binding?: { name: string; uri: string; declarationRange: IndexedSymbol["range"]; kind: "member" | "local" | "parameter" | "function"; type?: string; id?: string };
+	visibleBindings?: Array<{ name: string; uri: string; declarationRange: IndexedSymbol["range"]; kind: "member" | "local" | "parameter" | "function"; type?: string; id?: string }>;
 	workspace?: IndexedSymbol[];
 	resolvedType?: ResolvedType;
 	members?: IndexedSymbol[];
@@ -22,9 +23,13 @@ function engineFor(source: string, options?: {
 }): SemanticQueryEngine {
 	const file = { uri, version: 1, source, ast: {} as never, diagnostics: [], symbols: options?.fileSymbols ?? [variable] };
 	const files = { get: () => file } as unknown as FileIndex;
-	const symbols = { find: () => options?.workspace ?? [] } as unknown as SymbolIndex;
+	const symbols = {
+		find: () => options?.workspace ?? [],
+		workspaceSymbols: () => options?.workspace ?? [],
+	} as unknown as SymbolIndex;
 	const bindings = {
 		getBinding: () => options?.binding,
+		getVisibleBindings: () => options?.visibleBindings ?? [],
 		findReferences: () => options?.references ?? [],
 	} as unknown as BindingIndex;
 	const types = {
@@ -102,5 +107,27 @@ describe("SemanticQueryEngine", () => {
 		});
 		expect(engine.getReferences(uri, { offset: 2 }, true).value).toEqual([declaration, reference]);
 		expect(engine.getReferences(uri, { offset: 2 }, false).value).toEqual([reference]);
+	});
+
+	it("returns local and workspace completion candidates with local names taking precedence", () => {
+		const local = { ...variable, name: "player" };
+		const duplicate = { ...variable, name: "player", uri: "file:///project/enemy.gd" };
+		const workspace = { ...variable, name: "print_player", uri: "file:///project/util.gd" };
+		const engine = engineFor("pl", {
+			visibleBindings: [{ name: "player", uri, declarationRange: variable.range, kind: "local", type: "Player" }],
+			workspace: [duplicate, workspace],
+			fileSymbols: [local],
+		});
+		const result = engine.getCompletions(uri, { offset: 2 });
+		expect(result.confidence).toBe("exact");
+		expect(result.value?.map((item) => item.name)).toEqual(["player", "print_player"]);
+	});
+
+	it("returns member completions from a resolved receiver", () => {
+		const move: IndexedSymbol = { ...variable, name: "move", kind: "function" };
+		const engine = engineFor("player.mo", { resolvedType: playerType, members: [move] });
+		const result = engine.getCompletions(uri, { offset: 8 });
+		expect(result.confidence).toBe("exact");
+		expect(result.value?.map((item) => item.name)).toEqual(["move"]);
 	});
 });

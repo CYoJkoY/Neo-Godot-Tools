@@ -11,6 +11,15 @@ export interface SemanticPosition {
 	offset: number;
 }
 
+export interface SemanticCompletionItem {
+	name: string;
+	kind: Binding["kind"] | IndexedSymbol["kind"];
+	type?: string;
+	returnType?: string;
+	containerName?: string;
+	uri: string;
+}
+
 function wordAt(source: string, offset: number): { name: string; start: number; end: number } | undefined {
 	const clamped = Math.max(0, Math.min(offset, source.length));
 	let start = clamped;
@@ -30,6 +39,17 @@ function symbolFromBinding(binding: Binding): IndexedSymbol {
 		type: binding.type,
 		returnType: binding.returnType,
 		containerName: binding.containerName,
+	};
+}
+
+function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
+	return {
+		name: symbol.name,
+		kind: symbol.kind,
+		type: symbol.type,
+		returnType: symbol.returnType,
+		containerName: symbol.containerName,
+		uri: symbol.uri,
 	};
 }
 
@@ -87,6 +107,39 @@ export class SemanticQueryEngine {
 			return reference.uri !== binding.uri || reference.range.start.offset !== binding.declarationRange.start.offset;
 		});
 		return { value: references, confidence: "exact" };
+	}
+
+	getCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
+		const file = this.files.get(uri);
+		if (!file) return { confidence: "unknown" };
+		const source = file.source;
+		const word = wordAt(source, position.offset);
+		const wordStart = word?.start ?? position.offset;
+		const prefix = source.slice(0, wordStart);
+		const memberMatch = prefix.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.$/);
+		if (memberMatch) {
+			const receiver = this.types.resolveReceiver(uri, wordStart, memberMatch[1]);
+			if (!receiver) return { confidence: "unknown" };
+			const members = this.types.getMembers(receiver);
+			const memberPrefix = word?.name ?? "";
+			return {
+				value: members.filter((member) => member.name.startsWith(memberPrefix)).map(completionFromSymbol),
+				confidence: "exact",
+			};
+		}
+
+		const completionPrefix = word?.name ?? "";
+		const bindings = this.bindings.getVisibleBindings(uri, position.offset);
+		const localItems = bindings
+			.filter((binding) => binding.name.startsWith(completionPrefix))
+			.map((binding) => completionFromSymbol(symbolFromBinding(binding)));
+		const localNames = new Set(localItems.map((item) => item.name));
+		const workspaceItems = this.symbols.workspaceSymbols(completionPrefix)
+			.filter((symbol) => !localNames.has(symbol.name))
+			.map(completionFromSymbol);
+		const items = [...localItems, ...workspaceItems];
+		if (!items.length) return { confidence: "unknown" };
+		return { value: items, confidence: "exact" };
 	}
 
 	getType(uri: string, position: SemanticPosition, expression?: string): ResolutionResult<ResolvedType> {
