@@ -14,7 +14,7 @@ export class CompletionFallback {
 				textDocument: { uri: document.uri.toString() },
 				position: { line: position.line, character: position.character },
 				context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter },
-			}, token) as LspCompletion | null | undefined;
+			} as any, token) as LspCompletion | null | undefined;
 			if (!result) return undefined;
 			const items = Array.isArray(result) ? result : result.items ?? [];
 			return new vscode.CompletionList(items.map((item) => this.toItem(item)), !Array.isArray(result) && result.isIncomplete);
