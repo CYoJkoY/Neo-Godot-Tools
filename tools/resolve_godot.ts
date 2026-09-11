@@ -45,6 +45,14 @@ function get_platform_pattern(): { dir: string; glob: string } {
 	throw new Error(`Unsupported platform: ${platform}-${arch}`);
 }
 
+function matches_version(installation: string, version: string): boolean {
+	const normalizedVersion = version.replace(/^v/, "");
+	return (
+		installation.startsWith(`${normalizedVersion}-stable-`) ||
+		installation.startsWith(`${normalizedVersion}.`)
+	);
+}
+
 /**
  * Find a fgvm-managed Godot executable by version.
  *
@@ -60,10 +68,9 @@ export function resolve_godot_binary(version: string): string {
 		throw new Error(`fgvm installations directory not found. Checked: ${installationsDirs.join(", ")}`);
 	}
 
-	const prefix = `${version}-stable-`;
 	const candidates = fs
 		.readdirSync(installationsDir, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
+		.filter((entry) => entry.isDirectory() && matches_version(entry.name, version))
 		.map((entry) => entry.name);
 
 	if (candidates.length === 0) {
