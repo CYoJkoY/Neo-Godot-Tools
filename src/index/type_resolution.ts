@@ -1,7 +1,8 @@
 import { GDScriptDeclaration } from "../analyzer/index.js";
 import { Binding, BindingIndex } from "./bindings.js";
 import { FileIndex } from "./file_index.js";
-import { IndexedSymbol, SymbolIndex } from "./symbol.js";
+import { IndexedSymbol } from "./symbol.js";
+import { SymbolIndex } from "./symbol_index.js";
 
 export interface ResolvedType {
 	name: string;
@@ -55,7 +56,7 @@ export class TypeResolutionIndex {
 		const matches = this.symbols.find(name).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class");
 		const signature = matches.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`).join("|");
 		const cached = this.nameCache.get(name);
-		if (cached?.signature === signature) return cached.value ?? undefined;
+		if (cached && cached.signature === signature) return cached.value ?? undefined;
 		if (matches.length !== 1) {
 			this.nameCache.set(name, { signature, value: null });
 			return undefined;
@@ -88,7 +89,7 @@ export class TypeResolutionIndex {
 		if (!type.uri) return [];
 		const signature = this.memberSignature(type.uri, new Set<string>());
 		const cached = this.memberCache.get(type.uri);
-		if (cached?.signature === signature) return cached.members;
+		if (cached && cached.signature === signature) return cached.members;
 		const members = this.collectMembers(type.uri, new Set<string>());
 		this.memberCache.set(type.uri, { signature, members });
 		return members;
