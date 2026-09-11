@@ -23,7 +23,7 @@ export class SignatureHelpFallback {
 					isRetrigger: context.isRetrigger,
 					activeSignatureHelp: context.activeSignatureHelp,
 				},
-			}, token) as LspSignatureHelp | null | undefined;
+			} as any, token) as LspSignatureHelp | null | undefined;
 			if (!result?.signatures?.length) return undefined;
 			const help = new vscode.SignatureHelp();
 			help.activeSignature = result.activeSignature ?? 0;
