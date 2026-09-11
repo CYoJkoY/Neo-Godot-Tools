@@ -6,21 +6,30 @@ type LspRange = { start: { line: number; character: number }; end: { line: numbe
 type LspLocation = { uri: string; range: LspRange };
 type LspLocationLink = { targetUri: string; targetSelectionRange: LspRange };
 
+const DEFINITION_FALLBACK_TIMEOUT_MS = 300;
+
 export class DefinitionFallback {
 	async provide(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Location | vscode.Location[] | undefined> {
 		const client = globals.lsp?.client;
-		if (!client) return undefined;
+		if (!client || token.isCancellationRequested) return undefined;
 
+		const requestToken = new vscode.CancellationTokenSource();
+		const cancellation = token.onCancellationRequested(() => requestToken.cancel());
+		const timeout = setTimeout(() => requestToken.cancel(), DEFINITION_FALLBACK_TIMEOUT_MS);
 		try {
 			const result = await client.sendRequest(DefinitionRequest.type, {
 				textDocument: { uri: document.uri.toString() },
 				position: { line: position.line, character: position.character },
-			}, token);
-			if (!result) return undefined;
+			}, requestToken.token);
+			if (token.isCancellationRequested || !result) return undefined;
 			const locations = Array.isArray(result) ? result : [result];
 			return locations.map((location) => this.toLocation(location));
 		} catch {
 			return undefined;
+		} finally {
+			clearTimeout(timeout);
+			cancellation.dispose();
+			requestToken.dispose();
 		}
 	}
 
