@@ -1,6 +1,25 @@
 import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
 
+function symbolSignature(symbol: IndexedSymbol): string {
+	return JSON.stringify({
+		name: symbol.name,
+		kind: symbol.kind,
+		uri: symbol.uri,
+		start: symbol.range.start.offset,
+		end: symbol.range.end.offset,
+		containerName: symbol.containerName,
+		returnType: symbol.returnType,
+		type: symbol.type,
+		parameters: symbol.parameters,
+		static: symbol.static,
+	});
+}
+
+function collectionSignature(symbols: readonly IndexedSymbol[]): string {
+	return symbols.map(symbolSignature).sort().join("|");
+}
+
 export class SymbolIndex {
 	private readonly byName = new Map<string, IndexedSymbol[]>();
 	private readonly byUri = new Map<string, IndexedSymbol[]>();
@@ -37,6 +56,10 @@ export class SymbolIndex {
 		return this.byName.get(name) ?? [];
 	}
 
+	signature(name: string): string {
+	return collectionSignature(this.find(name));
+	}
+
 	findInFile(uri: string, name: string): IndexedSymbol | undefined {
 		return this.byUri.get(uri)?.find((symbol) => symbol.name === name);
 	}
@@ -50,6 +73,10 @@ export class SymbolIndex {
 			}
 		}
 		return result;
+	}
+
+	workspaceSignature(query = ""): string {
+		return collectionSignature(this.workspaceSymbols(query));
 	}
 
 	clear(): void {
