@@ -4,6 +4,7 @@ import { DefinitionFallback } from "../fallback/definition";
 import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
 import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
+import { SemanticQueryEngine } from "./semantic/query_engine";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
 	return document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
@@ -43,6 +44,7 @@ export class LanguageService implements vscode.Disposable {
 	readonly bindings = new BindingIndex(this.files);
 	readonly types = new TypeResolutionIndex(this.files, this.symbols, this.bindings);
 	readonly dependencies = new DependencyGraph(this.files);
+	readonly semantic = new SemanticQueryEngine(this.files, this.symbols, this.bindings, this.types);
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly updateScheduler: UpdateScheduler;
 	private scanGeneration = 0;
@@ -82,21 +84,9 @@ export class LanguageService implements vscode.Disposable {
 	getWorkspaceSymbols(query: string): IndexedSymbol[] { return this.symbols.workspaceSymbols(query); }
 
 	async getDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Definition | undefined> {
-		const member = this.memberExpression(document, position);
-		if (member) {
-			const receiver = this.types.resolveReceiver(document.uri.toString(), document.offsetAt(position), member.receiver);
-			const symbol = receiver ? this.types.getMember(receiver, member.member) : undefined;
-			if (symbol) return this.toLocation(symbol);
-		}
-		const range = wordRange(document, position);
-		if (range) {
-			const name = document.getText(range);
-			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), name);
-			if (binding) return this.toLocation({ name: binding.name, kind: "variable", uri: binding.uri, range: binding.declarationRange });
-			const fileSymbols = this.files.get(document.uri.toString())?.symbols.filter((symbol) => symbol.name === name) ?? [];
-			if (fileSymbols.length === 1) return this.toLocation(fileSymbols[0]);
-			const matches = this.symbols.find(name);
-			if (matches.length === 1) return this.toLocation(matches[0]);
+		const result = this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) });
+		if (result.value && (result.confidence === "exact" || result.confidence === "inferred")) {
+			return this.toLocation(result.value);
 		}
 		return this.definitionFallback.provide(document, position, token);
 	}
