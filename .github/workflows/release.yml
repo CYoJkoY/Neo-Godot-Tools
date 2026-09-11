@@ -43,7 +43,7 @@ jobs:
       - name: Compile
         run: npm run compile
 
-      - name: Validate release tag
+      - name: Validate release version
         id: release
         run: npx ts-node tools/release.ts "$GITHUB_REF_NAME"
 
