@@ -29,7 +29,7 @@ Owns GDScript syntax and language-model construction. It must not import `vscode
 
 ### `index/`
 
-Will own workspace state derived from parsed documents: file records, symbols, references, and dependencies. The index is incremental and receives already-parsed documents from the analyzer. It must not know about LSP transport.
+Owns workspace state derived from parsed documents: file records, symbols, references, and dependencies. The index is incremental and receives already-parsed documents from the analyzer. It must not know about LSP transport.
 
 ### `providers/`
 
@@ -71,6 +71,23 @@ Phase 1 deliberately does **not** replace existing LSP providers. It establishes
 - parser unit tests independent of VS Code and Godot.
 
 This keeps the migration reversible. Later phases can build the index on top of the AST without coupling the new subsystem to the current `GDScriptLanguageClient`.
+
+## Phase 2
+
+Phase 2 adds the first persistent-in-memory workspace model without introducing filesystem or VS Code dependencies into the index:
+
+- `FileIndex` owns parsed file records keyed by URI;
+- each update replaces only the affected file record;
+- `collectSymbols()` converts analyzer declarations into index symbols, including nested class members;
+- `SymbolIndex` maintains both per-file symbols and a workspace name index;
+- symbol updates are incremental: remove the old file contribution, then add the new one;
+- workspace queries are case-insensitive substring searches over indexed symbols;
+- file deletion removes its symbols from the workspace index;
+- index tests verify replacement, removal, duplicate symbol names, nested declarations, and workspace queries.
+
+The index intentionally does not read the workspace itself. A later workspace scanner/document manager will own filesystem and `TextDocument` integration and feed parsed results into `FileIndex`. This keeps indexing deterministic and makes the same core usable for open documents, disk files, and future worker-thread execution.
+
+Phase 2 also deliberately does **not** wire providers to the new index yet. The next stage can therefore introduce local `documentSymbol`, `workspaceSymbol`, and definition resolution behind a small facade while preserving the existing Godot LSP behavior until each operation has a confidence-aware fallback path.
 
 ## Compatibility
 
