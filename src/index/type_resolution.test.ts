@@ -30,7 +30,7 @@ assert.equal(dependencies.getDependencies(playerUri).length, 1);
 assert.equal(types.resolveName("NodePath")?.name, "NodePath");
 assert.equal(types.resolveName("NodePath")?.builtin, true);
 
-const mainSource = `extends Node\nvar player: Player\nvar spawned = preload("res://player.gd").new()\nfunc make_player():\n\tvar local_player = Player.new()\n\tlocal_player = Player.new()\n\treturn local_player\nfunc test():\n\tvar assigned\n\tassigned = Player.new()\n\tplayer.health = 10\n\tspawned.take_damage(1)\n\tvar returned = make_player()\n\treturned.heal()\n\tassigned.heal()\n`;
+const mainSource = `extends Node\nvar player: Player\nvar spawned = preload("res://player.gd").new()\nfunc make_player():\n\tvar local_player = Player.new()\n\tlocal_player = Player.new()\n\treturn local_player\nfunc test():\n\tvar assigned\n\t# fake = Dictionary.new()\n\tassigned = Player.new()\n\tvar text = "fake = Resource.new()"\n\tplayer.health = 10\n\tspawned.take_damage(1)\n\tvar returned = make_player()\n\treturned.heal()\n\tassigned.heal()\n`;
 files.update(mainUri, mainSource, 1);
 symbols.update(mainUri);
 bindings.update(mainUri);
