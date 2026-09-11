@@ -14,15 +14,19 @@ const playerType: ResolvedType = { name: "Player", uri, symbol: variable, builti
 
 function engineFor(source: string, options?: {
 	fileSymbols?: IndexedSymbol[];
-	binding?: { name: string; uri: string; declarationRange: IndexedSymbol["range"]; kind: "member" | "local" | "parameter" | "function"; type?: string };
+	binding?: { name: string; uri: string; declarationRange: IndexedSymbol["range"]; kind: "member" | "local" | "parameter" | "function"; type?: string; id?: string };
 	workspace?: IndexedSymbol[];
 	resolvedType?: ResolvedType;
 	members?: IndexedSymbol[];
+	references?: Array<{ bindingId: string; name: string; uri: string; range: IndexedSymbol["range"] }>;
 }): SemanticQueryEngine {
 	const file = { uri, version: 1, source, ast: {} as never, diagnostics: [], symbols: options?.fileSymbols ?? [variable] };
 	const files = { get: () => file } as unknown as FileIndex;
 	const symbols = { find: () => options?.workspace ?? [] } as unknown as SymbolIndex;
-	const bindings = { getBinding: () => options?.binding } as unknown as BindingIndex;
+	const bindings = {
+		getBinding: () => options?.binding,
+		findReferences: () => options?.references ?? [],
+	} as unknown as BindingIndex;
 	const types = {
 		resolveReceiver: () => options?.resolvedType,
 		resolveName: (name: string) => name === "Player" ? playerType : undefined,
@@ -81,5 +85,22 @@ describe("SemanticQueryEngine", () => {
 		const result = engine.getHover(uri, { offset: 2 });
 		expect(result.confidence).toBe("exact");
 		expect(result.value?.name).toBe("player");
+	});
+
+	it("returns exact references for a bound symbol and filters its declaration when requested", () => {
+		const declaration = { bindingId: "player-binding", name: "player", uri, range: variable.range };
+		const reference = { bindingId: "player-binding", name: "player", uri, range: { start: { offset: 20, line: 2, character: 0 }, end: { offset: 26, line: 2, character: 6 } } };
+		const engine = engineFor("player", {
+			binding: {
+				id: "player-binding",
+				name: "player",
+				uri,
+				declarationRange: variable.range,
+				kind: "member",
+			},
+			references: [declaration, reference],
+		});
+		expect(engine.getReferences(uri, { offset: 2 }, true).value).toEqual([declaration, reference]);
+		expect(engine.getReferences(uri, { offset: 2 }, false).value).toEqual([reference]);
 	});
 });
