@@ -38,4 +38,18 @@ describe("UpdateScheduler", () => {
 		await flush;
 		scheduler.dispose();
 	});
+
+	it("drops duplicate filesystem events after an update is applied", async () => {
+		let applied = 0;
+		const scheduler = new UpdateScheduler(0, () => { applied++; });
+
+		scheduler.enqueue({ uri: "file:///player.gd", version: 0 });
+		await scheduler.waitForIdle();
+		scheduler.enqueue({ uri: "file:///player.gd", version: 0 });
+		scheduler.enqueue({ uri: "file:///player.gd", version: 0 });
+		await scheduler.waitForIdle();
+
+		expect(applied).toBe(1);
+		scheduler.dispose();
+	});
 });
