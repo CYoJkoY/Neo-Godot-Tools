@@ -35,6 +35,11 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			return undefined;
 		}
 
+		const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+		if (range && globals.docsProvider?.classInfo.has(document.getText(range))) {
+			return new Location(make_docs_uri(document.getText(range)), new Position(0, 0));
+		}
+
 		return this.languageService.getDefinition(document, position, token);
 	}
 }
