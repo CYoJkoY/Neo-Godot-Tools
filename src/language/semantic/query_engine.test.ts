@@ -57,6 +57,22 @@ describe("SemanticQueryEngine", () => {
 		expect(result.value?.name).toBe("player");
 	});
 
+	it("returns the cached symbol result until its URI is invalidated", () => {
+		const engine = engineFor("player", {
+			binding: {
+				name: "player",
+				uri,
+				declarationRange: variable.range,
+				kind: "member",
+				type: "Player",
+			},
+		});
+		const first = engine.getSymbol(uri, { offset: 2 });
+		expect(engine.getSymbol(uri, { offset: 2 })).toBe(first);
+		engine.invalidate([uri]);
+		expect(engine.getSymbol(uri, { offset: 2 })).not.toBe(first);
+	});
+
 	it("returns partial confidence for an ambiguous symbol", () => {
 		const first = { ...variable, uri: "file:///project/player.gd" };
 		const second = { ...variable, uri: "file:///project/enemy.gd" };
@@ -121,6 +137,16 @@ describe("SemanticQueryEngine", () => {
 		const result = engine.getCompletions(uri, { offset: 2 });
 		expect(result.confidence).toBe("exact");
 		expect(result.value?.map((item) => item.name)).toEqual(["player", "print_player"]);
+	});
+
+	it("returns cached completion results until its URI is invalidated", () => {
+		const engine = engineFor("pl", {
+			visibleBindings: [{ name: "player", uri, declarationRange: variable.range, kind: "local", type: "Player" }],
+		});
+		const first = engine.getCompletions(uri, { offset: 2 });
+		expect(engine.getCompletions(uri, { offset: 2 })).toBe(first);
+		engine.invalidate([uri]);
+		expect(engine.getCompletions(uri, { offset: 2 })).not.toBe(first);
 	});
 
 	it("returns member completions from a resolved receiver", () => {

@@ -78,6 +78,7 @@ export class LanguageService implements vscode.Disposable {
 		this.bindings.clear();
 		this.dependencies.clear();
 		this.types.clear();
+		this.semantic.clear();
 	}
 
 	getDocumentSymbols(uri: string): readonly IndexedSymbol[] { return this.files.get(uri)?.symbols ?? []; }
@@ -201,7 +202,7 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
+	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
@@ -253,7 +254,9 @@ export class LanguageService implements vscode.Disposable {
 		this.bindings.update(uri);
 		this.dependencies.update(uri);
 		const apiChanged = previous?.apiFingerprint !== file.apiFingerprint;
-		this.types.invalidate(apiChanged ? [uri, ...affected] : [uri]);
+		const semanticAffected = apiChanged ? [uri, ...affected] : [uri];
+		this.types.invalidate(semanticAffected);
+		this.semantic.invalidate(semanticAffected);
 	}
 
 	private remove(uri: string | vscode.Uri): void {
@@ -262,6 +265,7 @@ export class LanguageService implements vscode.Disposable {
 		const affected = this.dependencies.getTransitiveDependents(key);
 		this.dependencies.remove(key);
 		this.types.invalidate([key, ...affected]);
+		this.semantic.invalidate([key, ...affected]);
 		this.bindings.remove(key);
 		this.references.remove(key);
 		this.symbols.remove(key);

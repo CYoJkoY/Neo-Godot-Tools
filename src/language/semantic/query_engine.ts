@@ -54,6 +54,9 @@ function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
 }
 
 export class SemanticQueryEngine {
+	private readonly symbolCache = new Map<string, ResolutionResult<IndexedSymbol>>();
+	private readonly completionCache = new Map<string, ResolutionResult<readonly SemanticCompletionItem[]>>();
+
 	constructor(
 		private readonly files: FileIndex,
 		private readonly symbols: SymbolIndex,
@@ -62,29 +65,12 @@ export class SemanticQueryEngine {
 	) {}
 
 	getSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
-		const file = this.files.get(uri);
-		if (!file) return { confidence: "unknown" };
-		const source = file.source;
-		const word = wordAt(source, position.offset);
-		if (!word) return { confidence: "unknown" };
-
-		const prefix = source.slice(0, word.start);
-		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
-		if (memberMatch) {
-			const receiver = this.types.resolveReceiver(uri, word.start, memberMatch[1]);
-			const member = receiver ? this.types.getMember(receiver, word.name) : undefined;
-			if (member) return { value: member, confidence: "exact" };
-			if (receiver) return { confidence: "partial" };
-		}
-
-		const binding = this.bindings.getBinding(uri, word.start, word.name);
-		if (binding) return { value: symbolFromBinding(binding), confidence: "exact" };
-		const localSymbols = file.symbols.filter((symbol) => symbol.name === word.name);
-		if (localSymbols.length === 1) return { value: localSymbols[0], confidence: "inferred" };
-		const workspaceSymbols = this.symbols.find(word.name);
-		if (workspaceSymbols.length === 1) return { value: workspaceSymbols[0], confidence: "inferred" };
-		if (localSymbols.length > 1 || workspaceSymbols.length > 1) return { confidence: "partial" };
-		return { confidence: "unknown" };
+		const key = `${uri}:${position.offset}`;
+		const cached = this.symbolCache.get(key);
+		if (cached) return cached;
+		const result = this.resolveSymbol(uri, position);
+		this.symbolCache.set(key, result);
+		return result;
 	}
 
 	getDefinition(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
@@ -110,6 +96,80 @@ export class SemanticQueryEngine {
 	}
 
 	getCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
+		const key = `${uri}:${position.offset}`;
+		const cached = this.completionCache.get(key);
+		if (cached) return cached;
+		const result = this.resolveCompletions(uri, position);
+		this.completionCache.set(key, result);
+		return result;
+	}
+
+	getType(uri: string, position: SemanticPosition, expression?: string): ResolutionResult<ResolvedType> {
+		const file = this.files.get(uri);
+		if (!file) return { confidence: "unknown" };
+		const source = file.source;
+		const word = wordAt(source, position.offset);
+		const value = expression ?? word?.name;
+		if (!value) return { confidence: "unknown" };
+
+		const receiver = this.types.resolveReceiver(uri, position.offset, value);
+		if (receiver) return { value: receiver, confidence: receiver.builtin ? "inferred" : "exact" };
+		const named = this.types.resolveName(value);
+		if (named) return { value: named, confidence: named.builtin ? "inferred" : "exact" };
+		return { confidence: "unknown" };
+	}
+
+	getMembers(type: ResolvedType): ResolutionResult<readonly IndexedSymbol[]> {
+		if (type.builtin || !type.uri) return { confidence: "unknown" };
+		const members = this.types.getMembers(type);
+		return { value: members, confidence: "exact" };
+	}
+
+	invalidate(uris: Iterable<string>): void {
+		const affected = new Set(uris);
+		if (!affected.size) return;
+		for (const key of this.symbolCache.keys()) {
+			const separator = key.lastIndexOf(":");
+			if (separator >= 0 && affected.has(key.slice(0, separator))) this.symbolCache.delete(key);
+		}
+		for (const key of this.completionCache.keys()) {
+			const separator = key.lastIndexOf(":");
+			if (separator >= 0 && affected.has(key.slice(0, separator))) this.completionCache.delete(key);
+		}
+	}
+
+	clear(): void {
+		this.symbolCache.clear();
+		this.completionCache.clear();
+	}
+
+	private resolveSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
+		const file = this.files.get(uri);
+		if (!file) return { confidence: "unknown" };
+		const source = file.source;
+		const word = wordAt(source, position.offset);
+		if (!word) return { confidence: "unknown" };
+
+		const prefix = source.slice(0, word.start);
+		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
+		if (memberMatch) {
+			const receiver = this.types.resolveReceiver(uri, word.start, memberMatch[1]);
+			const member = receiver ? this.types.getMember(receiver, word.name) : undefined;
+			if (member) return { value: member, confidence: "exact" };
+			if (receiver) return { confidence: "partial" };
+		}
+
+		const binding = this.bindings.getBinding(uri, word.start, word.name);
+		if (binding) return { value: symbolFromBinding(binding), confidence: "exact" };
+		const localSymbols = file.symbols.filter((symbol) => symbol.name === word.name);
+		if (localSymbols.length === 1) return { value: localSymbols[0], confidence: "inferred" };
+		const workspaceSymbols = this.symbols.find(word.name);
+		if (workspaceSymbols.length === 1) return { value: workspaceSymbols[0], confidence: "inferred" };
+		if (localSymbols.length > 1 || workspaceSymbols.length > 1) return { confidence: "partial" };
+		return { confidence: "unknown" };
+	}
+
+	private resolveCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
 		const source = file.source;
@@ -140,26 +200,5 @@ export class SemanticQueryEngine {
 		const items = [...localItems, ...workspaceItems];
 		if (!items.length) return { confidence: "unknown" };
 		return { value: items, confidence: "exact" };
-	}
-
-	getType(uri: string, position: SemanticPosition, expression?: string): ResolutionResult<ResolvedType> {
-		const file = this.files.get(uri);
-		if (!file) return { confidence: "unknown" };
-		const source = file.source;
-		const word = wordAt(source, position.offset);
-		const value = expression ?? word?.name;
-		if (!value) return { confidence: "unknown" };
-
-		const receiver = this.types.resolveReceiver(uri, position.offset, value);
-		if (receiver) return { value: receiver, confidence: receiver.builtin ? "inferred" : "exact" };
-		const named = this.types.resolveName(value);
-		if (named) return { value: named, confidence: named.builtin ? "inferred" : "exact" };
-		return { confidence: "unknown" };
-	}
-
-	getMembers(type: ResolvedType): ResolutionResult<readonly IndexedSymbol[]> {
-		if (type.builtin || !type.uri) return { confidence: "unknown" };
-		const members = this.types.getMembers(type);
-		return { value: members, confidence: "exact" };
 	}
 }
