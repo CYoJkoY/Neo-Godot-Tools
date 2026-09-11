@@ -35,3 +35,14 @@ export function createApiFingerprint(ast: GDScriptScript, _source: string, symbo
 		symbols: symbols.map(symbolSignature),
 	});
 }
+
+export function createSourceFingerprint(source: string): string {
+	let hash = 14695981039346656037n;
+	const prime = 1099511628211n;
+	const mask = 0xffffffffffffffffn;
+	for (let index = 0; index < source.length; index++) {
+		hash ^= BigInt(source.charCodeAt(index));
+		hash = (hash * prime) & mask;
+	}
+	return hash.toString(16).padStart(16, "0");
+}

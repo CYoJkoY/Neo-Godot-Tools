@@ -260,9 +260,8 @@ export class LanguageService implements vscode.Disposable {
 		}
 
 		const affected = change.kind === "api_changed" || change.kind === "file_added" ? this.dependencies.getTransitiveDependents(uri) : [];
-		const semanticAffected = [uri, ...affected];
-		this.types.invalidate(semanticAffected);
-		this.semantic.invalidate(semanticAffected);
+		this.types.invalidate([uri, ...affected]);
+		this.semantic.invalidate(affected);
 	}
 
 	private remove(uri: string | vscode.Uri): void {

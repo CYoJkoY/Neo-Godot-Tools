@@ -54,8 +54,8 @@ function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
 }
 
 export class SemanticQueryEngine {
-	private readonly symbolCache = new Map<string, ResolutionResult<IndexedSymbol>>();
-	private readonly completionCache = new Map<string, ResolutionResult<readonly SemanticCompletionItem[]>>();
+	private readonly symbolCache = new Map<string, { snapshot: string; result: ResolutionResult<IndexedSymbol> }>();
+	private readonly completionCache = new Map<string, { snapshot: string; result: ResolutionResult<readonly SemanticCompletionItem[]> }>();
 
 	constructor(
 		private readonly files: FileIndex,
@@ -66,10 +66,11 @@ export class SemanticQueryEngine {
 
 	getSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
 		const key = `${uri}:${position.offset}`;
+		const snapshot = this.snapshot(uri);
 		const cached = this.symbolCache.get(key);
-		if (cached) return cached;
+		if (cached?.snapshot === snapshot) return cached.result;
 		const result = this.resolveSymbol(uri, position);
-		this.symbolCache.set(key, result);
+		this.symbolCache.set(key, { snapshot, result });
 		return result;
 	}
 
@@ -97,10 +98,11 @@ export class SemanticQueryEngine {
 
 	getCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
 		const key = `${uri}:${position.offset}`;
+		const snapshot = this.snapshot(uri);
 		const cached = this.completionCache.get(key);
-		if (cached) return cached;
+		if (cached?.snapshot === snapshot) return cached.result;
 		const result = this.resolveCompletions(uri, position);
-		this.completionCache.set(key, result);
+		this.completionCache.set(key, { snapshot, result });
 		return result;
 	}
 
@@ -141,6 +143,11 @@ export class SemanticQueryEngine {
 	clear(): void {
 		this.symbolCache.clear();
 		this.completionCache.clear();
+	}
+
+	private snapshot(uri: string): string {
+		const file = this.files.get(uri);
+		return file ? `${file.sourceFingerprint}:${file.apiFingerprint}` : "missing";
 	}
 
 	private resolveSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
