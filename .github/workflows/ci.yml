@@ -74,6 +74,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Reject tracked JavaScript source
+        shell: bash
+        run: |
+          if git ls-files -- '*.js' | grep -q .; then
+            echo "Tracked JavaScript source files are not allowed."
+            git ls-files -- '*.js'
+            exit 1
+          fi
+
       - name: Lint and build extension
         run: |
           npm run lint
