@@ -9,5 +9,6 @@ export * from "./inlay_hints";
 export * from "./references";
 export * from "./rename";
 export * from "./semantic_tokens";
+export * from "./signature_help";
 export * from "./tasks";
 export * from "./workspace_symbols";

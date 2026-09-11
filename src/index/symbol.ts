@@ -1,4 +1,10 @@
-import { GDScriptDeclaration, GDScriptDiagnostic, GDScriptScript, SourceRange } from "../analyzer/index.js";
+import { GDScriptDeclaration, GDScriptDiagnostic, GDScriptFunction, GDScriptScript, SourceRange } from "../analyzer/index.js";
+
+export interface IndexedParameter {
+	name: string;
+	type?: string;
+	defaultValue?: string;
+}
 
 export type IndexedSymbolKind =
 	| "class"
@@ -18,6 +24,7 @@ export interface IndexedSymbol {
 	containerName?: string;
 	returnType?: string;
 	type?: string;
+	parameters?: IndexedParameter[];
 	static?: boolean;
 }
 
@@ -42,6 +49,11 @@ export function declarationToSymbol(declaration: GDScriptDeclaration, uri: strin
 	if (declaration.kind === "function") {
 		symbol.returnType = declaration.returnType;
 		symbol.static = declaration.static;
+		symbol.parameters = declaration.parameters.map((parameter) => ({
+			name: parameter.name,
+			type: parameter.type,
+			defaultValue: parameter.defaultValue,
+		}));
 	}
 	if (declaration.kind === "constant" || declaration.kind === "variable") symbol.type = declaration.type;
 	return symbol;

@@ -1,8 +1,39 @@
 import * as vscode from "vscode";
-import { FileIndex, IndexedSymbol, BindingIndex, ReferenceIndex, SymbolIndex } from "../index";
+import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, ReferenceIndex, SymbolIndex } from "../index";
 import { DefinitionFallback } from "../fallback/definition";
 import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
+
+function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
+	return document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+}
+
+function symbolKind(kind: string): vscode.CompletionItemKind {
+	switch (kind) {
+		case "class":
+		case "class_name": return vscode.CompletionItemKind.Class;
+		case "function": return vscode.CompletionItemKind.Function;
+		case "constant": return vscode.CompletionItemKind.Constant;
+		case "variable": return vscode.CompletionItemKind.Field;
+		case "signal": return vscode.CompletionItemKind.Event;
+		case "enum": return vscode.CompletionItemKind.Enum;
+		default: return vscode.CompletionItemKind.Value;
+	}
+}
+
+function bindingKind(kind: Binding["kind"]): vscode.CompletionItemKind {
+	switch (kind) {
+		case "parameter":
+		case "local": return vscode.CompletionItemKind.Variable;
+		case "member": return vscode.CompletionItemKind.Field;
+		case "function": return vscode.CompletionItemKind.Function;
+		case "class":
+		case "class_name": return vscode.CompletionItemKind.Class;
+		case "constant": return vscode.CompletionItemKind.Constant;
+		case "signal": return vscode.CompletionItemKind.Event;
+		case "enum": return vscode.CompletionItemKind.Enum;
+	}
+}
 
 export class LanguageService implements vscode.Disposable {
 	readonly files = new FileIndex();
@@ -22,7 +53,6 @@ export class LanguageService implements vscode.Disposable {
 			vscode.workspace.onDidChangeTextDocument((event) => this.updateDocument(event.document)),
 			vscode.workspace.onDidSaveTextDocument((document) => this.updateDocument(document)),
 		);
-
 		const watcher = vscode.workspace.createFileSystemWatcher("**/*.gd");
 		watcher.onDidCreate((uri) => void this.updateUri(uri));
 		watcher.onDidChange((uri) => void this.updateUri(uri));
@@ -40,16 +70,11 @@ export class LanguageService implements vscode.Disposable {
 		this.bindings.clear();
 	}
 
-	getDocumentSymbols(uri: string): readonly IndexedSymbol[] {
-		return this.files.get(uri)?.symbols ?? [];
-	}
-
-	getWorkspaceSymbols(query: string): IndexedSymbol[] {
-		return this.symbols.workspaceSymbols(query);
-	}
+	getDocumentSymbols(uri: string): readonly IndexedSymbol[] { return this.files.get(uri)?.symbols ?? []; }
+	getWorkspaceSymbols(query: string): IndexedSymbol[] { return this.symbols.workspaceSymbols(query); }
 
 	async getDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Definition | undefined> {
-		const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+		const range = wordRange(document, position);
 		if (range) {
 			const name = document.getText(range);
 			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), name);
@@ -62,72 +87,152 @@ export class LanguageService implements vscode.Disposable {
 		return this.definitionFallback.provide(document, position, token);
 	}
 
-	async getReferences(
-		document: vscode.TextDocument,
-		position: vscode.Position,
-		includeDeclaration: boolean,
-		token: vscode.CancellationToken,
-	): Promise<vscode.Location[] | undefined> {
-		const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+	async getReferences(document: vscode.TextDocument, position: vscode.Position, includeDeclaration: boolean, token: vscode.CancellationToken): Promise<vscode.Location[] | undefined> {
+		const range = wordRange(document, position);
 		if (!range) return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
 		const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
 		if (!binding) return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
 		const references = this.bindings.findReferences(binding.id);
 		if (!references.length) return this.referencesFallback.provide(document, position, { includeDeclaration }, token);
-		return references
-			.filter((reference) => includeDeclaration || reference.range.start.offset !== binding.declarationRange.start.offset || reference.uri !== binding.uri)
-			.map((reference) => this.toReferenceLocation(reference));
+		return references.filter((reference) => includeDeclaration || reference.range.start.offset !== binding.declarationRange.start.offset || reference.uri !== binding.uri).map((reference) => this.toReferenceLocation(reference));
 	}
 
-	async getRenameEdits(
-		document: vscode.TextDocument,
-		position: vscode.Position,
-		newName: string,
-		token: vscode.CancellationToken,
-	): Promise<vscode.WorkspaceEdit | undefined> {
+	async getRenameEdits(document: vscode.TextDocument, position: vscode.Position, newName: string, token: vscode.CancellationToken): Promise<vscode.WorkspaceEdit | undefined> {
 		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return undefined;
-		const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+		const range = wordRange(document, position);
 		if (!range) return this.renameFallback.provide(document, position, newName, token);
 		const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
 		if (!binding) return this.renameFallback.provide(document, position, newName, token);
 		const references = this.bindings.findReferences(binding.id);
 		if (!references.length) return this.renameFallback.provide(document, position, newName, token);
 		const edit = new vscode.WorkspaceEdit();
-		for (const reference of references) edit.replace(
-			vscode.Uri.parse(reference.uri),
-			new vscode.Range(
-				reference.range.start.line,
-				reference.range.start.character,
-				reference.range.end.line,
-				reference.range.end.character,
-			),
-			newName,
-		);
+		for (const reference of references) edit.replace(vscode.Uri.parse(reference.uri), this.range(reference.range), newName);
 		return edit;
 	}
 
+	getHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
+		const range = wordRange(document, position);
+		if (!range) return undefined;
+		const name = document.getText(range);
+		const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), name);
+		if (binding) return this.hoverForBinding(binding);
+		const symbols = this.symbols.find(name);
+		return symbols.length === 1 ? this.hoverForSymbol(symbols[0]) : undefined;
+	}
+
+	getCompletions(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList | undefined {
+		const line = document.lineAt(position.line).text.slice(0, position.character);
+		const memberMatch = line.match(/(?:^|\s)self\.([A-Za-z_]\w*)?$/);
+		if (memberMatch) {
+			const prefix = memberMatch[1] ?? "";
+			const items = this.bindings.getVisibleBindings(document.uri.toString(), document.offsetAt(position))
+				.filter((binding) => binding.kind === "member" && binding.name.startsWith(prefix))
+				.map((binding) => this.toCompletion(binding));
+			return new vscode.CompletionList(items, false);
+		}
+		if (line.match(/[A-Za-z_]\w*\.[A-Za-z_0-9]*$/)) return undefined;
+		const range = wordRange(document, position);
+		const prefix = range ? document.getText(range) : "";
+		const bindings = this.bindings.getVisibleBindings(document.uri.toString(), document.offsetAt(position));
+		const localItems = bindings.filter((binding) => binding.name.startsWith(prefix)).map((binding) => this.toCompletion(binding));
+		const localNames = new Set(localItems.map((item) => String(item.label)));
+		const workspaceItems = this.symbols.workspaceSymbols(prefix).filter((symbol) => !localNames.has(symbol.name)).map((symbol) => this.toCompletion(symbol));
+		if (!localItems.length && !workspaceItems.length) return undefined;
+		return new vscode.CompletionList([...localItems, ...workspaceItems], false);
+	}
+
+	getSignatureHelp(document: vscode.TextDocument, position: vscode.Position): vscode.SignatureHelp | undefined {
+		const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
+		const match = before.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\s*\(([^()]*)$/);
+		if (!match) return undefined;
+		const name = match[1];
+		const argumentText = match[2];
+		const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
+		const callOffset = Math.max(0, position && document.offsetAt(position) - match[1].length - 1);
+		const binding = this.bindings.getBinding(document.uri.toString(), callOffset, name);
+		const symbols = binding?.kind === "function" ? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined) : this.symbols.find(name);
+		const functions = symbols.filter((symbol) => symbol.kind === "function");
+		if (functions.length !== 1) return undefined;
+		const symbol = functions[0];
+		const signature = new vscode.SignatureInformation(this.signatureLabel(symbol));
+		signature.parameters = (symbol.parameters ?? []).map((parameter) => new vscode.ParameterInformation(this.parameterLabel(parameter)));
+		const help = new vscode.SignatureHelp();
+		help.signatures = [signature];
+		help.activeSignature = 0;
+		help.activeParameter = Math.min(activeParameter, Math.max(0, signature.parameters.length - 1));
+		return help;
+	}
+
+	private hoverForBinding(binding: Binding): vscode.Hover {
+		const symbol = this.symbolForBinding(binding);
+		if (symbol) return this.hoverForSymbol(symbol);
+		const markdown = new vscode.MarkdownString();
+		markdown.appendCodeblock(this.bindingLabel(binding), "gdscript");
+		return new vscode.Hover(markdown, this.range(binding.declarationRange));
+	}
+
+	private hoverForSymbol(symbol: IndexedSymbol): vscode.Hover {
+		const markdown = new vscode.MarkdownString();
+		markdown.appendCodeblock(this.symbolLabel(symbol), "gdscript");
+		return new vscode.Hover(markdown, this.range(symbol.range));
+	}
+
+	private symbolForBinding(binding: Binding): IndexedSymbol | undefined {
+		return this.files.get(binding.uri)?.symbols.find((symbol) => symbol.range.start.offset === binding.declarationRange.start.offset);
+	}
+
+	private symbolLabel(symbol: IndexedSymbol): string {
+		if (symbol.kind === "function") return this.signatureLabel(symbol);
+		if (symbol.kind === "variable" || symbol.kind === "constant") return `${symbol.kind} ${symbol.name}${symbol.type ? `: ${symbol.type}` : ""}`;
+		if (symbol.containerName) return `${symbol.containerName}.${symbol.name}`;
+		return `${symbol.kind} ${symbol.name}`;
+	}
+
+	private bindingLabel(binding: Binding): string {
+		if (binding.kind === "function") return `${binding.name}()${binding.returnType ? ` -> ${binding.returnType}` : ""}`;
+		return `${binding.kind} ${binding.name}${binding.type ? `: ${binding.type}` : ""}`;
+	}
+
+	private signatureLabel(symbol: IndexedSymbol): string {
+		const parameters = (symbol.parameters ?? []).map((parameter) => this.parameterLabel(parameter)).join(", ");
+		return `${symbol.name}(${parameters})${symbol.returnType ? ` -> ${symbol.returnType}` : ""}`;
+	}
+
+	private parameterLabel(parameter: IndexedParameter): string {
+		return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
+	}
+
+	private toCompletion(binding: Binding): vscode.CompletionItem {
+		const item = new vscode.CompletionItem(binding.name, bindingKind(binding.kind));
+		item.detail = this.bindingLabel(binding);
+		return item;
+	}
+
+	private toCompletion(symbol: IndexedSymbol): vscode.CompletionItem {
+		const item = new vscode.CompletionItem(symbol.name, symbolKind(symbol.kind));
+		item.detail = this.symbolLabel(symbol);
+		return item;
+	}
+
 	private toLocation(symbol: IndexedSymbol): vscode.Location {
-		return new vscode.Location(vscode.Uri.parse(symbol.uri), new vscode.Range(
-			symbol.range.start.line,
-			symbol.range.start.character,
-			symbol.range.end.line,
-			symbol.range.end.character,
-		));
+		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
 	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
-		return new vscode.Location(vscode.Uri.parse(reference.uri), new vscode.Range(
-			reference.range.start.line,
-			reference.range.start.character,
-			reference.range.end.line,
-			reference.range.end.character,
-		));
+		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
+	}
+
+	private range(sourceRange: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Range {
+		return new vscode.Range(sourceRange.start.line, sourceRange.start.character, sourceRange.end.line, sourceRange.end.character);
 	}
 
 	private updateDocument(document: vscode.TextDocument): void {
 		if (document.languageId !== "gdscript" || document.uri.scheme !== "file") return;
-		const uri = document.uri.toString();
-		this.files.update(uri, document.getText(), document.version);
+		this.updateText(document.uri.toString(), document.getText(), document.version);
+	}
+
+	private updateText(uri: string, source: string, version = 0): void {
+		this.files.update(uri, source, version);
 		this.symbols.update(uri);
 		this.references.update(uri);
 		this.bindings.update(uri);
@@ -141,11 +246,7 @@ export class LanguageService implements vscode.Disposable {
 		}
 		try {
 			const bytes = await vscode.workspace.fs.readFile(uri);
-			const source = Buffer.from(bytes).toString("utf8");
-			this.files.update(uri.toString(), source);
-			this.symbols.update(uri.toString());
-			this.references.update(uri.toString());
-			this.bindings.update(uri.toString());
+			this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"));
 		} catch {
 			this.remove(uri);
 		}

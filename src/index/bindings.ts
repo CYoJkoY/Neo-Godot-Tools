@@ -12,6 +12,8 @@ export interface Binding {
 	declarationRange: SourceRange;
 	scopeRange: SourceRange;
 	containerName?: string;
+	type?: string;
+	returnType?: string;
 }
 
 export interface BoundReference {
@@ -66,6 +68,7 @@ function addParameters(scope: Scope, fn: GDScriptFunction, uri: string): void {
 		uri,
 		declarationRange: parameter.range,
 		scopeRange: scope.range,
+		type: parameter.type,
 	});
 }
 
@@ -77,6 +80,8 @@ function addLocalDeclarations(source: string, fn: GDScriptFunction, scope: Scope
 		const previous = tokens[index - 1];
 		if (token.start < fn.bodyRange.start.offset || token.end > fn.bodyRange.end.offset) continue;
 		if (token.kind !== "identifier" || (previous.value !== "var" && previous.value !== "const") || previous.line !== token.line) continue;
+		const next = tokens[index + 1];
+		const type = next?.value === ":" ? tokens[index + 2]?.value : undefined;
 		addBinding(scope, {
 			id: `${uri}:${token.start}`,
 			name: token.value,
@@ -84,6 +89,7 @@ function addLocalDeclarations(source: string, fn: GDScriptFunction, scope: Scope
 			uri,
 			declarationRange: tokenRange(token),
 			scopeRange: scope.range,
+			type,
 		});
 	}
 }
@@ -105,6 +111,8 @@ function buildScopes(source: string, file: IndexedFile, uri: string): Scope {
 			uri,
 			declarationRange: symbol.range,
 			scopeRange: root.range,
+			type: symbol.type,
+			returnType: symbol.returnType,
 		});
 	}
 
@@ -123,6 +131,8 @@ function buildScopes(source: string, file: IndexedFile, uri: string): Scope {
 						declarationRange: symbol.range,
 						scopeRange: classScope.range,
 						containerName: declaration.name,
+						type: symbol.type,
+						returnType: symbol.returnType,
 					});
 				}
 				visit(declaration.declarations, classScope);
@@ -189,6 +199,25 @@ export class BindingIndex {
 		}
 		const global = this.bindings.get(name) ?? [];
 		return global.length === 1 ? global[0] : undefined;
+	}
+
+	getVisibleBindings(uri: string, offset: number): Binding[] {
+		const root = this.scopes.get(uri);
+		if (!root) return [];
+		const result: Binding[] = [];
+		const names = new Set<string>();
+		let scope: Scope | undefined = findInnermostScope(root, offset);
+		while (scope) {
+			for (const [name, entries] of scope.bindings) {
+				if (names.has(name)) continue;
+				const binding = findBinding(scope, name, offset);
+				if (!binding) continue;
+				names.add(name);
+				result.push(binding);
+			}
+			scope = scope.parent;
+		}
+		return result;
 	}
 
 	findReferences(bindingId: string): BoundReference[] {
