@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import EventEmitter from "node:events";
 import * as path from "node:path";
 import * as vscode from "vscode";
@@ -13,6 +14,7 @@ import {
 
 import { globals } from "../extension";
 import { createLogger, get_configuration, get_project_dir } from "../utils";
+import { languageProfiler } from "../performance/profiler";
 import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
@@ -93,6 +95,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	public port = -1;
 	public lastPortTried = -1;
 	public sentMessages = new Map();
+	private readonly requestStarts = new Map<string | number, number>();
 	private rejected = false;
 
 	events = new EventEmitter();
@@ -190,15 +193,8 @@ export default class GDScriptLanguageClient extends LanguageClient {
 			}
 			return false;
 		}
-		this.sentMessages.set(message.id, message);
 
 		// discard outgoing messages that we know aren't supported
-		// if (message.method === "textDocument/didSave") {
-		// 	return false;
-		// }
-		// if (message.method === "textDocument/willSaveWaitUntil") {
-		// 	return false;
-		// }
 		if (message.method === "workspace/didChangeWatchedFiles") {
 			return false;
 		}
@@ -207,11 +203,23 @@ export default class GDScriptLanguageClient extends LanguageClient {
 			return false;
 		}
 
+		this.sentMessages.set(message.id, message);
+		if (message.id !== null) {
+			this.requestStarts.set(message.id, performance.now());
+		}
 		return message;
 	}
 
 	private response_filter(message: ResponseMessage) {
 		const sentMessage = this.sentMessages.get(message.id);
+		if (message.id !== null) {
+			const startedAt = this.requestStarts.get(message.id);
+			if (sentMessage && startedAt !== undefined) {
+				languageProfiler.record(`lsp.request.${sentMessage.method}`, performance.now() - startedAt);
+				this.requestStarts.delete(message.id);
+				this.sentMessages.delete(message.id);
+			}
+		}
 		if (sentMessage?.method === "textDocument/hover") {
 			// fix markdown contents
 			let value: string = (message as HoverResponseMesssage).result.contents.value;
@@ -234,7 +242,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 				(message as HoverResponseMesssage).result.contents.value = value;
 			}
-		} else if (sentMessage.method === "textDocument/documentLink") {
+		} else if (sentMessage?.method === "textDocument/documentLink") {
 			const results: DocumentLinkResult[] = (
 				message as DocumentLinkResponseMessage
 			).result;
