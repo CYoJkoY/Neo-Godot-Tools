@@ -2,7 +2,7 @@
 
 Neo-Godot-Tools keeps common GDScript editor intelligence local and uses Godot LSP only when the local model cannot answer safely.
 
-## Current architecture
+## Architecture
 
 ```text
 VS Code Providers
@@ -21,41 +21,103 @@ Index   Index          Index
            ▼
    Type Resolution
            │
-           ▼
- Dependency Graph
+      Dependency Graph
            │
-           ▼
-    File / AST Index
+      File / AST Index
            │
-           ▼
       GDScript Parser
            │
+           ├─────────────── local result
+           │
            ▼
-   Godot LSP fallback
+     Godot LSP fallback
 ```
 
-The important boundary is semantic rather than transport-oriented:
+The architecture is semantic rather than transport-oriented. VS Code providers call `LanguageService`; the service queries the local semantic model; only unresolved or unsafe cases cross the LSP boundary.
+
+## Three semantic scopes
+
+The language system is organized conceptually into:
 
 ```text
-VS Code API
-     ↓
-LanguageService
-     ↓
-SemanticQueryEngine
-     ↓
-local semantic indexes
-     ↓
-parser / analyzer
+GDScript Builtin Scope
+        │
+Godot Engine API Scope
+        │
+Project Scope
+        │
+        ▼
+Semantic Query Engine
 ```
 
-Godot LSP remains outside the local hot path and is used for engine-native, dynamic, ambiguous, unsupported, or otherwise unresolved semantics.
+**GDScript Builtin Scope** covers language-level functions and built-in constructs.
+
+**Godot Engine API Scope** covers native classes, methods, properties, signals, constants, and documentation. This is currently the largest local semantic coverage gap and is being expanded incrementally.
+
+**Project Scope** covers user scripts and project-defined symbols through local indexes.
+
+## Local-first provider routing
+
+The extension deliberately disables the LanguageClient's automatic interactive providers for features owned by the local architecture. This prevents VS Code from merging independent local and LSP results into duplicate Hover/Definition/Completion UI.
+
+The LSP client remains active as a transport and fallback channel. Explicit fallback requests continue to use `sendRequest()` with cancellation and bounded timeouts.
+
+```text
+Local provider
+    │
+    ├── exact / safe inferred → return
+    │
+    └── partial / unknown
+              ↓
+       explicit LSP request
+```
+
+This is the central architectural rule: **LSP is a fallback dependency, not a second peer provider implementation.**
+
+## Definition navigation
+
+Definition navigation distinguishes project symbols from native Godot API symbols.
+
+### Project symbols
+
+```text
+Ctrl+Click MyPlayer
+        ↓
+SemanticQueryEngine
+        ↓
+Project Scope
+        ↓
+source Location
+```
+
+### Native classes
+
+```text
+Ctrl+Click Node
+        ↓
+Native symbol resolution
+        ↓
+Node.gddoc
+```
+
+### Native members
+
+```text
+Ctrl+Click node.add_child
+        ↓
+Native symbol resolution
+        ↓
+Node.add_child
+        ↓
+Node.gddoc#add_child
+```
+
+The native lookup is bounded and cancellation-aware. If native symbol resolution fails, the provider returns no fabricated location rather than opening an unrelated project file.
 
 ## Incremental update pipeline
 
-Editor and filesystem events are coalesced before semantic work begins:
-
 ```text
-Text change / save / file watcher
+Text change / save / filesystem event
               ↓
        UpdateScheduler
               ↓
@@ -71,213 +133,95 @@ Text change / save / file watcher
   file     dependents    topology
 ```
 
-`UpdateScheduler` keeps at most one pending update per URI and protects newer in-memory document state from stale asynchronous filesystem reads. Once an update is accepted, the semantic change classifier determines the minimum required downstream work.
-
-## Semantic change model
-
-The index distinguishes:
-
-```text
-unchanged
-body_changed
-api_changed
-dependency_changed
-file_added
-file_removed
-```
-
-API fingerprints represent public semantic shape rather than document version. A body-only edit can therefore avoid invalidating transitive dependents.
-
-```text
-body edit
-   ↓
-new source snapshot
-   ↓
-API fingerprint unchanged
-   ↓
-no dependent semantic invalidation
-```
-
-For an API change:
-
-```text
-API change
-   ↓
-DependencyGraph
-   ↓
-transitive dependents
-   ↓
-TypeResolutionIndex + SemanticQueryEngine invalidation
-```
+Updates are coalesced by URI, and newer in-memory document state is protected from stale asynchronous filesystem reads.
 
 ## Dependency topology
 
 `DependencyGraph` maintains both resolved edges and unresolved candidates.
 
 ```text
-preload / extends
+extends / preload
        ↓
- resolve target
-   ┌───┴────┐
-   ▼        ▼
+   resolve target
+   ┌────┴────┐
+   ▼         ▼
 resolved  unresolved
- edge      candidate
+ edge       candidate
    │          │
-   │          └── target added → refresh candidate dependents
-   └──────────── target removed → preserve candidate for re-resolution
+   │          └── target appears → refresh candidates
+   └───────────── target changes/removes → invalidate dependents
 ```
 
-This avoids a workspace-wide dependency rebuild when a script is added or removed.
+This keeps ordinary edits incremental instead of rebuilding the workspace graph.
 
-## Semantic Query Engine
+## Semantic cache
 
-The query engine is the single semantic boundary used by the local-first providers. Its role is to combine indexes, perform deterministic resolution, expose confidence, and provide a controlled fallback boundary.
-
-Core operations currently include:
-
-```text
-getSymbol(uri, position)
-getDefinition(...)
-getReferences(...)
-getHover(...)
-getCompletions(...)
-```
-
-Type and member resolution is supplied by `TypeResolutionIndex`.
-
-### Query result confidence
-
-Semantic results use an explicit confidence model:
-
-```text
-exact
-inferred
-partial
-unknown
-```
-
-The intended routing is:
-
-```text
-local result
-    │
-    ├── exact / safe inferred → local provider result
-    │
-    └── partial / unknown ───→ Godot LSP fallback
-```
-
-The confidence model is intentionally conservative. A slower fallback is preferable to an incorrect local definition, hover, completion, or rename operation.
-
-## Semantic cache model
-
-The query cache is no longer keyed only by URI and cursor offset. Each entry records the semantic state it actually depends on.
+Query results are validated against the semantic state they actually depend on:
 
 ```text
 Query
   ↓
 cache entry
-  ├── current file source/API snapshot
-  ├── global symbol lookup signatures
-  ├── workspace completion signatures
-  └── resolved receiver file snapshots
+  ├── source/API snapshot
+  ├── symbol lookup signatures
+  ├── completion signatures
+  └── receiver snapshots
 ```
 
-Validation is dependency-local:
+A cache hit requires every recorded dependency to remain unchanged.
+
+## Type inference
+
+The local resolver currently supports explicit and inferred declarations, literals, constructors, `preload`, conservative `load`, conditional expressions, assignments, simple branches, local returns, member-call returns, declared member types, and inheritance-aware lookup.
+
+The intended behavior is conservative:
 
 ```text
-all dependency snapshots unchanged
-        ↓
-     cache hit
-
-any dependency changed
-        ↓
-    recompute query
+provable type → resolve locally
+ambiguous type → unknown → LSP fallback
 ```
 
-Explicit invalidation remains useful for cross-file changes already represented by the dependency graph, while query dependency snapshots protect against stale global symbol/completion results that are not captured by the current document snapshot alone.
+The analyzer should not grow compiler-equivalent control-flow or speculative dynamic dispatch merely to increase a benchmark's local hit rate.
 
-## Type resolution
+## LSP lifecycle
 
-`TypeResolutionIndex` is the next major semantic expansion point. The current foundation resolves declared types, built-in types, local bindings, inherited members, and selected expression forms. The planned expansion adds conservative inference for common GDScript expressions without attempting to become a full compiler.
+`GDScriptLanguageClient` and `ClientConnectionManager` own transport and lifecycle concerns:
 
-Target inference chain:
+- one managed connection lifecycle per workspace context;
+- generation-aware startup/reconnect;
+- stale-client event rejection;
+- request cancellation;
+- bounded fallback requests;
+- request instrumentation;
+- managed process disposal.
 
-```text
-initializer / assignment / return expression
-                    ↓
-            expression type
-                    ↓
-          local type resolution
-                    ↓
-       member / function propagation
-                    ↓
-          semantic provider result
-```
-
-Important cases include:
-
-- typed declarations;
-- literal values;
-- constructor calls for common built-in value types;
-- `preload()` script construction;
-- `load()` resources;
-- function return propagation;
-- member return types;
-- inheritance-aware members.
-
-When the expression is ambiguous or outside the local model, resolution must remain unknown and allow Godot LSP to answer.
-
-## Provider routing
-
-The local-first provider surface is now substantially implemented:
-
-| Capability | Local semantic path | Fallback |
-| --- | --- | --- |
-| Definition | Semantic Query Engine | Godot LSP |
-| Hover | Semantic Query Engine | Godot LSP |
-| Completion | Semantic Query Engine | Godot LSP |
-| References | Semantic Query Engine | Godot LSP |
-| Rename | Binding/Reference indexes | Godot LSP |
-| Signature Help | local binding/symbol resolution | Godot LSP |
-| Document Symbols | FileIndex | provider-specific / none |
-| Workspace Symbols | SymbolIndex | intentionally not dependent on Godot LSP |
-
-The remaining work is mainly semantic coverage, confidence policy, cancellation, latency measurement, and hardening—not another provider-wide rewrite.
-
-## LSP boundary
-
-`GDScriptLanguageClient` remains the transport boundary. It is responsible for lifecycle, request transport, result normalization, compatibility behavior, and LSP request instrumentation.
-
-The local semantic engine should not know about VS Code transport details. Conversely, providers should not reproduce semantic resolution that already belongs to the query engine.
+The semantic engine itself remains unaware of LSP transport details.
 
 ## Performance strategy
 
-The optimization order is deliberate:
+Optimization proceeds in this order:
 
 ```text
-correct semantic model
+semantic correctness
         ↓
 incremental invalidation
         ↓
 query dependency caching
         ↓
-interactive latency measurements
+interactive latency measurement
         ↓
-large-project benchmarks
+real-project benchmarks
         ↓
-only then consider workers / persistent caches
+workers / persistent cache only if justified
 ```
 
-Do not add worker threads merely because parser work is theoretically parallelizable. First establish whether parser/index CPU, I/O, semantic recomputation, or LSP fallback is actually responsible for user-visible latency.
+Current targets are approximately <30 ms completion, <20 ms hover, <25 ms definition, and <300 ms for an LSP fallback. These are engineering budgets, not measured guarantees; real-project p50/p95/p99 data is required before declaring them achieved.
 
-## Current non-goals
+## Non-goals
 
-This architecture does not attempt to provide:
-
-- a complete replacement for Godot's semantic engine;
-- a complete GDScript compiler;
-- whole-program control-flow analysis;
-- generic/union types without a concrete need;
-- persistent disk caches before startup measurements justify them;
-- worker threads before CPU profiling justifies them;
-- a second language server solely for architectural purity.
+- replacing Godot's entire semantic engine;
+- implementing a complete GDScript compiler;
+- maintaining a second full language server;
+- adding worker threads without CPU evidence;
+- adding persistent caches without startup measurements;
+- speculative type machinery without concrete editor use cases.
