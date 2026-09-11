@@ -35,6 +35,7 @@ export interface IndexedFile {
 	ast: GDScriptScript;
 	diagnostics: GDScriptDiagnostic[];
 	symbols: IndexedSymbol[];
+	apiFingerprint: string;
 }
 
 export function declarationToSymbol(declaration: GDScriptDeclaration, uri: string, containerName?: string): IndexedSymbol | undefined {
