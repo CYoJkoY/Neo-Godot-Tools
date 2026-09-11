@@ -1,5 +1,14 @@
 import * as vscode from "vscode";
-import { Position, TextDocument, CancellationToken, Location, Definition, DefinitionProvider, ExtensionContext, TextLine } from "vscode";
+import {
+	Position,
+	TextDocument,
+	CancellationToken,
+	Location,
+	Definition,
+	DefinitionProvider,
+	ExtensionContext,
+	TextLine,
+} from "vscode";
 import { make_docs_uri } from "../utils";
 import { globals } from "../extension";
 import { LanguageService } from "../language/service";
@@ -40,6 +49,24 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			return new Location(make_docs_uri(document.getText(range)), new Position(0, 0));
 		}
 
-		return this.languageService.getDefinition(document, position, token);
+		const local = await this.languageService.getDefinition(document, position, token);
+		if (local) return local;
+
+		return this.provideBuiltinSymbolDefinition(document, position, token);
+	}
+
+	private async provideBuiltinSymbolDefinition(
+		document: TextDocument,
+		position: Position,
+		token: CancellationToken,
+	): Promise<Definition | undefined> {
+		if (token.isCancellationRequested) return undefined;
+		const target = await globals.lsp?.client.get_symbol_at_position(document.uri, position, token);
+		if (!target) return undefined;
+
+		const [className, symbolName] = target.split(".");
+		if (!globals.docsProvider?.classInfo.has(className)) return undefined;
+
+		return new Location(make_docs_uri(className, symbolName), new Position(0, 0));
 	}
 }
