@@ -74,7 +74,7 @@ export class DependencyGraph {
 	}
 
 	remove(uri: string): string[] {
-		const dependents = this.getDependents(uri);
+		const dependents = [...this.getDependents(uri)];
 		for (const dependent of dependents) {
 			const edges = this.outgoing.get(dependent) ?? [];
 			const remaining = edges.filter((edge) => edge.to !== uri);
