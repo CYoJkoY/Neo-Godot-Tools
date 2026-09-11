@@ -28,7 +28,7 @@ Owns GDScript syntax and language-model construction. It must not import `vscode
 
 ### `index/`
 
-Owns workspace state derived from parsed documents: files, symbols, references, and dependencies. It is incremental and must not know about LSP transport or VS Code.
+Owns workspace state derived from parsed documents: files, symbols, references, bindings, and dependencies. It is incremental and must not know about LSP transport or VS Code.
 
 ### `language/`
 
@@ -49,8 +49,8 @@ Owns the Godot LSP adapter. It is the compatibility path for native engine class
 | document symbols | Local |
 | workspace symbols | Local index |
 | definition | Local first, fallback |
-| references | Local index, fallback |
-| rename | Local index, fallback when confidence is low |
+| references | Local bindings, fallback |
+| rename | Local bindings, fallback when confidence is low |
 | hover | Local first, fallback |
 | completion | Local first, fallback |
 | signature help | Local first, fallback |
@@ -60,7 +60,7 @@ The router must not manufacture an answer from incomplete type information merel
 
 ## Incremental model
 
-A document change reparses only that document and replaces its `FileIndex` record. `SymbolIndex` and `ReferenceIndex` remove the old contribution and add the new one. The workspace scanner yields between files so large projects do not monopolize the extension-host event loop. A future dependency graph will invalidate affected dependents; parser/index work can later move to `worker_threads` if profiling proves it is CPU-bound.
+A document change reparses only that document and replaces its `FileIndex` record. `SymbolIndex`, `ReferenceIndex`, and `BindingIndex` remove the old contribution and add the new one. The workspace scanner yields between files so large projects do not monopolize the extension-host event loop. A future dependency graph will invalidate affected dependents; parser/index work can later move to `worker_threads` if profiling proves it is CPU-bound.
 
 ## Phase 1 — parser foundation
 
@@ -101,23 +101,38 @@ A document change reparses only that document and replaces its `FileIndex` recor
 
 Phase 4 extends the same local-first boundary to **Find All References**.
 
-### Reference extraction
-
 `ReferenceIndex` tokenizes each indexed GDScript file and records identifier occurrences. Comments and string literals are naturally excluded by the lexer. Language keywords are excluded from the reference set.
 
-This is intentionally a conservative lexical reference model, not a full type resolver. A local result is returned only when the requested name maps to exactly one indexed declaration across the workspace. If multiple declarations share the name, or the local index has no usable declaration, the request falls through to Godot LSP.
+This is intentionally a conservative lexical reference model, not a full type resolver. A local result is returned only when the requested name maps to exactly one indexed declaration. If multiple declarations share the name, or the local index has no usable declaration, the request falls through to Godot LSP.
 
-### Incremental synchronization
+`ReferencesFallback` owns the `textDocument/references` request so transport-specific code remains outside the language service and provider.
 
-When a document changes, its file, symbols, and references are replaced independently. When a file is deleted, all three contributions are removed. No workspace-wide rebuild is required for an ordinary edit.
+## Phase 5 — scope-aware bindings and local rename
 
-### Fallback
+Phase 5 replaces name-only reference matching with a binding model suitable for edit operations.
 
-`ReferencesFallback` owns the `textDocument/references` request. This keeps transport-specific code out of `LanguageService` and the VS Code provider.
+### Binding model
 
-### Why rename is not included yet
+`BindingIndex` creates stable-in-memory binding identities from declaration locations. It models:
 
-Rename requires an edit-safe binding model. A lexical occurrence index is not sufficient because the same identifier can legally refer to different declarations in different scopes. Phase 4 therefore does **not** expose local rename edits. The next semantic step should introduce scope-aware bindings before local rename is enabled.
+- script-level declarations;
+- class members and nested classes;
+- function parameters;
+- function-local `var` and `const` declarations;
+- lexical shadowing of class members by parameters or locals;
+- separate bindings for same-named locals in different functions.
+
+References are resolved to binding IDs rather than merely to identifier names. Member access through arbitrary receivers such as `player.health` remains unresolved locally; `self.health` can resolve to the current class member. This deliberately avoids guessing the type of `player`.
+
+### Local rename
+
+`GDRenameProvider` delegates to `LanguageService.getRenameEdits()`. When the identifier resolves to a binding with a complete local reference set, the language service constructs a `WorkspaceEdit` directly from those binding references. Invalid rename names and unresolved/ambiguous bindings fall through to `RenameFallback`, which sends the standard `textDocument/rename` request to Godot LSP.
+
+The result is an important architectural change: rename is now **binding-based**, not a global text replacement. A parameter named `health` can therefore be renamed without changing a shadowed member named `health`, and two functions can independently rename their own `value` local.
+
+### Deliberate limits
+
+Phase 5 does not attempt a complete GDScript semantic type system. Dynamic receiver properties, complex destructuring, lambda captures, and engine-provided symbols remain fallback territory. The local path is only used when its binding identity is explicit and safe.
 
 ## Compatibility
 

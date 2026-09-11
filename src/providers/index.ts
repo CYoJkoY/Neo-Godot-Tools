@@ -7,6 +7,7 @@ export * from "./document_symbols";
 export * from "./hover";
 export * from "./inlay_hints";
 export * from "./references";
+export * from "./rename";
 export * from "./semantic_tokens";
 export * from "./tasks";
 export * from "./workspace_symbols";

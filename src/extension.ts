@@ -13,6 +13,7 @@ import {
 	GDDefinitionProvider,
 	GDDocumentSymbolProvider,
 	GDReferenceProvider,
+	GDRenameProvider,
 	GDWorkspaceSymbolProvider,
 	GDTaskProvider,
 } from "./providers";
@@ -24,6 +25,7 @@ import { FormattingProvider } from "./formatter";
 import { LanguageService } from "./language/service";
 import { DefinitionFallback } from "./fallback/definition";
 import { ReferencesFallback } from "./fallback/references";
+import { RenameFallback } from "./fallback/rename";
 import {
 	get_configuration,
 	find_file,
@@ -55,6 +57,7 @@ interface Extension {
 	definitionProvider?: GDDefinitionProvider;
 	documentSymbolProvider?: GDDocumentSymbolProvider;
 	referenceProvider?: GDReferenceProvider;
+	renameProvider?: GDRenameProvider;
 	workspaceSymbolProvider?: GDWorkspaceSymbolProvider;
 	semanticTokensProvider?: GDSemanticTokensProvider;
 	completionProvider?: GDCompletionItemProvider;
@@ -69,7 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	globals.context = context;
 	globals.lsp = new ClientConnectionManager(context);
-	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback());
+	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback(), new RenameFallback());
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context);
 	globals.linkProvider = new GDDocumentLinkProvider(context);
@@ -81,6 +84,7 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.definitionProvider = new GDDefinitionProvider(context, globals.languageService);
 	globals.documentSymbolProvider = new GDDocumentSymbolProvider(context, globals.languageService);
 	globals.referenceProvider = new GDReferenceProvider(context, globals.languageService);
+	globals.renameProvider = new GDRenameProvider(context, globals.languageService);
 	globals.workspaceSymbolProvider = new GDWorkspaceSymbolProvider(context, globals.languageService);
 	// globals.semanticTokensProvider = new GDSemanticTokensProvider(context);
 	// globals.completionProvider = new GDCompletionItemProvider(context);

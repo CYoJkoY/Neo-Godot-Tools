@@ -1,3 +1,4 @@
+export * from "./bindings.js";
 export * from "./file_index.js";
 export * from "./references.js";
 export * from "./symbol.js";
