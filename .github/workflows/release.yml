@@ -132,44 +132,26 @@ jobs:
         with:
           node-version: 22
 
-      - name: Validate Marketplace credentials
+      - name: Validate Microsoft Entra ID configuration
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          if [ -n "$VSCE_PAT" ]; then
-            echo "Marketplace authentication: VSCE_PAT"
-            exit 0
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ]; then
+            echo "Microsoft Entra ID workload identity configuration is incomplete."
+            echo "Required repository secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID."
+            exit 1
           fi
 
-          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_SUBSCRIPTION_ID" ]; then
-            echo "Marketplace authentication: Microsoft Entra workload identity"
-            exit 0
-          fi
-
-          echo "No supported Visual Studio Marketplace credential is configured."
-          echo "Configure VSCE_PAT, or AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_SUBSCRIPTION_ID."
-          exit 1
-
-      - name: Login to Azure with workload identity
-        if: ${{ secrets.VSCE_PAT == '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
+      - name: Login to Azure with Microsoft Entra ID workload identity federation
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Publish to Visual Studio Marketplace with PAT
-        if: ${{ secrets.VSCE_PAT != '' }}
-        env:
-          ASSET: ${{ needs.prepare.outputs.asset }}
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx @vscode/vsce@3.9.3-12 publish --pat "$VSCE_PAT" --packagePath "release/$ASSET"
-
       - name: Publish to Visual Studio Marketplace with Microsoft Entra ID
-        if: ${{ secrets.VSCE_PAT == '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
         env:
           ASSET: ${{ needs.prepare.outputs.asset }}
         run: npx @vscode/vsce@3.9.3-12 publish --azure-credential --packagePath "release/$ASSET"
