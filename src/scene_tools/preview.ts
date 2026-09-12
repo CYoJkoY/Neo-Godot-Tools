@@ -6,7 +6,6 @@ import {
 	EventEmitter,
 	type ExtensionContext,
 	type FileDecoration,
-	type ProviderResult,
 	type TreeDataProvider,
 	type TreeDragAndDropController,
 	type TreeItem,
@@ -81,7 +80,11 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 			}
 		}
 
-		this.refresh();
+		if (this.scenePreviewLocked) {
+			void this.refresh();
+		} else {
+			void this.text_editor_changed();
+		}
 	}
 
 	public handleDrag(
@@ -322,7 +325,9 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	 */
 	private get_scene_children(element?: SceneNode): SceneNode[] {
 		if (!this.scene?.root) return [];
-		const parentPath = element?.path ?? "";
+		if (!element) return [this.scene.root];
+
+		const parentPath = element.path;
 		return [...this.scene.nodes.values()].filter(
 			(node) => node !== this.scene?.root && node.parent === parentPath,
 		);
