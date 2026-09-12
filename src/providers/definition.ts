@@ -53,17 +53,18 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			return new Location(make_docs_uri(document.getText(range)), new Position(0, 0));
 		}
 
-		const local = await this.languageService.getDefinition(document, position, token);
-		if (local) return local;
-
 		const word = range ? document.getText(range) : undefined;
 		const builtin = word ? getGDScriptBuiltin(word) : undefined;
-		if (builtin && globals.docsProvider?.classInfo.has("@GlobalScope")) {
+		if (builtin) {
+			// Builtins are language-level symbols, not workspace symbols. Resolve them
+			// directly to the documentation provider instead of waiting for the local
+			// analyzer or Godot LSP to recognize them as native members.
 			const documentationClass = getGDScriptBuiltinDocumentationClass(builtin.name);
-			if (globals.docsProvider.classInfo.has(documentationClass)) {
-				return new Location(make_docs_uri(documentationClass, builtin.name), new Position(0, 0));
-			}
+			return new Location(make_docs_uri(documentationClass, builtin.name), new Position(0, 0));
 		}
+
+		const local = await this.languageService.getDefinition(document, position, token);
+		if (local) return local;
 
 		return this.provideBuiltinSymbolDefinition(document, position, token);
 	}

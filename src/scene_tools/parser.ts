@@ -223,14 +223,25 @@ export class SceneParser {
 	}
 
 	private resolve_custom_type(scene: Scene, node: SceneNode): string | undefined {
-		if (!node.customTypeScriptUid) return undefined;
-		const resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
-		if (!resource || !resource.path) return undefined;
+		let resource: GDResourceLike | undefined;
+		if (node.customTypeScriptId) {
+			resource = scene.externalResources.get(node.customTypeScriptId);
+		}
+		if (!resource && node.customTypeScriptUid) {
+			resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
+		}
+		if (!resource && node.customTypeScriptSubResourceId) {
+			const subResource = scene.subResources.get(node.customTypeScriptSubResourceId);
+			const scriptId = subResource?.body.match(/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];
+			if (scriptId) resource = scene.externalResources.get(scriptId);
+		}
+		if (!resource && node.scriptId) resource = scene.externalResources.get(node.scriptId);
+		if (!resource || resource.type !== "Script" || !resource.path) return undefined;
+
 		const scriptPath = this.resolve_resource_path(scene.path, resource.path);
 		if (!scriptPath || !fs.existsSync(scriptPath)) return undefined;
 		try {
-			const source = fs.readFileSync(scriptPath, "utf8");
-			return source.match(/^\s*class_name\s+([A-Za-z_]\w*)/m)?.[1];
+			return fs.readFileSync(scriptPath, "utf8").match(/^\s*class_name\s+([A-Za-z_]\w*)/m)?.[1];
 		} catch {
 			return undefined;
 		}
@@ -281,3 +292,5 @@ export class SceneParser {
 		return undefined;
 	}
 }
+
+type GDResourceLike = { type: string; path: string; uid: string; id: string; body: string; index: number; line: number };
