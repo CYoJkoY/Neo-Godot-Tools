@@ -1,5 +1,6 @@
 import { Binding, BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
 import { InheritedMemberResolver } from "../../index/inherited_member_resolution.js";
+import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./builtin_symbols.js";
 
 export type ResolutionConfidence = "exact" | "inferred" | "partial" | "unknown";
 
@@ -235,6 +236,8 @@ export class SemanticQueryEngine {
 
 		const binding = this.bindings.getBinding(uri, word.start, word.name);
 		if (binding) return { value: symbolFromBinding(binding), confidence: "exact" };
+		const builtin = resolveBuiltinSymbol(word.name);
+		if (builtin) return { value: builtin.symbol, confidence: "exact" };
 		const localSymbols = file.symbols.filter((symbol) => symbol.name === word.name);
 		if (localSymbols.length === 1) return { value: localSymbols[0], confidence: "inferred" };
 		const workspaceSymbols = this.symbols.find(word.name);
@@ -283,7 +286,10 @@ export class SemanticQueryEngine {
 		const workspaceItems = this.symbols.workspaceSymbols(completionPrefix)
 			.filter((symbol) => !localNames.has(symbol.name))
 			.map(completionFromSymbol);
-		const items = [...localItems, ...workspaceItems];
+		const builtinItems = resolveBuiltinSymbols(completionPrefix)
+			.filter(({ builtin }) => !localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name))
+			.map(({ symbol }) => completionFromSymbol(symbol));
+		const items = [...localItems, ...workspaceItems, ...builtinItems];
 		if (!items.length) return { confidence: "unknown" };
 		return { value: items, confidence: "exact" };
 	}

@@ -12,7 +12,7 @@ import {
 import { make_docs_uri } from "../utils";
 import { globals } from "../extension";
 import { LanguageService } from "../language/service";
-import { getGDScriptBuiltin, getGDScriptBuiltinDocumentationClass } from "../language/semantic/gdscript_builtins";
+import { resolveBuiltinSymbol } from "../language/semantic/builtin_symbols";
 import type { NativeSymbolInspectParams } from "./documentation_types";
 
 const BUILTIN_DOCUMENTATION_CLASSES = ["@GlobalScope", "@GDScript"] as const;
@@ -54,13 +54,9 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		}
 
 		const word = range ? document.getText(range) : undefined;
-		const builtin = word ? getGDScriptBuiltin(word) : undefined;
+		const builtin = word ? resolveBuiltinSymbol(word) : undefined;
 		if (builtin) {
-			// Builtins are language-level symbols, not workspace symbols. Resolve them
-			// directly to the documentation provider instead of waiting for the local
-			// analyzer or Godot LSP to recognize them as native members.
-			const documentationClass = getGDScriptBuiltinDocumentationClass(builtin.name);
-			return new Location(make_docs_uri(documentationClass, builtin.name), new Position(0, 0));
+			return new Location(make_docs_uri(builtin.documentationClass, builtin.builtin.name), new Position(0, 0));
 		}
 
 		const local = await this.languageService.getDefinition(document, position, token);
