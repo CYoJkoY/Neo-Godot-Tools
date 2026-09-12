@@ -7,11 +7,20 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build GitHub release
+  prepare:
+    name: Validate and package release
     runs-on: ubuntu-latest
+    outputs:
+      asset: ${{ steps.release.outputs.asset }}
+      development: ${{ steps.release.outputs.development }}
+      version: ${{ steps.release.outputs.version }}
 
     steps:
       - name: Checkout
@@ -54,17 +63,71 @@ jobs:
         if: steps.release.outputs.development == 'true'
         run: npx @vscode/vsce@latest package --pre-release --out "${{ steps.release.outputs.asset }}"
 
+      - name: Validate VSIX
+        run: |
+          test -s "${{ steps.release.outputs.asset }}"
+          npx @vscode/vsce@latest ls --tree "${{ steps.release.outputs.asset }}"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neo-godot-tools-${{ steps.release.outputs.version }}-${{ github.ref_name }}
+          path: ${{ steps.release.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 14
+
+  github-release:
+    name: Create GitHub Release
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: neo-godot-tools-${{ needs.prepare.outputs.version }}-${{ github.ref_name }}
+          path: release
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ needs.prepare.outputs.asset }}
         run: |
-          if [ "${{ steps.release.outputs.development }}" = "true" ]; then
-            gh release create "$GITHUB_REF_NAME" "${{ steps.release.outputs.asset }}" \
+          if [ "${{ needs.prepare.outputs.development }}" = "true" ]; then
+            gh release create "$GITHUB_REF_NAME" "release/$ASSET" \
               --title "$GITHUB_REF_NAME" \
               --prerelease \
               --generate-notes
           else
-            gh release create "$GITHUB_REF_NAME" "${{ steps.release.outputs.asset }}" \
+            gh release create "$GITHUB_REF_NAME" "release/$ASSET" \
               --title "$GITHUB_REF_NAME" \
               --generate-notes
           fi
+
+  marketplace:
+    name: Publish stable release to Visual Studio Marketplace
+    needs: prepare
+    if: needs.prepare.outputs.development == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: neo-godot-tools-${{ needs.prepare.outputs.version }}-${{ github.ref_name }}
+          path: release
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Publish to Visual Studio Marketplace
+        env:
+          ASSET: ${{ needs.prepare.outputs.asset }}
+        run: npx @vscode/vsce@latest publish --oidc --packagePath "release/$ASSET"
