@@ -23,6 +23,7 @@ export class SceneParser {
 		const filePath = document.uri.fsPath;
 		const scene = this.parse_text(filePath, document.getText(), (offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1);
 		this.refresh_instanced_scenes(scene, new Set<string>());
+		this.expand_instanced_nodes(scene, new Set<string>());
 		this.resolve_node_types(scene);
 		return scene;
 	}
@@ -173,7 +174,6 @@ export class SceneParser {
 		}
 
 		if (lastResource) lastResource.body = text.slice(lastResource.index).trimEnd();
-		this.resolve_node_types(scene);
 		return scene;
 	}
 
@@ -210,13 +210,103 @@ export class SceneParser {
 		}
 	}
 
+	/**
+	 * Materialize the effective node tree of inherited/instanced scenes.
+	 *
+	 * A TSCN only stores overrides for an instanced scene. Therefore a node such
+	 * as `SoulProjectile/Hitbox` can be referenced by the current file even when
+	 * there is no `[node name="Hitbox"]` record in that file. The actual node may
+	 * live several PackedScene levels below it. Scene Preview needs that effective
+	 * tree, not just the nodes physically written in the current TSCN.
+	 */
+	private expand_instanced_nodes(scene: Scene, visited: Set<string>): void {
+		const sceneKey = scene.path || scene.title;
+		if (visited.has(sceneKey)) return;
+		visited.add(sceneKey);
+
+		for (const node of [...scene.nodes.values()]) {
+			if (!node.instanceScene?.root) continue;
+			this.expand_instanced_nodes(node.instanceScene, visited);
+
+			for (const child of node.instanceScene.root.children) {
+				this.merge_instanced_node(scene, node, child);
+			}
+		}
+	}
+
+	private merge_instanced_node(scene: Scene, instanceRoot: SceneNode, source: SceneNode): SceneNode {
+		const relativePath = this.relative_to_root(source);
+		const targetPath = `${instanceRoot.path}/${relativePath}`;
+		const existing = scene.nodes.get(targetPath);
+
+		if (existing) {
+			this.merge_inherited_metadata(existing, source);
+			for (const child of source.children) {
+				this.merge_instanced_node(scene, existing, child);
+			}
+			return existing;
+		}
+
+		const imported = this.clone_instanced_node(source, instanceRoot, targetPath);
+		scene.nodes.set(targetPath, imported);
+		instanceRoot.children.push(imported);
+
+		for (const child of source.children) {
+			this.merge_instanced_node(scene, imported, child);
+		}
+		return imported;
+	}
+
+	private relative_to_root(node: SceneNode): string {
+		const rootPath = node.path.split("/")[0];
+		return node.path.slice(rootPath.length + 1);
+	}
+
+	private clone_instanced_node(source: SceneNode, parent: SceneNode, targetPath: string): SceneNode {
+		const imported = new SceneNode(source.label, source.className);
+		imported.path = targetPath;
+		imported.relativePath = targetPath.slice(parent.path.length + 1);
+		imported.parent = parent.path;
+		imported.text = source.text;
+		imported.position = -1;
+		imported.body = source.body;
+		imported.unique = source.unique;
+		imported.hasScript = source.hasScript;
+		imported.scriptId = source.scriptId;
+		imported.customTypeScriptUid = source.customTypeScriptUid;
+		imported.customTypeScriptId = source.customTypeScriptId;
+		imported.customTypeScriptSubResourceId = source.customTypeScriptSubResourceId;
+		imported.explicitType = source.explicitType;
+		imported.inheritedFromScene = true;
+		imported.resourcePath = source.resourcePath;
+		imported.instanceScene = source.instanceScene;
+		imported.contextValue = source.contextValue;
+		imported.tooltip = source.tooltip;
+		imported.resourceUri = Uri.from({ scheme: "godot", path: targetPath });
+		return imported;
+	}
+
+	private merge_inherited_metadata(target: SceneNode, source: SceneNode): void {
+		if (!target.explicitType) target.setClassName(source.className);
+		if (!target.scriptId && source.scriptId) target.scriptId = source.scriptId;
+		if (!target.hasScript && source.hasScript) target.hasScript = true;
+		if (!target.customTypeScriptUid && source.customTypeScriptUid) target.customTypeScriptUid = source.customTypeScriptUid;
+		if (!target.customTypeScriptId && source.customTypeScriptId) target.customTypeScriptId = source.customTypeScriptId;
+		if (!target.customTypeScriptSubResourceId && source.customTypeScriptSubResourceId) target.customTypeScriptSubResourceId = source.customTypeScriptSubResourceId;
+		if (!target.resourcePath && source.resourcePath) target.resourcePath = source.resourcePath;
+		if (!target.instanceScene && source.instanceScene) target.instanceScene = source.instanceScene;
+		if (source.unique) target.unique = true;
+		if (source.hasScript && !target.contextValue?.includes("hasScript")) target.contextValue = `${target.contextValue ?? ""}hasScript`;
+		target.inheritedFromScene ||= source.inheritedFromScene;
+	}
+
 	private resolve_node_types(scene: Scene): void {
 		const nodes = Object.fromEntries(scene.nodes.entries());
 		for (const node of scene.nodes.values()) {
 			const inheritedType = this.resolve_inherited_node_type(node.parent ? nodes[node.parent] : undefined, node.path, nodes);
 			const instanceType = node.instanceScene?.root?.className;
 			const customType = this.resolve_custom_type(scene, node);
-			const type = customType || node.explicitType || inheritedType || instanceType || "Node";
+			const type = customType || node.explicitType || inheritedType || instanceType || (node.inheritedFromScene ? node.className : undefined) || "Node";
 			node.setClassName(type);
 			node.description = type;
 		}

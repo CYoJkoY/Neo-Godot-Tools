@@ -24,6 +24,7 @@ export class SceneNode extends TreeItem {
 	public customTypeScriptId = "";
 	public customTypeScriptSubResourceId = "";
 	public explicitType = "";
+	public inheritedFromScene = false;
 	public children: SceneNode[] = [];
 	public instanceScene?: Scene;
 
