@@ -21,6 +21,8 @@ export class SceneNode extends TreeItem {
 	public hasScript = false;
 	public scriptId = "";
 	public customTypeScriptUid = "";
+	public customTypeScriptId = "";
+	public customTypeScriptSubResourceId = "";
 	public explicitType = "";
 	public children: SceneNode[] = [];
 	public instanceScene?: Scene;
@@ -48,7 +50,10 @@ export class SceneNode extends TreeItem {
 			if (line.startsWith("tile_data")) line = "tile_data = PoolIntArray(...)";
 			if (line.startsWith("unique_name_in_owner = true")) this.unique = true;
 			if (line.startsWith("metadata/_custom_type_script = ")) {
-				this.customTypeScriptUid = line.match(/metadata\/_custom_type_script\s*=\s*"([^"]+)"/)?.[1] ?? "";
+				const value = line.slice(line.indexOf("=") + 1).trim();
+				this.customTypeScriptUid = value.match(/^"(uid:\/\/[^\"]+)"$/)?.[1] ?? "";
+				this.customTypeScriptId = value.match(/^ExtResource\(\s*"?([^\)"\s]+)"?\s*\)$/)?.[1] ?? "";
+				this.customTypeScriptSubResourceId = value.match(/^SubResource\(\s*"?([^\)"\s]+)"?\s*\)$/)?.[1] ?? "";
 			}
 			if (line.startsWith("script = ExtResource")) {
 				this.hasScript = true;
