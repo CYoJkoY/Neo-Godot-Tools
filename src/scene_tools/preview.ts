@@ -201,15 +201,52 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	}
 
 	private async open_script(item: SceneNode) {
-		if (this.scene && item.scriptId) {
-			const resource = this.scene.externalResources.get(item.scriptId);
-			if (!resource)
-				return;
-			const uri = await convert_resource_path_to_uri(resource.path);
-			if (!uri)
-				return;
-			vscode.window.showTextDocument(uri, { preview: true });
+		const resource = this.resolve_script_resource(item);
+		if (!resource?.path) {
+			log.debug(`No script resource found for Scene Preview node '${item.path}'.`);
+			return;
 		}
+
+		const uri = await convert_resource_path_to_uri(resource.path);
+		if (!uri) {
+			log.debug(`Unable to resolve script resource path '${resource.path}' for '${item.path}'.`);
+			return;
+		}
+		await vscode.window.showTextDocument(uri, { preview: true });
+	}
+
+	private resolve_script_resource(item: SceneNode) {
+		if (!this.scene) return undefined;
+
+		if (item.scriptId) {
+			const resource = this.scene.externalResources.get(item.scriptId);
+			if (resource) return resource;
+		}
+
+		if (item.customTypeScriptId) {
+			const resource = this.scene.externalResources.get(item.customTypeScriptId);
+			if (resource) return resource;
+		}
+
+		if (item.customTypeScriptUid) {
+			const resource = [...this.scene.externalResources.values()].find(
+				(resource) => resource.uid === item.customTypeScriptUid,
+			);
+			if (resource) return resource;
+		}
+
+		if (item.customTypeScriptSubResourceId) {
+			const subResource = this.scene.subResources.get(item.customTypeScriptSubResourceId);
+			const scriptId = subResource?.body.match(
+				/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/,
+			)?.[1];
+			if (scriptId) {
+				const resource = this.scene.externalResources.get(scriptId);
+				if (resource) return resource;
+			}
+		}
+
+		return undefined;
 	}
 
 	private async open_current_scene() {
