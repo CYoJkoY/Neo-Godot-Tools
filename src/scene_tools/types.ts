@@ -2,7 +2,7 @@ import {
 	TreeItem,
 	TreeItemCollapsibleState,
 	MarkdownString,
-	Uri
+	Uri,
 } from "vscode";
 import * as path from "node:path";
 import { get_extension_uri } from "../utils";
@@ -21,11 +21,12 @@ export class SceneNode extends TreeItem {
 	public hasScript = false;
 	public scriptId = "";
 	public children: SceneNode[] = [];
+	public instanceScene?: Scene;
 
 	constructor(
 		public label: string,
 		public className: string,
-		public collapsibleState?: TreeItemCollapsibleState
+		public collapsibleState?: TreeItemCollapsibleState,
 	) {
 		super(label, collapsibleState);
 
@@ -42,20 +43,14 @@ export class SceneNode extends TreeItem {
 		const newLines: string[] = [];
 		for (let i = 0; i < lines.length; i++) {
 			let line = lines[i];
-			if (line.startsWith("tile_data")) {
-				line = "tile_data = PoolIntArray(...)";
-			}
-			if (line.startsWith("unique_name_in_owner = true")) {
-				this.unique = true;
-			}
+			if (line.startsWith("tile_data")) line = "tile_data = PoolIntArray(...)";
+			if (line.startsWith("unique_name_in_owner = true")) this.unique = true;
 			if (line.startsWith("script = ExtResource")) {
 				this.hasScript = true;
 				this.scriptId = line.match(/script = ExtResource\(\s*"?([\w]+)"?\s*\)/)?.[1] ?? "";
 				this.contextValue += "hasScript";
 			}
-			if (line !== "") {
-				newLines.push(line);
-			}
+			if (line !== "") newLines.push(line);
 		}
 		this.body = newLines.join("\n");
 		const content = new MarkdownString();
