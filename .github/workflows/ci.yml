@@ -92,9 +92,18 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Godot 3.6.2 validation failed with exit code $LASTEXITCODE."
+          $godot = (fgvm which "${{ matrix.godot_version }}").Trim()
+          if (-not $godot -or -not (Test-Path -LiteralPath $godot)) {
+            throw "Could not resolve the Godot executable for version ${{ matrix.godot_version }}."
+          }
+
+          $process = Start-Process -FilePath $godot -ArgumentList @('--headless', '--editor', '--quit') -WorkingDirectory (Get-Location).Path -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "Godot ${{ matrix.godot_version }} did not exit within 120 seconds."
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Godot ${{ matrix.godot_version }} validation failed with exit code $($process.ExitCode)."
           }
         env:
           FGVM_HOME: ${{ runner.temp }}/fgvm
