@@ -18,18 +18,20 @@ import type { NativeSymbolInspectParams } from "./documentation_types";
 const BUILTIN_DOCUMENTATION_CLASSES = ["@GlobalScope", "@GDScript"] as const;
 
 function normalizeNativeSymbolName(value: string): string {
-	const normalized = value.trim().replace(/\s+/g, " ");
-	const qualified = normalized.match(/(?:^|\.)((?:[A-Za-z_][A-Za-z0-9_]*))(?:\s*\([^)]*\))?$/);
+	const normalized = value.trim().replace(/^func\s+/, "").replace(/\s*->\s*.*$/, "").trim();
+	const qualified = normalized.match(/(?:^|\.)([A-Za-z_][A-Za-z0-9_]*)(?:\s*\([^)]*\))?$/);
 	return qualified?.[1] ?? normalized.replace(/\s*\([^)]*\)\s*$/, "");
 }
 
 function splitNativeSymbolTarget(value: string): { className?: string; symbolName: string } {
-	const normalized = value.trim();
-	const separator = normalized.indexOf(".");
-	if (separator === -1) return { symbolName: normalizeNativeSymbolName(normalized) };
+	const normalized = value.trim().replace(/^func\s+/, "").replace(/\s*->\s*.*$/, "").trim();
+	const callable = normalized.match(/^([A-Za-z_][A-Za-z0-9_.]*)\s*\(/);
+	const qualified = callable?.[1] ?? normalized.split(/\s*\(/, 1)[0];
+	const separator = qualified.lastIndexOf(".");
+	if (separator === -1) return { symbolName: normalizeNativeSymbolName(qualified) };
 	return {
-		className: normalized.slice(0, separator).trim(),
-		symbolName: normalizeNativeSymbolName(normalized.slice(separator + 1)),
+		className: qualified.slice(0, separator).trim(),
+		symbolName: normalizeNativeSymbolName(qualified.slice(separator + 1)),
 	};
 }
 
@@ -41,6 +43,19 @@ function isFunctionCall(document: TextDocument, range: vscode.Range): boolean {
 function hasMemberReceiver(document: TextDocument, range: vscode.Range): boolean {
 	const before = document.getText().slice(0, document.offsetAt(range.start));
 	return /[A-Za-z_]\w*\.\s*$/.test(before) || /\.\s*$/.test(before);
+}
+
+function memberReceiver(document: TextDocument, range: vscode.Range | undefined): { name: string; range: vscode.Range } | undefined {
+	if (!range) return undefined;
+	const before = document.getText().slice(0, document.offsetAt(range.start));
+	const match = before.match(/([A-Za-z_]\w*)\.\s*$/);
+	if (!match) return undefined;
+	const startOffset = document.offsetAt(range.start) - match[1].length - 1;
+	const start = document.positionAt(startOffset);
+	return {
+		name: match[1],
+		range: new vscode.Range(start, document.positionAt(startOffset + match[1].length)),
+	};
 }
 
 export class GDDefinitionProvider implements DefinitionProvider {
@@ -81,9 +96,6 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		const memberAccess = hasMemberReceiver(document, range);
 		const word = document.getText(range);
 
-		// GDScript function-call tokens are resolved as functions. For bare calls,
-		// prefer the built-in function table before workspace symbols because names
-		// such as `int` can also be valid class names.
 		if (functionCall && !memberAccess) {
 			const builtin = resolveBuiltinSymbol(word);
 			if (builtin) {
@@ -91,23 +103,48 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			}
 		}
 
-		// Class-name tokens are resolved as classes, not as functions. This is
-		// intentionally checked only outside function-call syntax because names
-		// such as `int` may legally denote both a class and a conversion function.
 		if (!functionCall && !memberAccess && globals.docsProvider?.classInfo.has(word)) {
 			return new Location(make_docs_uri(word), new Position(0, 0));
+		}
+
+		if (memberAccess) {
+			const nativeMember = await this.resolveNativeMemberFromReceiver(document, range, token);
+			if (nativeMember) return nativeMember;
 		}
 
 		const local = await this.languageService.getDefinition(document, position, token);
 		if (local) return local;
 
-		return this.provideBuiltinSymbolDefinition(document, position, token);
+		return this.provideBuiltinSymbolDefinition(document, position, token, range);
+	}
+
+	private async resolveNativeMemberFromReceiver(
+		document: TextDocument,
+		range: vscode.Range,
+		token: CancellationToken,
+	): Promise<Definition | undefined> {
+		if (token.isCancellationRequested) return undefined;
+		const receiver = memberReceiver(document, range);
+		if (!receiver || !globals.docsProvider) return undefined;
+
+		let className: string | undefined;
+		if (globals.docsProvider.classInfo.has(receiver.name)) {
+			className = receiver.name;
+		} else {
+			const type = this.languageService.types.resolveReceiver(document.uri.toString(), document.offsetAt(receiver.range.start), receiver.name);
+			if (type?.builtin && globals.docsProvider.classInfo.has(type.name)) className = type.name;
+		}
+
+		if (!className) return undefined;
+		if (!(await this.nativeSymbolExists(className, document.getText(range), token))) return undefined;
+		return new Location(make_docs_uri(className, document.getText(range)), new Position(0, 0));
 	}
 
 	private async provideBuiltinSymbolDefinition(
 		document: TextDocument,
 		position: Position,
 		token: CancellationToken,
+		range: vscode.Range,
 	): Promise<Definition | undefined> {
 		if (token.isCancellationRequested) return undefined;
 		const target = await globals.lsp?.client.get_symbol_at_position(document.uri, position, token);
@@ -117,7 +154,21 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		if (!symbolName) return undefined;
 
 		if (explicitClassName && globals.docsProvider?.classInfo.has(explicitClassName)) {
-			return new Location(make_docs_uri(explicitClassName, symbolName), new Position(0, 0));
+			if (await this.nativeSymbolExists(explicitClassName, symbolName, token)) {
+				return new Location(make_docs_uri(explicitClassName, symbolName), new Position(0, 0));
+			}
+		}
+
+		const builtin = resolveBuiltinSymbol(symbolName);
+		if (builtin) {
+			return new Location(make_docs_uri(builtin.documentationClass, builtin.builtin.name), new Position(0, 0));
+		}
+
+		const receiver = memberReceiver(document, range);
+		if (receiver && globals.docsProvider?.classInfo.has(receiver.name)) {
+			if (await this.nativeSymbolExists(receiver.name, symbolName, token)) {
+				return new Location(make_docs_uri(receiver.name, symbolName), new Position(0, 0));
+			}
 		}
 
 		const className = await this.resolveBuiltinSymbolClass(symbolName, document, token);
