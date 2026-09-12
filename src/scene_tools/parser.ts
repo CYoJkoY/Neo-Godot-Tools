@@ -9,6 +9,7 @@ const log = createLogger("scenes.parser");
 
 export class SceneParser {
 	private static instance: SceneParser;
+	private preparingScenes = new Set<string>();
 	public scenes: Map<string, Scene> = new Map();
 
 	constructor() {
@@ -22,9 +23,7 @@ export class SceneParser {
 	public parse_scene(document: TextDocument): Scene {
 		const filePath = document.uri.fsPath;
 		const scene = this.parse_text(filePath, document.getText(), (offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1);
-		this.refresh_instanced_scenes(scene, new Set<string>());
-		this.expand_instanced_nodes(scene, new Set<string>());
-		this.resolve_node_types(scene);
+		this.prepare_scene(scene);
 		return scene;
 	}
 
@@ -44,6 +43,31 @@ export class SceneParser {
 		}
 
 		return this.parse_text(filePath, text, (offset) => text.slice(0, offset).split(/\r?\n/).length);
+	}
+
+	private prepare_scene(scene: Scene): void {
+		const sceneKey = scene.path || scene.title;
+		if (this.preparingScenes.has(sceneKey)) return;
+		this.preparingScenes.add(sceneKey);
+
+		try {
+			for (const node of scene.nodes.values()) {
+				if (!node.resourcePath || extname(node.resourcePath) !== ".tscn") continue;
+				const resolved = this.resolve_resource_path(scene.path, node.resourcePath);
+				if (!resolved) continue;
+
+				const referenced = this.parse_file(resolved);
+				if (!referenced) continue;
+				node.instanceScene = referenced;
+				this.prepare_scene(referenced);
+			}
+
+			this.expand_instanced_nodes(scene, new Set<string>());
+			this.rebuild_tree(scene);
+			this.resolve_node_types(scene);
+		} finally {
+			this.preparingScenes.delete(sceneKey);
+		}
 	}
 
 	private parse_text(filePath: string, text: string, lineAtOffset: (offset: number) => number): Scene {
@@ -195,29 +219,13 @@ export class SceneParser {
 		return resolve(dirname(filePath), resourcePath);
 	}
 
-	private refresh_instanced_scenes(scene: Scene, visited: Set<string>): void {
-		const sceneKey = scene.path || scene.title;
-		if (visited.has(sceneKey)) return;
-		visited.add(sceneKey);
-
-		for (const node of scene.nodes.values()) {
-			if (!node.resourcePath || extname(node.resourcePath) !== ".tscn") continue;
-			const resolved = this.resolve_resource_path(scene.path, node.resourcePath);
-			if (!resolved) continue;
-			const refreshed = this.parse_file(resolved);
-			if (refreshed) node.instanceScene = refreshed;
-			if (node.instanceScene) this.refresh_instanced_scenes(node.instanceScene, visited);
-		}
-	}
-
 	/**
 	 * Materialize the effective node tree of inherited/instanced scenes.
 	 *
-	 * A TSCN only stores overrides for an instanced scene. Therefore a node such
-	 * as `SoulProjectile/Hitbox` can be referenced by the current file even when
-	 * there is no `[node name="Hitbox"]` record in that file. The actual node may
-	 * live several PackedScene levels below it. Scene Preview needs that effective
-	 * tree, not just the nodes physically written in the current TSCN.
+	 * A TSCN stores only the nodes and overrides owned by the current scene.
+	 * PackedScene instances contribute their own root and descendants to the
+	 * effective tree. The preview therefore needs to merge those descendants
+	 * without confusing an instance boundary with a new local root.
 	 */
 	private expand_instanced_nodes(scene: Scene, visited: Set<string>): void {
 		const sceneKey = scene.path || scene.title;
@@ -300,6 +308,18 @@ export class SceneParser {
 		target.inheritedFromScene ||= source.inheritedFromScene;
 	}
 
+	/** Reconstruct parent/child relationships from canonical node paths. */
+	private rebuild_tree(scene: Scene): void {
+		for (const node of scene.nodes.values()) node.children = [];
+		if (!scene.root) return;
+
+		for (const node of scene.nodes.values()) {
+			if (node === scene.root || !node.parent) continue;
+			const parent = scene.nodes.get(node.parent);
+			if (parent) parent.children.push(node);
+		}
+	}
+
 	private resolve_node_types(scene: Scene): void {
 		const nodes = Object.fromEntries(scene.nodes.entries());
 		for (const node of scene.nodes.values()) {
@@ -314,12 +334,8 @@ export class SceneParser {
 
 	private resolve_custom_type(scene: Scene, node: SceneNode): string | undefined {
 		let resource: GDResourceLike | undefined;
-		if (node.customTypeScriptId) {
-			resource = scene.externalResources.get(node.customTypeScriptId);
-		}
-		if (!resource && node.customTypeScriptUid) {
-			resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
-		}
+		if (node.customTypeScriptId) resource = scene.externalResources.get(node.customTypeScriptId);
+		if (!resource && node.customTypeScriptUid) resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
 		if (!resource && node.customTypeScriptSubResourceId) {
 			const subResource = scene.subResources.get(node.customTypeScriptSubResourceId);
 			const scriptId = subResource?.body.match(/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];
@@ -330,8 +346,26 @@ export class SceneParser {
 
 		const scriptPath = this.resolve_resource_path(scene.path, resource.path);
 		if (!scriptPath || !fs.existsSync(scriptPath)) return undefined;
+		return this.resolve_script_type(scriptPath, new Set<string>());
+	}
+
+	private resolve_script_type(scriptPath: string, visited: Set<string>): string | undefined {
+		if (visited.has(scriptPath)) return undefined;
+		visited.add(scriptPath);
 		try {
-			return fs.readFileSync(scriptPath, "utf8").match(/^\s*class_name\s+([A-Za-z_]\w*)/m)?.[1];
+			const source = fs.readFileSync(scriptPath, "utf8");
+			const className = source.match(/^\s*class_name\s+([A-Za-z_]\w*)/m)?.[1];
+			if (className) return className;
+
+			const extendsMatch = source.match(/^\s*extends\s+(?:["']([^"']+)["']|([A-Za-z_]\w*))/m);
+			if (!extendsMatch) return undefined;
+			const base = extendsMatch[1] ?? extendsMatch[2];
+			if (!base) return undefined;
+			if (base.startsWith("res://") || base.endsWith(".gd")) {
+				const parentPath = this.resolve_resource_path(scriptPath, base);
+				return parentPath ? this.resolve_script_type(parentPath, visited) : undefined;
+			}
+			return base;
 		} catch {
 			return undefined;
 		}

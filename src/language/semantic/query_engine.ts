@@ -1,3 +1,4 @@
+import { GDScriptDeclaration } from "../../analyzer/index.js";
 import { Binding, BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
 import { InheritedMemberResolver } from "../../index/inherited_member_resolution.js";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./builtin_symbols.js";
@@ -41,6 +42,19 @@ function wordAt(source: string, offset: number): { name: string; start: number; 
 	while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end++;
 	const name = source.slice(start, end);
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? { name, start, end } : undefined;
+}
+
+function findContainingFunctionName(declarations: GDScriptDeclaration[], offset: number): string | undefined {
+	for (const declaration of declarations) {
+		if (declaration.kind === "function" && declaration.bodyRange && declaration.bodyRange.start.offset <= offset && offset <= declaration.bodyRange.end.offset) {
+			return declaration.name;
+		}
+		if (declaration.kind === "class") {
+			const nested = findContainingFunctionName(declaration.declarations, offset);
+			if (nested) return nested;
+		}
+	}
+	return undefined;
 }
 
 function symbolFromBinding(binding: Binding): IndexedSymbol {
@@ -196,7 +210,7 @@ export class SemanticQueryEngine {
 		const prefix = file.source.slice(0, word.start);
 		const match = prefix.match(/([A-Za-z_]\w*)\.$/);
 		if (match) return { name: match[1] };
-		if (prefix.endsWith(".")) return { name: "self" };
+		if (prefix.endsWith(".")) return { name: "super" };
 		return undefined;
 	}
 
@@ -224,10 +238,19 @@ export class SemanticQueryEngine {
 		if (!word) return { confidence: "unknown" };
 
 		const prefix = source.slice(0, word.start);
+		const after = source.slice(word.end);
+		if (word.name === "super" && /^\s*\(/.test(after)) {
+			const functionName = findContainingFunctionName(file.ast.declarations, word.start);
+			const parent = this.types.resolveReceiver(uri, word.start, "super");
+			const member = functionName && parent?.uri ? this.inheritedMembers.resolve(parent.uri, functionName) : undefined;
+			if (member) return { value: member, confidence: "exact" };
+			if (parent) return { confidence: "partial" };
+		}
+
 		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
 		const shorthandMember = !memberMatch && prefix.endsWith(".");
 		if (memberMatch || shorthandMember) {
-			const receiverName = memberMatch?.[1] ?? "self";
+			const receiverName = memberMatch?.[1] ?? "super";
 			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
 			const member = receiver ? this.inheritedMembers.resolve(receiver.uri ?? "", word.name) : undefined;
 			if (member) return { value: member, confidence: "exact" };
@@ -266,7 +289,7 @@ export class SemanticQueryEngine {
 			};
 		}
 		if (prefix.endsWith(".")) {
-			const receiver = this.types.resolveReceiver(uri, wordStart, "self");
+			const receiver = this.types.resolveReceiver(uri, wordStart, "super");
 			if (!receiver || receiver.builtin) return { confidence: "unknown" };
 			const members = this.types.getMembers(receiver);
 			if (!members.length) return { confidence: "unknown" };
