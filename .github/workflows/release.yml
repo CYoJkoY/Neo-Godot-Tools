@@ -32,10 +32,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Validate TypeScript-only source tree
         shell: bash
@@ -122,6 +121,11 @@ jobs:
         with:
           name: neo-godot-tools-${{ needs.prepare.outputs.version }}-${{ github.ref_name }}
           path: release
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
 
       - name: Publish to Visual Studio Marketplace
         env:
