@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -110,29 +109,3 @@ jobs:
               --title "$GITHUB_REF_NAME" \
               --generate-notes
           fi
-
-  marketplace:
-    name: Publish stable release to Visual Studio Marketplace
-    needs: prepare
-    if: needs.prepare.outputs.development == 'false'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Download VSIX artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: neo-godot-tools-${{ needs.prepare.outputs.version }}-${{ github.ref_name }}
-          path: release
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
-      - name: Publish to Visual Studio Marketplace
-        env:
-          ASSET: ${{ needs.prepare.outputs.asset }}
-        run: npx @vscode/vsce@latest publish --oidc --packagePath "release/$ASSET"
