@@ -130,6 +130,15 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 				classHtml = classHtml.replace("bodyMargin", "0px;");
 				classHtml = classHtml.replace("displayMinimap", "none;");
 			}
+
+			if (target) {
+				const targetJson = JSON.stringify(target);
+				classHtml = classHtml.replace(
+					"</body>",
+					`<script>requestAnimationFrame(() => requestAnimationFrame(() => { const element = document.getElementById(${targetJson}); if (element) element.scrollIntoView(); }));</script></body>`,
+				);
+			}
+
 			panel.webview.html = classHtml;
 		}
 

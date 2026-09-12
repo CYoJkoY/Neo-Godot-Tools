@@ -190,7 +190,9 @@ export class SemanticQueryEngine {
 		if (!file || !word) return undefined;
 		const prefix = file.source.slice(0, word.start);
 		const match = prefix.match(/([A-Za-z_]\w*)\.$/);
-		return match ? { name: match[1] } : undefined;
+		if (match) return { name: match[1] };
+		if (prefix.endsWith(".")) return { name: "self" };
+		return undefined;
 	}
 
 	private captureFile(target: Map<string, string>, uri: string): void {
@@ -218,8 +220,10 @@ export class SemanticQueryEngine {
 
 		const prefix = source.slice(0, word.start);
 		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
-		if (memberMatch) {
-			const receiver = this.types.resolveReceiver(uri, word.start, memberMatch[1]);
+		const shorthandMember = !memberMatch && prefix.endsWith(".");
+		if (memberMatch || shorthandMember) {
+			const receiverName = memberMatch?.[1] ?? "self";
+			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
 			const member = receiver ? this.types.getMember(receiver, word.name) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (receiver) return { confidence: "partial" };
@@ -245,6 +249,17 @@ export class SemanticQueryEngine {
 		const memberMatch = prefix.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.$/);
 		if (memberMatch) {
 			const receiver = this.types.resolveReceiver(uri, wordStart, memberMatch[1]);
+			if (!receiver || receiver.builtin) return { confidence: "unknown" };
+			const members = this.types.getMembers(receiver);
+			if (!members.length) return { confidence: "unknown" };
+			const memberPrefix = word?.name ?? "";
+			return {
+				value: members.filter((member) => member.name.startsWith(memberPrefix)).map(completionFromSymbol),
+				confidence: "exact",
+			};
+		}
+		if (prefix.endsWith(".")) {
+			const receiver = this.types.resolveReceiver(uri, wordStart, "self");
 			if (!receiver || receiver.builtin) return { confidence: "unknown" };
 			const members = this.types.getMembers(receiver);
 			if (!members.length) return { confidence: "unknown" };

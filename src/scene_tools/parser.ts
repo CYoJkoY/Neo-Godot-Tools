@@ -192,13 +192,38 @@ export class SceneParser {
 		while (owner) {
 			if (owner.instanceScene) {
 				const relative = nodePath === owner.path ? "." : nodePath.slice(owner.path.length + 1);
-				const root = owner.instanceScene.root;
-				if (!root) return undefined;
-				const inheritedPath = relative === "." ? root.path : `${root.path}/${relative}`;
-				return owner.instanceScene.nodes.get(inheritedPath)?.className;
+				return this.find_instanced_node_type(owner.instanceScene, relative, new Set<string>());
 			}
 			owner = owner.parent ? nodes[owner.parent] : undefined;
 		}
+		return undefined;
+	}
+
+	private find_instanced_node_type(scene: Scene, relativePath: string, visited: Set<string>): string | undefined {
+		const sceneKey = scene.path || scene.title;
+		if (visited.has(sceneKey)) return undefined;
+		visited.add(sceneKey);
+
+		const root = scene.root;
+		if (!root) return undefined;
+		if (relativePath === "." || relativePath === "") return root.className;
+
+		const directPath = `${root.path}/${relativePath}`;
+		const direct = scene.nodes.get(directPath);
+		if (direct) return direct.className;
+
+		const segments = relativePath.split("/").filter(Boolean);
+		let currentPath = root.path;
+		for (let index = 0; index < segments.length; index++) {
+			currentPath = `${currentPath}/${segments[index]}`;
+			const current = scene.nodes.get(currentPath);
+			if (!current?.instanceScene) continue;
+
+			const remaining = segments.slice(index + 1).join("/");
+			const nestedType = this.find_instanced_node_type(current.instanceScene, remaining || ".", visited);
+			if (nestedType) return nestedType;
+		}
+
 		return undefined;
 	}
 }
