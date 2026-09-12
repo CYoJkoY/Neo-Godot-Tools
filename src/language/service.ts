@@ -274,35 +274,59 @@ export class LanguageService implements vscode.Disposable {
 		}
 	}
 
-	private updateText(uri: string, source: string, version: number): void {
+	private updateText(uri: string, source: string, version = 0): void {
 		const previous = this.files.get(uri);
-		const next = this.files.update(uri, source, version);
-		const change = classifySemanticChange(previous, next);
-		if (change !== "none") {
-			this.symbols.update(uri);
+		const previousDependencies = this.dependencies.getDependencies(uri);
+		const file = this.files.update(uri, source, version);
+		this.dependencies.update(uri);
+		const change = classifySemanticChange(previous, file, previousDependencies, this.dependencies.getDependencies(uri));
+		if (change.kind === "unchanged") return;
+
+		if (change.kind === "api_changed" || change.kind === "file_added") this.symbols.update(uri);
+		if (change.kind === "body_changed" || change.kind === "api_changed" || change.kind === "file_added") {
 			this.references.update(uri);
 			this.bindings.update(uri);
-			this.dependencies.update(uri, previous, next);
-			this.types.invalidate([uri]);
-			this.semantic.invalidate([uri]);
 		}
+
+		const affected = change.kind === "api_changed" || change.kind === "file_added" ? this.dependencies.getTransitiveDependents(uri) : [];
+		this.types.invalidate([uri, ...affected]);
+		this.semantic.invalidate([uri, ...affected]);
 	}
 
-	private remove(uri: vscode.Uri): void {
-		const key = uri.toString();
-		this.files.remove(key);
-		this.symbols.remove(key);
-		this.references.remove(key);
-		this.bindings.remove(key);
+	private remove(uri: string | vscode.Uri): void {
+		const key = typeof uri === "string" ? uri : uri.toString();
+		this.updateScheduler.cancel(key);
+		const affected = this.dependencies.getTransitiveDependents(key);
 		this.dependencies.remove(key);
-		this.types.invalidate([key]);
-		this.semantic.invalidate([key]);
+		this.types.invalidate([key, ...affected]);
+		this.semantic.invalidate([key, ...affected]);
+		this.bindings.remove(key);
+		this.references.remove(key);
+		this.symbols.remove(key);
+		this.files.remove(key);
 	}
 
 	private async rebuildWorkspaceIndex(): Promise<void> {
 		const generation = ++this.scanGeneration;
 		const files = await vscode.workspace.findFiles("**/*.gd", "**/{.git,node_modules}/**");
-		if (generation !== this.scanGeneration) return;
-		for (const uri of files) this.scheduleUri(uri);
+		for (const uri of files) {
+			if (generation !== this.scanGeneration) return;
+			await this.updateUri(uri);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+	}
+
+	private async updateUri(uri: vscode.Uri): Promise<void> {
+		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
+		if (openDocument) {
+			this.scheduleDocument(openDocument);
+			return;
+		}
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"));
+		} catch {
+			this.remove(uri);
+		}
 	}
 }
