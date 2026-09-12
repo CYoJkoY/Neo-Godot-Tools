@@ -81,32 +81,77 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			return new Location(make_docs_uri(className, symbolName), new Position(0, 0));
 		}
 
-		const className = await this.resolveBuiltinSymbolClass(target, token);
+		const className = await this.resolveBuiltinSymbolClass(target, document, token);
 		if (!className) return undefined;
 
 		return new Location(make_docs_uri(className, target), new Position(0, 0));
 	}
 
-	private async resolveBuiltinSymbolClass(symbolName: string, token: CancellationToken): Promise<string | undefined> {
+	private async resolveBuiltinSymbolClass(
+		symbolName: string,
+		document: TextDocument,
+		token: CancellationToken,
+	): Promise<string | undefined> {
 		const lsp = globals.lsp?.client;
-		if (!lsp || token.isCancellationRequested) return undefined;
+		const docs = globals.docsProvider;
+		if (!lsp || !docs || token.isCancellationRequested) return undefined;
 
-		for (const nativeClass of BUILTIN_DOCUMENTATION_CLASSES) {
-			if (!globals.docsProvider?.classInfo.has(nativeClass)) continue;
-
-			const params: NativeSymbolInspectParams = {
-				native_class: nativeClass,
-				symbol_name: symbolName,
-			};
-
-			try {
-				const symbol = await lsp.sendRequest("textDocument/nativeSymbol", params, token);
-				if (symbol && (symbol as { name?: string }).name === symbolName) return nativeClass;
-			} catch {
-				// Try the next built-in documentation namespace.
-			}
+		const candidates = this.nativeClassCandidates(document);
+		for (const nativeClass of candidates) {
+			if (token.isCancellationRequested) return undefined;
+			if (!docs.classInfo.has(nativeClass)) continue;
+			if (await this.nativeSymbolExists(nativeClass, symbolName, token)) return nativeClass;
 		}
 
 		return undefined;
+	}
+
+	private nativeClassCandidates(document: TextDocument): string[] {
+		const docs = globals.docsProvider;
+		if (!docs) return [];
+
+		const candidates: string[] = [];
+		const seen = new Set<string>();
+		const addHierarchy = (className: string) => {
+			let current = className;
+			while (current && !seen.has(current)) {
+				seen.add(current);
+				candidates.push(current);
+				current = docs.classInfo.get(current)?.inherits ?? "";
+			}
+		};
+
+		// A bare method call is normally a method on `self`. Start with the
+		// script's native base class so calls such as `queue_free()` resolve
+		// without probing every native class.
+		const text = document.getText();
+		const extendsMatch = text.match(/(?:^|\n)\s*extends\s+([A-Za-z_][A-Za-z0-9_]*)/);
+		if (extendsMatch) addHierarchy(extendsMatch[1]);
+
+		for (const nativeClass of BUILTIN_DOCUMENTATION_CLASSES) {
+			if (!seen.has(nativeClass)) {
+				seen.add(nativeClass);
+				candidates.push(nativeClass);
+			}
+		}
+
+		return candidates;
+	}
+
+	private async nativeSymbolExists(className: string, symbolName: string, token: CancellationToken): Promise<boolean> {
+		const lsp = globals.lsp?.client;
+		if (!lsp || token.isCancellationRequested) return false;
+
+		const params: NativeSymbolInspectParams = {
+			native_class: className,
+			symbol_name: symbolName,
+		};
+
+		try {
+			const symbol = await lsp.sendRequest("textDocument/nativeSymbol", params, token);
+			return Boolean(symbol && (symbol as { name?: string }).name === symbolName);
+		} catch {
+			return false;
+		}
 	}
 }
