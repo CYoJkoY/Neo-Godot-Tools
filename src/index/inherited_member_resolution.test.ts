@@ -62,6 +62,14 @@ describe("InheritedMemberResolver", () => {
 
 		expect(resolver.resolve(CHILD_URI, "testAA")?.uri).toBe(CHILD_URI);
 	});
+
+	it("resolves a function scoped to an inner class without confusing it with top-level functions", () => {
+		const resolver = createResolver({
+			[CHILD_URI]: "class_name Child\nclass Worker:\n\tfunc run():\n\t\tpass\nfunc run():\n\tpass\n",
+		});
+
+		expect(resolver.resolve(CHILD_URI, "run", "Worker")?.range.start.line).toBe(2);
+	});
 });
 
 describe("SemanticQueryEngine inherited definitions", () => {
@@ -101,5 +109,18 @@ describe("SemanticQueryEngine inherited definitions", () => {
 		const source = overrideSources[CHILD_URI];
 		const offset = source.indexOf(".testAA()") + 2;
 		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(MIDDLE_URI);
+	});
+
+	it("resolves Ctrl+Click on a method of a GDScript inner class", () => {
+		const innerSources = {
+			[CHILD_URI]: "class_name Child\nclass Worker:\n\tfunc run():\n\t\tpass\nfunc use_worker():\n\tWorker.run()\n",
+		};
+		const semantic = createSemantic(innerSources);
+		const source = innerSources[CHILD_URI];
+		const offset = source.indexOf("Worker.run") + "Worker.".length + 1;
+		const definition = semantic.getDefinition(CHILD_URI, { offset });
+		expect(definition.confidence).toBe("exact");
+		expect(definition.value?.name).toBe("run");
+		expect(definition.value?.containerName).toBe("Worker");
 	});
 });

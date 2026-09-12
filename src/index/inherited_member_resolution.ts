@@ -14,19 +14,25 @@ function normalizeScriptReference(value: string): string {
 export class InheritedMemberResolver {
 	constructor(private readonly files: FileIndex, private readonly symbols: SymbolIndex) {}
 
-	resolve(uri: string, name: string): IndexedSymbol | undefined {
-		return this.resolveInHierarchy(uri, name, new Set<string>());
+	resolve(uri: string, name: string, containerName?: string): IndexedSymbol | undefined {
+		return this.resolveInHierarchy(uri, name, new Set<string>(), containerName);
 	}
 
-	private resolveInHierarchy(uri: string, name: string, visited: Set<string>): IndexedSymbol | undefined {
+	private resolveInHierarchy(uri: string, name: string, visited: Set<string>, containerName?: string): IndexedSymbol | undefined {
 		if (visited.has(uri)) return undefined;
 		visited.add(uri);
 
 		const file = this.files.get(uri);
 		if (!file) return undefined;
 
-		const own = file.symbols.find((symbol) => symbol.kind === "function" && !symbol.containerName && symbol.name === name);
+		const own = file.symbols.find((symbol) =>
+			symbol.kind === "function" &&
+			symbol.name === name &&
+			(containerName ? symbol.containerName === containerName : !symbol.containerName),
+		);
 		if (own) return own;
+
+		if (containerName) return undefined;
 
 		const base = this.resolveBase(file.ast.declarations);
 		return base?.uri ? this.resolveInHierarchy(base.uri, name, visited) : undefined;

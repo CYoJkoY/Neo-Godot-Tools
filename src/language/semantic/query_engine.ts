@@ -252,7 +252,8 @@ export class SemanticQueryEngine {
 		if (memberMatch || shorthandMember) {
 			const receiverName = memberMatch?.[1] ?? "super";
 			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
-			const member = receiver ? this.inheritedMembers.resolve(receiver.uri ?? "", word.name) : undefined;
+			const containerName = receiver?.symbol?.kind === "class" ? receiver.symbol.name : undefined;
+			const member = receiver ? this.inheritedMembers.resolve(receiver.uri ?? "", word.name, containerName) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (receiver) return { confidence: "partial" };
 		}
