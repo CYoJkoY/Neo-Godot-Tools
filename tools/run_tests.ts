@@ -65,7 +65,7 @@ async function main(): Promise<void> {
 	write_vscode_test_config();
 
 	const testEnv = { ...process.env };
-	if (process.env.GODOT_TOOLS_DEBUG !== "false") {
+	if (process.env.NEO_GODOT_TOOLS_DEBUG !== "false") {
 		testEnv.VSCODE_DEBUG_MODE = "true";
 	}
 	const testArgs = grep ? ["test", "--", "--grep", grep] : ["test"];

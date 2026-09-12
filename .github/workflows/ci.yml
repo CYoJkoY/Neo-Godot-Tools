@@ -65,7 +65,7 @@ jobs:
             npm run test:engine -- ${{ matrix.godot_version }}
           fi
         env:
-          GODOT_TOOLS_DEBUG: "false"
+          NEO_GODOT_TOOLS_DEBUG: "false"
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
   godot3-smoke:
