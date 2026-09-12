@@ -19,9 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      asset: ${{ steps.release.outputs.asset }}
-      version: ${{ steps.release.outputs.version }}
 
     steps:
       - name: Checkout
@@ -33,10 +30,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Validate TypeScript-only source tree
         shell: bash
@@ -93,9 +89,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      asset: ${{ steps.release.outputs.asset }}
-      version: ${{ steps.release.outputs.version }}
 
     steps:
       - name: Checkout
@@ -107,10 +100,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Validate TypeScript-only source tree
         shell: bash
