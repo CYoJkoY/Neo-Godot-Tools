@@ -6,7 +6,7 @@ import { RenameFallback } from "../fallback/rename";
 import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
 import { SemanticQueryEngine } from "./semantic/query_engine";
 import { isSafeLocalConfidence } from "./semantic/resolution_policy";
-import { getGDScriptBuiltin, getGDScriptBuiltins } from "./semantic/gdscript_builtins";
+import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
 import { languageProfiler } from "../performance/profiler";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
@@ -121,15 +121,7 @@ export class LanguageService implements vscode.Disposable {
 			if (result.value && isSafeLocalConfidence(result.confidence)) return this.hoverForSymbol(result.value);
 			const range = wordRange(document, position);
 			if (!range) return undefined;
-			const name = document.getText(range);
-			const builtin = getGDScriptBuiltin(name);
-			if (builtin) {
-				const markdown = new vscode.MarkdownString();
-				markdown.appendCodeblock(`${builtin.name}(${builtin.parameters.map(parameterLabel).join(", ")})${builtin.returnType ? ` -> ${builtin.returnType}` : ""}`, "gdscript");
-				markdown.appendMarkdown(`\n\n${builtin.description}`);
-				return new vscode.Hover(markdown, range);
-			}
-			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), name);
+			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
 			if (binding && result.confidence === "exact") return this.hoverForBinding(binding);
 			return undefined;
 		});
@@ -150,7 +142,7 @@ export class LanguageService implements vscode.Disposable {
 			const word = wordRange(document, position);
 			const prefix = word ? document.getText(word) : "";
 			const existing = new Set(items.map((item) => item.label.toString()));
-			for (const builtin of getGDScriptBuiltins(prefix)) {
+			for (const { builtin } of resolveBuiltinSymbols(prefix)) {
 				if (existing.has(builtin.name)) continue;
 				const completion = new vscode.CompletionItem(builtin.name, vscode.CompletionItemKind.Function);
 				completion.detail = `${builtin.name}(${builtin.parameters.map(parameterLabel).join(", ")})${builtin.returnType ? ` -> ${builtin.returnType}` : ""}`;
@@ -171,8 +163,8 @@ export class LanguageService implements vscode.Disposable {
 			const name = match[1];
 			const argumentText = match[2];
 			const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
-			const builtin = getGDScriptBuiltin(name);
-			if (builtin) return this.signatureHelpForParameters(builtin.name, builtin.parameters, builtin.returnType, activeParameter);
+			const builtin = resolveBuiltinSymbol(name);
+			if (builtin) return this.signatureHelpForParameters(builtin.symbol.name, builtin.builtin.parameters, builtin.builtin.returnType, activeParameter);
 			const callOffset = Math.max(0, document.offsetAt(position) - match[1].length - 1);
 			const binding = this.bindings.getBinding(document.uri.toString(), callOffset, name);
 			const symbols = binding?.kind === "function" ? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined) : this.symbols.find(name);
@@ -202,6 +194,13 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private hoverForSymbol(symbol: IndexedSymbol): vscode.Hover {
+		const builtin = resolveBuiltinSymbol(symbol.name);
+		if (builtin && builtin.symbol.uri === symbol.uri) {
+			const markdown = new vscode.MarkdownString();
+			markdown.appendCodeblock(`${builtin.builtin.name}(${builtin.builtin.parameters.map(parameterLabel).join(", ")})${builtin.builtin.returnType ? ` -> ${builtin.builtin.returnType}` : ""}`, "gdscript");
+			markdown.appendMarkdown(`\n\n${builtin.builtin.description}`);
+			return new vscode.Hover(markdown);
+		}
 		const markdown = new vscode.MarkdownString();
 		markdown.appendCodeblock(this.symbolLabel(symbol), "gdscript");
 		return new vscode.Hover(markdown, this.range(symbol.range));
@@ -232,7 +231,7 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
+	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
@@ -275,59 +274,35 @@ export class LanguageService implements vscode.Disposable {
 		}
 	}
 
-	private updateText(uri: string, source: string, version = 0): void {
+	private updateText(uri: string, source: string, version: number): void {
 		const previous = this.files.get(uri);
-		const previousDependencies = this.dependencies.getDependencies(uri);
-		const file = this.files.update(uri, source, version);
-		this.dependencies.update(uri);
-		const change = classifySemanticChange(previous, file, previousDependencies, this.dependencies.getDependencies(uri));
-		if (change.kind === "unchanged") return;
-
-		if (change.kind === "api_changed" || change.kind === "file_added") this.symbols.update(uri);
-		if (change.kind === "body_changed" || change.kind === "api_changed" || change.kind === "file_added") {
+		const next = this.files.update(uri, source, version);
+		const change = classifySemanticChange(previous, next);
+		if (change !== "none") {
+			this.symbols.update(uri);
 			this.references.update(uri);
 			this.bindings.update(uri);
+			this.dependencies.update(uri, previous, next);
+			this.types.invalidate([uri]);
+			this.semantic.invalidate([uri]);
 		}
-
-		const affected = change.kind === "api_changed" || change.kind === "file_added" ? this.dependencies.getTransitiveDependents(uri) : [];
-		this.types.invalidate([uri, ...affected]);
-		this.semantic.invalidate([uri, ...affected]);
 	}
 
-	private remove(uri: string | vscode.Uri): void {
-		const key = typeof uri === "string" ? uri : uri.toString();
-		this.updateScheduler.cancel(key);
-		const affected = this.dependencies.getTransitiveDependents(key);
-		this.dependencies.remove(key);
-		this.types.invalidate([key, ...affected]);
-		this.semantic.invalidate([key, ...affected]);
-		this.bindings.remove(key);
-		this.references.remove(key);
-		this.symbols.remove(key);
+	private remove(uri: vscode.Uri): void {
+		const key = uri.toString();
 		this.files.remove(key);
+		this.symbols.remove(key);
+		this.references.remove(key);
+		this.bindings.remove(key);
+		this.dependencies.remove(key);
+		this.types.invalidate([key]);
+		this.semantic.invalidate([key]);
 	}
 
 	private async rebuildWorkspaceIndex(): Promise<void> {
 		const generation = ++this.scanGeneration;
 		const files = await vscode.workspace.findFiles("**/*.gd", "**/{.git,node_modules}/**");
-		for (const uri of files) {
-			if (generation !== this.scanGeneration) return;
-			await this.updateUri(uri);
-			await new Promise<void>((resolve) => setImmediate(resolve));
-		}
-	}
-
-	private async updateUri(uri: vscode.Uri): Promise<void> {
-		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
-		if (openDocument) {
-			this.scheduleDocument(openDocument);
-			return;
-		}
-		try {
-			const bytes = await vscode.workspace.fs.readFile(uri);
-			this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"));
-		} catch {
-			this.remove(uri);
-		}
+		if (generation !== this.scanGeneration) return;
+		for (const uri of files) this.scheduleUri(uri);
 	}
 }
