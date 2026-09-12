@@ -11,8 +11,8 @@
 	"bugs": {
 		"url": "https://github.com/CYoJkoY/Neo-Godot-Tools/issues"
 	},
-	"license": "SEE LICENSE IN LICENSE",
-	"author": "CYoJkoY",
+	"license": "MIT",
+	"author": "The Godot Engine community",
 	"publisher": "CYoJkoY",
 	"engines": {
 		"vscode": "^1.96.0"
