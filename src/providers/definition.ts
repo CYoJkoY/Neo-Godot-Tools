@@ -12,6 +12,7 @@ import {
 import { make_docs_uri } from "../utils";
 import { globals } from "../extension";
 import { LanguageService } from "../language/service";
+import { getGDScriptBuiltin } from "../language/semantic/gdscript_builtins";
 import type { NativeSymbolInspectParams } from "./documentation_types";
 
 const BUILTIN_DOCUMENTATION_CLASSES = ["@GlobalScope", "@GDScript"] as const;
@@ -54,6 +55,11 @@ export class GDDefinitionProvider implements DefinitionProvider {
 
 		const local = await this.languageService.getDefinition(document, position, token);
 		if (local) return local;
+
+		const word = range ? document.getText(range) : undefined;
+		if (word && getGDScriptBuiltin(word) && globals.docsProvider?.classInfo.has("@GlobalScope")) {
+			return new Location(make_docs_uri("@GlobalScope", word), new Position(0, 0));
+		}
 
 		return this.provideBuiltinSymbolDefinition(document, position, token);
 	}
