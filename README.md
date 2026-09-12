@@ -83,8 +83,10 @@ To install a VSIX manually, use VS Code's **Extensions → ... → Install from 
 
 Neo Godot Tools deliberately separates its release channels:
 
-- **GitHub Release** — the canonical repository release artifact. Stable tags use `vX.Y.Z`; development tags use `vX.Y.Z.devN` and are published as GitHub pre-releases.
+- **GitHub Release** — the canonical repository release artifact. Stable tags use `vX.Y.Z`; development tags use `vX.Y.Z-devN` and are published as GitHub pre-releases.
 - **Visual Studio Marketplace** — stable releases only. Marketplace publication is performed by a dedicated GitHub Actions workflow using VS Code Marketplace OIDC trusted publishing; it does not use a long-lived Azure DevOps PAT.
+
+Development tags such as `v2.8.0-dev13` produce VSIX packages whose internal extension version is `2.8.0-dev13`. Stable tags such as `v2.8.0` produce `2.8.0` packages. This keeps Git tags, VSIX metadata, and release artifacts on the same version line.
 
 GitHub Releases and Marketplace publication are therefore independently automated and can be diagnosed independently.
 

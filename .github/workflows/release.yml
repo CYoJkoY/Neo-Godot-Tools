@@ -21,6 +21,7 @@ jobs:
       asset: ${{ steps.release.outputs.asset }}
       development: ${{ steps.release.outputs.development }}
       version: ${{ steps.release.outputs.version }}
+      base_version: ${{ steps.release.outputs.base_version }}
 
     steps:
       - name: Checkout
@@ -34,7 +35,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Validate TypeScript-only source tree
         shell: bash
@@ -54,6 +55,22 @@ jobs:
       - name: Validate release version
         id: release
         run: npx ts-node tools/release.ts "$GITHUB_REF_NAME"
+
+      - name: Set development VSIX version
+        if: steps.release.outputs.development == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: npm pkg set version="$VERSION"
+
+      - name: Verify packaged extension version
+        env:
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          ACTUAL_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "package.json version ($ACTUAL_VERSION) does not match release version ($EXPECTED_VERSION)."
+            exit 1
+          fi
 
       - name: Package stable release
         if: steps.release.outputs.development == 'false'

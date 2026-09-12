@@ -2,11 +2,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$/;
+const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)(?:-dev(\d+))?$/;
 
 export type ReleaseInfo = {
 	tag: string;
 	version: string;
+	packageVersion: string;
 	isDevelopment: boolean;
 	developmentNumber?: number;
 };
@@ -14,15 +15,19 @@ export type ReleaseInfo = {
 export function parse_release_tag(tag: string): ReleaseInfo {
 	const match = TAG_PATTERN.exec(tag);
 	if (!match) {
-		throw new Error(`Unsupported release tag: ${tag}. Expected vX.Y.Z or vX.Y.Z.devN.`);
+		throw new Error(`Unsupported release tag: ${tag}. Expected vX.Y.Z or vX.Y.Z-devN.`);
 	}
 
-	const version = `${match[1]}.${match[2]}.${match[3]}`;
+	const baseVersion = `${match[1]}.${match[2]}.${match[3]}`;
 	const developmentNumber = match[4] ? Number(match[4]) : undefined;
+	const packageVersion = developmentNumber === undefined
+		? baseVersion
+		: `${baseVersion}-dev${developmentNumber}`;
 
 	return {
 		tag,
-		version,
+		version: baseVersion,
+		packageVersion,
 		isDevelopment: developmentNumber !== undefined,
 		developmentNumber,
 	};
@@ -44,7 +49,7 @@ function validate_package_version(release: ReleaseInfo, packageVersion: string):
 	if (release.version !== packageVersion) {
 		throw new Error(
 			`Release tag ${release.tag} does not match package.json version ${packageVersion}. ` +
-			`Expected ${release.version}.`,
+			`Expected base version ${release.version}.`,
 		);
 	}
 }
@@ -67,12 +72,13 @@ function main(): void {
 	const packageVersion = read_package_version();
 	validate_package_version(release, packageVersion);
 
-	write_output("version", packageVersion);
+	write_output("version", release.packageVersion);
+	write_output("base_version", release.version);
 	write_output("development", String(release.isDevelopment));
 	write_output("development_number", String(release.developmentNumber ?? ""));
 	write_output("asset", `neo-godot-tools-${release.tag}.vsix`);
 
-	console.log(JSON.stringify({ ...release, packageVersion }, null, 2));
+	console.log(JSON.stringify({ ...release, repositoryPackageVersion: packageVersion }, null, 2));
 }
 
 main();
