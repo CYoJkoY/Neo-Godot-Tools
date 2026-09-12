@@ -1,0 +1,16 @@
+name: Fix package version
+on:
+  push:
+    branches: [feat/marketplace-package-metadata]
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python -c "from pathlib import Path; p=Path('package.json'); s=p.read_text(); p.write_text(s.replace('\"version\": \"0.1.0\"','\"version\": \"2.8.0\"',1))"
+      - run: rm .github/workflows/fix-version.yml
+      - run: git config user.name 'github-actions[bot]' && git config user.email '41898282+github-actions[bot]@users.noreply.github.com' && git reset --soft HEAD~1 && git add package.json && git commit -m 'fix: prepare Neo Godot Tools for VS Code Marketplace' && git push --force-with-lease origin HEAD:feat/marketplace-package-metadata
