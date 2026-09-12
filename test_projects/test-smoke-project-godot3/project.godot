@@ -1,0 +1,16 @@
+; Godot 3.6 smoke-test project for Neo Godot Tools CI.
+config_version=4
+
+[application]
+
+config/name="Neo Godot Tools Godot 3 Smoke"
+run/main_scene="res://Main.tscn"
+
+[display]
+
+window/size/width=640
+window/size/height=360
+
+[rendering]
+
+environment/defaults/default_clear_color=Color(0.08, 0.08, 0.08, 1)

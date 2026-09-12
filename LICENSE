@@ -1,6 +1,12 @@
 MIT License
 
 Copyright (c) 2016-2022 The Godot Engine community
+Copyright (c) 2026 CYoJkoY and contributors to Neo Godot Tools for modifications and original contributions
+
+Neo Godot Tools is a derivative work based on the Godot Tools VS Code extension.
+The upstream copyright notice and MIT license terms are preserved. The additional
+copyright notice above applies only to original modifications and contributions
+made for Neo Godot Tools; it does not replace or supersede upstream rights.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

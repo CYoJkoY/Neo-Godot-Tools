@@ -70,7 +70,7 @@ function main(): void {
 	write_output("version", packageVersion);
 	write_output("development", String(release.isDevelopment));
 	write_output("development_number", String(release.developmentNumber ?? ""));
-	write_output("asset", `godot-tools-${release.tag}.vsix`);
+	write_output("asset", `neo-godot-tools-${release.tag}.vsix`);
 
 	console.log(JSON.stringify({ ...release, packageVersion }, null, 2));
 }

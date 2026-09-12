@@ -1,200 +1,160 @@
-# Neo-Godot-Tools
+# Neo Godot Tools
 
-Game development tools for working with [Godot Engine](http://www.godotengine.org/) in Visual Studio Code.
+Godot development tools for Visual Studio Code with local-first GDScript intelligence, incremental project indexing, documentation, debugging, and Godot Language Server integration.
 
-**IMPORTANT NOTE:** Versions 1.0.0 and later of this extension only support
-Godot 3.2 or later.
+> **Independent project:** Neo Godot Tools is a substantially modified derivative of the original [Godot Tools VS Code extension](https://github.com/godotengine/godot-vscode-plugin). It is not an official Godot Engine project and is not affiliated with or endorsed by the Godot Foundation. See [Provenance and Notices](NOTICE.md) for details.
 
-- [Neo-Godot-Tools](#neo-godot-tools)
 - [Features](#features)
-- [Download](#download)
+- [Compatibility](#compatibility)
+- [Installation](#installation)
+- [Release channels](#release-channels)
 - [Commands](#commands)
-- [Configuration](#configuration) - [Godot Editor](#godot-editor) - [VS Code](#vs-code)
-- [GDScript Debugger](#gdscript-debugger) - [_Configurations_](#configurations)
-  - [Issues and contributions](#issues-and-contributions)
-- [Contributing](#contributing)
-  - [FAQ](#faq)
-    - [Why does it fail to connect to the language server?](#why-does-it-fail-to-connect-to-the-language-server)
-    - [Why isn't IntelliSense displaying script members?](#why-isnt-intellisense-displaying-script-members)
-    - [I'm using Linux and the drag + shift drop isn't working. Why?](#im-using-linux-and-the-drag--shift-drop-isnt-working-why)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Support](#support)
+- [Issues and contributions](#issues-and-contributions)
+- [License and provenance](#license-and-provenance)
+- [FAQ](#faq)
+  - [Why does it fail to connect to the language server?](#why-does-it-fail-to-connect-to-the-language-server)
+  - [Why isn't IntelliSense displaying script members?](#why-isnt-intellisense-displaying-script-members)
+  - [Can Godot reload external script changes automatically?](#can-godot-reload-external-script-changes-automatically)
+  - [Why isn't drag and shift-drop working on Linux?](#why-isnt-drag-and-shift-drop-working-on-linux)
 
-# Features
+## Features
 
-- **GDScript (`.gd`) language features:**
+- **GDScript (`.gd`) language features**
   - syntax highlighting
-  - `ctrl+click` on project symbols to jump to their definitions
-  - `ctrl+click` on Godot native classes and members to open their documentation
-  - `ctrl+click` on `res://resource/path` links
-  - hover previews on `res://resource/path` links
+  - project-symbol definition lookup
+  - Godot native class and member documentation lookup
+  - `res://` resource links and hover previews
   - builtin code formatter
-  - autocompletions
+  - autocompletion
   - local semantic analysis for project symbols
-  - incremental indexing for faster interactive language features
-  - full typed GDScript support
-  - optional "Smart Mode" to improve productivity with dynamically typed scripts
-  - Hover previews show function/variable definitions including doc-comments
-  - switch from a `.gd` file to the related `.tscn` file (default keybind is `alt+o`)
-  - display script warnings and errors
-- **GDScript Debugger features:**
-  - completely rewritten, greatly improved reliability
-  - new, simple configuration (seriously, just hit F5!)
-  - convenient launch targets: current project/current file/pinned file
-  - breakpoints
-  - exceptions
-  - step-in/out/over
-  - variable watch
-  - call stack
-  - active scene tree
-  - inspector
-- **GDResource (`.tscn` and `.tres`) language features:**
+  - incremental indexing for responsive project-wide language features
+  - typed GDScript support
+  - optional Smart Mode for dynamically typed scripts
+  - function and variable hover information, including doc-comments
+  - scene/script switching (`Alt+O` by default)
+  - script warnings and errors
+- **GDScript Debugger**
+  - breakpoints, exceptions, and stepping
+  - variable watch and call stack
+  - current project/current file/pinned file launch targets
+  - active scene tree and inspector
+  - editable primitive values in the inspector
+- **GDResource (`.tscn`, `.tres`, and related resources)**
   - syntax highlighting
-  - `ctrl+click` on `res://resource/path` links
-  - `ctrl+click` on symbols to jump to their definition or open their documentation
-  - hover previews show definitions of External and Sub Resources
-  - hover previews on `res://resource/path` links
-  - inlay hints to help visualize External and Sub Resources
+  - symbol and resource definition lookup
+  - hover previews for external and sub-resources
+  - inlay hints
   - in-editor Scene Preview
-- **GDShader (`.gdshader`) language features:**
-  - syntax highlighting
+- **GDShader (`.gdshader`)** syntax highlighting
 
-# Download
+## Compatibility
 
-- [Visual Studio Marketplace **(recommended)**](https://marketplace.visualstudio.com/items?itemName=CYoJkoY.neo-godot-tools)
-  - Stable release, with support for automatic updates.
-- [GitHub Releases](https://github.com/CYoJkoY/Neo-Godot-Tools/releases)
-  - Stable release, but no automatic updates. Can be useful if you need to install an older version of the extension.
-- [Development build](https://github.com/CYoJkoY/Neo-Godot-Tools/actions/workflows/ci.yml)
-  - Development builds are produced by GitHub Actions and may contain new features and fixes not available in stable releases.
+| Component | Release validation |
+| --- | --- |
+| Godot 3 | **3.6.2** smoke-tested in CI |
+| Godot 4 | **4.5.1** and **4.7** smoke-tested in CI |
+| Visual Studio Code | `^1.96.0` |
+| CI platforms | Ubuntu and Windows |
 
-To install from GitHub Releases or a development build,
-see [Install from a VSIX](https://code.visualstudio.com/docs/editor/extension-marketplace#_install-from-a-vsix)
-in the Visual Studio Code documentation.
+Godot 3 releases older than 3.6 are outside the automated release-validation matrix. Other Godot 4 releases may work, but are not individually covered by the CI matrix.
 
-# Commands
+## Installation
 
-The extension adds its commands to the VS Code Command Palette under **"Neo Godot Tools"**.
+### Visual Studio Marketplace
+
+The Marketplace is the recommended installation channel because it provides normal extension update handling.
+
+- [Neo Godot Tools on Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=CYoJkoY.neo-godot-tools)
+
+### GitHub Releases
+
+Stable VSIX packages are also attached to [GitHub Releases](https://github.com/CYoJkoY/Neo-Godot-Tools/releases). This is useful when installing a specific version or testing a package outside the Marketplace.
+
+### Development builds
+
+Development builds are produced by [GitHub Actions](https://github.com/CYoJkoY/Neo-Godot-Tools/actions). They are intended for development and validation rather than normal production use.
+
+To install a VSIX manually, use VS Code's **Extensions → ... → Install from VSIX...** command.
+
+## Release channels
+
+Neo Godot Tools deliberately separates its release channels:
+
+- **GitHub Release** — the canonical repository release artifact. Stable tags use `vX.Y.Z`; development tags use `vX.Y.Z.devN` and are published as GitHub pre-releases.
+- **Visual Studio Marketplace** — stable releases only. Marketplace publication is performed by a dedicated GitHub Actions workflow using VS Code Marketplace OIDC trusted publishing; it does not use a long-lived Azure DevOps PAT.
+
+GitHub Releases and Marketplace publication are therefore independently automated and can be diagnosed independently.
+
+## Commands
+
+Commands are grouped under **Neo Godot Tools** in the VS Code Command Palette.
 
 - Open workspace with Godot editor
-- List Godot's native classes (and open their documentation)
-- Debug the current `.tscn`/`.gd` file
-- Debug the pinned `.tscn`/`.gd` file
-- Pin/Unpin the current `.tscn`/`.gd` file for debugging
-- Open the pinned file
+- Open EditorSettings
+- Start or stop the GDScript Language Server
+- List Godot native classes
+- Inspect and refresh debugger views
+- Debug the current or pinned scene/script
+- Pin and unpin scene files
+- Open Scene Preview and related resources
+- Switch between a scene and its script
+- Copy resource paths
 
-# Configuration
+## Configuration
 
-### Godot Editor
+### Godot editor integration
 
-You can set VS Code as your default script editor for Godot by following these steps:
+To use VS Code as the external script editor in Godot:
 
-1. Open the **Editor Settings**
-2. Select **Text Editor > External**
-3. Check **Use External Editor**
-4. Fill **Exec Path** with the path to your VS Code executable
-   - On macOS, this executable is typically located at: `/Applications/Visual Studio Code.app/Contents/MacOS/Electron`
-5. Fill **Exec Flags** with `{project} --goto {file}:{line}:{col}`
+1. Open **Editor Settings**.
+2. Select **Text Editor → External**.
+3. Enable **Use External Editor**.
+4. Set the VS Code executable as **Exec Path**.
+5. Use `{project} --goto {file}:{line}:{col}` as **Exec Flags**.
 
-You can make Godot seamlessly reload VSCode-edited scripts by changing some additional settings. More details about each are available when hovering over the description in the Settings window:
+For automatic reloads, also review Godot's external-change and focus-loss settings.
 
-- **Editor Settings > Text Editor > Behavior > Files > Auto Reload Scripts on External Change**
-- **Editor Settings > Interface > Editor > Save on Focus Loss**
-- **Editor Settings > Interface > Editor > Import Resources When Unfocused**
+### VS Code settings
 
-### VS Code
-
-You can use the following settings to configure Neo Godot Tools:
+Extension settings use the `neoGodotTools.*` namespace:
 
 - `neoGodotTools.editorPath.godot3`
 - `neoGodotTools.editorPath.godot4`
-
-The path to the Godot editor executable. _Under Mac OS, this is the executable inside of Godot.app._
-
+- `neoGodotTools.editor.verbose`
+- `neoGodotTools.editor.revealTerminal`
+- `neoGodotTools.lsp.serverHost`
+- `neoGodotTools.lsp.serverPort`
 - `neoGodotTools.lsp.headless`
+- `neoGodotTools.lsp.autoReconnect.*`
+- `neoGodotTools.documentation.*`
+- `neoGodotTools.formatter.*`
+- `neoGodotTools.scenePreview.*`
+- `neoGodotTools.inlayHints.*`
 
-When using Godot >3.6 or >4.2, Headless LSP mode is available. In Headless mode, Neo Godot Tools will attempt to launch a windowless instance of the Godot editor to use as its Language Server.
+When the selected Godot version supports headless LSP operation, Neo Godot Tools can launch a windowless Godot process for the language server.
 
-# GDScript Debugger
+## Architecture
 
-The debugger is for GDScript projects. To debug C# projects, use [C# Tools for Godot](https://github.com/godotengine/godot-csharp-vscode).
+Neo Godot Tools is no longer a thin wrapper around the upstream Godot Tools architecture. The current implementation is organized around a local-first language intelligence pipeline:
 
-To configure the GDScript debugger:
-
-1. Open the command palette (by pressing F1):
-2. `>View: Show Run and Debug`
-3. Click on "create a launch.json file"
-
-![Run and Debug View](img/run-and-debug.png)
-
-4. Select the Debug Godot configuration.
-5. Change any relevant settings.
-6. Press F5 to launch.
-
-### _Configurations_
-
-Minimal:
-
-```json
-{
-	"name": "Launch",
-	"type": "godot",
-	"request": "launch"
-}
+```text
+VS Code extension
+       │
+       ├── Local GDScript semantic analysis
+       │        └── Incremental project index
+       │
+       ├── Godot resource / scene / shader tooling
+       │
+       ├── Debugger and editor integration
+       │
+       └── Godot LSP
+              └── advanced semantic fallback / engine integration
 ```
 
-Everything:
-
-```json
-{
-	"name": "Launch",
-	"type": "godot",
-	"request": "launch",
-	"project": "${workspaceFolder}",
-	"address": "127.0.0.1",
-	"port": 6007,
-	"scene": "main|current|pinned|<path>",
-	"editor_path": "<path>",
-	// engine command line flags
-	"profiling": false,
-	"single_threaded_scene": false,
-	"debug_collisions": false,
-	"debug_paths": false,
-	"debug_navigation": false,
-	"debug_avoidance": false,
-	"debug_stringnames": false,
-	"frame_delay": 0,
-	"time_scale": 1.0,
-	"disable_vsync": false,
-	"fixed_fps": 60,
-	// anything else
-	"additional_options": ""
-}
-```
-
-Godot's command flags are documented here: https://docs.godotengine.org/en/stable/tutorials/editor/command_line_tutorial.html
-
-_Usage_
-
-- Stacktrace and variable dumps are the same as any regular debugger
-- The active scene tree can be refreshed with the Refresh icon in the top right.
-- Nodes can be brought to the fore in the Inspector by clicking the Eye icon next to nodes in the active scene tree, or Objects in the inspector.
-- You can edit integers, floats, strings, and booleans within the inspector by clicking the pencil icon next to each.
-
-![Showing the debugger in action](img/godot-debug.png)
-
-## Issues and contributions
-
-The [Neo-Godot-Tools](https://github.com/CYoJkoY/Neo-Godot-Tools) extension
-is an open source project derived from the Godot VS Code tooling ecosystem. Feel free to open issues
-and create pull requests anytime.
-
-See the [full changelog](https://github.com/CYoJkoY/Neo-Godot-Tools/blob/master/CHANGELOG.md)
-for the latest changes.
-
-# Contributing
-
-see [CONTRIBUTING.md](CONTRIBUTING.md)
-
-For the current architecture and development status, see:
+Detailed design and development documents are available in [`docs/`](docs/):
 
 - [Development roadmap](docs/development-roadmap.md)
 - [Semantic architecture](docs/semantic-architecture.md)
@@ -203,38 +163,47 @@ For the current architecture and development status, see:
 - [Performance profiling](docs/performance-profiling.md)
 - [LSP call audit](docs/lsp-call-audit.md)
 
+## Support
+
+See [SUPPORT.md](SUPPORT.md) for the supported-version matrix, troubleshooting guidance, and issue-reporting requirements.
+
+## Issues and contributions
+
+Neo Godot Tools is an open-source community project derived from the Godot VS Code tooling ecosystem. Bug reports, feature requests, documentation fixes, and focused pull requests are welcome.
+
+Before opening an issue, check the [FAQ](#faq), [SUPPORT.md](SUPPORT.md), and [changelog](CHANGELOG.md).
+
+For development workflow details, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License and provenance
+
+Neo Godot Tools is distributed under the **MIT License**. The project preserves the upstream Godot Tools copyright and license terms while adding copyright to original Neo Godot Tools modifications and contributions.
+
+- [LICENSE](LICENSE)
+- [NOTICE.md](NOTICE.md)
+- Upstream: [godotengine/godot-vscode-plugin](https://github.com/godotengine/godot-vscode-plugin)
+
 ## FAQ
 
 ### Why does it fail to connect to the language server?
 
-- Godot 3.2 or later is required.
-- Make sure the Godot editor is running
-- Make sure to open the project in the Godot editor first. If you opened
-  the editor after opening VS Code, you can click the **Retry** button
-  in the bottom-right corner in VS Code.
-- Reset the LSP Server port to the default values in both Godot's Editor Settings and
-  in VSCode.
+- Verify that the installed Godot version is supported by the project; Godot 3.6.2 and current CI-covered Godot 4 versions are the release-validation targets.
+- Open the project in the Godot editor before opening it in VS Code.
+- If the editor was started after VS Code, retry the language-server connection.
+- Verify that the LSP host and port match between Godot and VS Code.
 
 ### Why isn't IntelliSense displaying script members?
 
-- GDScript is a gradually typed script language. The language server can't
-  infer all variable types.
-- The local semantic engine resolves many project-level symbols without requiring
-  a Language Server round trip, but dynamic or ambiguous cases may still fall back
-  to Godot's Language Server.
-- To increase the number of results displayed, use static typing in your scripts.
+GDScript is gradually typed, so some dynamic code cannot be resolved statically. Neo Godot Tools resolves many project-level symbols locally, while ambiguous or engine-dependent cases can still fall back to Godot's Language Server. Static typing generally improves result quality.
 
-### Can Godot/VSCode load in my script changes automatically instead of showing a confirmation window?
+### Can Godot reload external script changes automatically?
 
-Godot has some Editor Settings that can help you if your workflow involves changing files in both editors:
+Review these Godot Editor Settings:
 
-- **Editor Settings > Text Editor > Behavior > Files > Auto Reload Scripts on External Change**
-- **Editor Settings > Interface > Editor > Save on Focus Loss**
-- **Editor Settings > Interface > Editor > Import Resources When Unfocused**
+- **Text Editor → Behavior → Files → Auto Reload Scripts on External Change**
+- **Interface → Editor → Save on Focus Loss**
+- **Interface → Editor → Import Resources When Unfocused**
 
-### I'm using Linux and the drag + shift drop isn't working. Why?
+### Why isn't drag and shift-drop working on Linux?
 
-Most likely you're using Wayland as display server, and there's a limitation of support in VS Code.
-In the exec flags, modify the snippet from `{project} --goto {file}:{line}:{col}` to
-`{project} --goto {file}:{line}:{col} --ozone-platform=x11`, which will force VS Code to run
-through XWayland, where it works.
+This can occur when VS Code is running under Wayland. If necessary, add `--ozone-platform=x11` to the VS Code launch flags so it runs through XWayland.
