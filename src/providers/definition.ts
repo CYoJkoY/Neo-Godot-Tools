@@ -12,6 +12,9 @@ import {
 import { make_docs_uri } from "../utils";
 import { globals } from "../extension";
 import { LanguageService } from "../language/service";
+import type { NativeSymbolInspectParams } from "./documentation_types";
+
+const BUILTIN_DOCUMENTATION_CLASSES = ["@GlobalScope", "@GDScript"] as const;
 
 export class GDDefinitionProvider implements DefinitionProvider {
 	constructor(context: ExtensionContext, private readonly languageService: LanguageService) {
@@ -64,9 +67,40 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		const target = await globals.lsp?.client.get_symbol_at_position(document.uri, position, token);
 		if (!target) return undefined;
 
-		const [className, symbolName] = target.split(".");
-		if (!globals.docsProvider?.classInfo.has(className)) return undefined;
+		const separator = target.indexOf(".");
+		if (separator !== -1) {
+			const className = target.slice(0, separator);
+			const symbolName = target.slice(separator + 1);
+			if (!symbolName || !globals.docsProvider?.classInfo.has(className)) return undefined;
+			return new Location(make_docs_uri(className, symbolName), new Position(0, 0));
+		}
 
-		return new Location(make_docs_uri(className, symbolName), new Position(0, 0));
+		const className = await this.resolveBuiltinSymbolClass(target, token);
+		if (!className) return undefined;
+
+		return new Location(make_docs_uri(className, target), new Position(0, 0));
+	}
+
+	private async resolveBuiltinSymbolClass(symbolName: string, token: CancellationToken): Promise<string | undefined> {
+		const lsp = globals.lsp?.client;
+		if (!lsp || token.isCancellationRequested) return undefined;
+
+		for (const nativeClass of BUILTIN_DOCUMENTATION_CLASSES) {
+			if (!globals.docsProvider?.classInfo.has(nativeClass)) continue;
+
+			const params: NativeSymbolInspectParams = {
+				native_class: nativeClass,
+				symbol_name: symbolName,
+			};
+
+			try {
+				const symbol = await lsp.sendRequest("textDocument/nativeSymbol", params, token);
+				if (symbol && (symbol as { name?: string }).name === symbolName) return nativeClass;
+			} catch {
+				// Try the next built-in documentation namespace.
+			}
+		}
+
+		return undefined;
 	}
 }
