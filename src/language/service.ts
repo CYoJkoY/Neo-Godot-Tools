@@ -118,7 +118,7 @@ export class LanguageService implements vscode.Disposable {
 	getHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
 		return languageProfiler.measure("semantic.hover", () => {
 			const result = this.semantic.getHover(document.uri.toString(), { offset: document.offsetAt(position) });
-			if (result.value && isSafeLocalConfidence(result.confidence)) return this.hoverForSymbol(result.value);
+			if (result.value && isSafeLocalConfidence(result.confidence)) return this.hoverForSymbol(this.hydrateHoverSymbol(result.value));
 			const range = wordRange(document, position);
 			if (!range) return undefined;
 			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
@@ -204,6 +204,11 @@ export class LanguageService implements vscode.Disposable {
 		const markdown = new vscode.MarkdownString();
 		markdown.appendCodeblock(this.symbolLabel(symbol), "gdscript");
 		return new vscode.Hover(markdown, this.range(symbol.range));
+	}
+
+	private hydrateHoverSymbol(symbol: IndexedSymbol): IndexedSymbol {
+		if (symbol.kind !== "function" || symbol.parameters !== undefined) return symbol;
+		return this.files.get(symbol.uri)?.symbols.find((candidate) => candidate.kind === "function" && candidate.range.start.offset === symbol.range.start.offset) ?? symbol;
 	}
 
 	private symbolForBinding(binding: Binding): IndexedSymbol | undefined {
