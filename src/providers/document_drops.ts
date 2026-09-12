@@ -14,6 +14,12 @@ import { SceneParser } from "../scene_tools/parser";
 import { node_name_to_snake, get_project_version, convert_uri_to_resource_path } from "../utils";
 import { SceneNode } from "../scene_tools/types";
 
+function read_boolean(value: unknown): boolean {
+	if (typeof value === "boolean") return value;
+	if (typeof value !== "string") return false;
+	return value.trim().toLowerCase() === "true";
+}
+
 export class GDDocumentDropEditProvider implements DocumentDropEditProvider {
 	public parser = new SceneParser();
 
@@ -67,12 +73,12 @@ export class GDDocumentDropEditProvider implements DocumentDropEditProvider {
 		const className: string | undefined = dataTransfer.get("godot/class")?.value;
 		if (!className) return undefined;
 
-		const nodePath: string = dataTransfer.get("godot/path")?.value;
-		let relativePath: string = dataTransfer.get("godot/relativePath")?.value;
-		const unique = Boolean(dataTransfer.get("godot/unique")?.value);
-		const label: string = dataTransfer.get("godot/label")?.value;
+		const nodePath: string = dataTransfer.get("godot/path")?.value ?? "";
+		let relativePath: string = dataTransfer.get("godot/relativePath")?.value ?? "";
+		const unique = read_boolean(dataTransfer.get("godot/unique")?.value);
+		const label: string = dataTransfer.get("godot/label")?.value ?? "";
 
-		if (nodePathOfTarget) {
+		if (nodePathOfTarget && nodePath) {
 			const targetPath = path.normalize(path.relative(nodePathOfTarget.path, nodePath));
 			relativePath = targetPath.split(path.sep).join(path.posix.sep);
 		}

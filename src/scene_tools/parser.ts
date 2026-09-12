@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import { TextDocument, Uri, workspace } from "vscode";
 import { SceneNode, Scene, SceneResource } from "./types";
@@ -20,7 +21,10 @@ export class SceneParser {
 
 	public parse_scene(document: TextDocument): Scene {
 		const filePath = document.uri.fsPath;
-		return this.parse_text(filePath, document.getText(), (offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1);
+		const scene = this.parse_text(filePath, document.getText(), (offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1);
+		this.refresh_instanced_scenes(scene, new Set<string>());
+		this.resolve_node_types(scene);
+		return scene;
 	}
 
 	private parse_file(filePath: string): Scene | undefined {
@@ -43,12 +47,14 @@ export class SceneParser {
 
 	private parse_text(filePath: string, text: string, lineAtOffset: (offset: number) => number): Scene {
 		const stats = fs.statSync(filePath);
+		const sourceFingerprint = createHash("sha1").update(text).digest("hex");
 		const existing = this.scenes.get(filePath);
-		if (existing && existing.mtime === stats.mtimeMs) return existing;
+		if (existing && existing.mtime === stats.mtimeMs && existing.sourceFingerprint === sourceFingerprint) return existing;
 
 		const scene = new Scene();
 		scene.path = filePath;
 		scene.mtime = stats.mtimeMs;
+		scene.sourceFingerprint = sourceFingerprint;
 		scene.title = basename(filePath);
 		this.scenes.set(filePath, scene);
 
@@ -102,7 +108,7 @@ export class SceneParser {
 			if (match.index === undefined) continue;
 			const line = match[0];
 			const name = line.match(/name="([^"]+)"/)?.[1] || "unknown";
-			const explicitType = line.match(/type="([^"]+)"/)?.[1];
+			const explicitType = line.match(/type="([^"]+)"/)?.[1] ?? "";
 			let parent = line.match(/parent="([^"]+)"/)?.[1];
 			const instance = line.match(/instance=ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];
 
@@ -134,10 +140,11 @@ export class SceneParser {
 			const parentNode = parent ? nodes[parent] : undefined;
 			const instanceResource = instance ? scene.externalResources.get(instance) : undefined;
 			const instanceScene = instanceResource ? this.load_instanced_scene(filePath, instanceResource.path) : undefined;
-			const inheritedType = explicitType ?? this.resolve_inherited_node_type(parentNode, nodePath, nodes);
-			const type = inheritedType ?? instanceScene?.root?.className ?? "Node";
+			const inheritedType = this.resolve_inherited_node_type(parentNode, nodePath, nodes);
+			const type = explicitType || inheritedType || instanceScene?.root?.className || "Node";
 
 			const node = new SceneNode(name, type);
+			node.explicitType = explicitType;
 			node.path = nodePath;
 			node.description = type;
 			node.relativePath = relativePath;
@@ -166,6 +173,7 @@ export class SceneParser {
 		}
 
 		if (lastResource) lastResource.body = text.slice(lastResource.index).trimEnd();
+		this.resolve_node_types(scene);
 		return scene;
 	}
 
@@ -185,6 +193,47 @@ export class SceneParser {
 		if (resourcePath.startsWith("user://")) return undefined;
 		if (isAbsolute(resourcePath)) return resourcePath;
 		return resolve(dirname(filePath), resourcePath);
+	}
+
+	private refresh_instanced_scenes(scene: Scene, visited: Set<string>): void {
+		const sceneKey = scene.path || scene.title;
+		if (visited.has(sceneKey)) return;
+		visited.add(sceneKey);
+
+		for (const node of scene.nodes.values()) {
+			if (!node.resourcePath || extname(node.resourcePath) !== ".tscn") continue;
+			const resolved = this.resolve_resource_path(scene.path, node.resourcePath);
+			if (!resolved) continue;
+			const refreshed = this.parse_file(resolved);
+			if (refreshed) node.instanceScene = refreshed;
+			if (node.instanceScene) this.refresh_instanced_scenes(node.instanceScene, visited);
+		}
+	}
+
+	private resolve_node_types(scene: Scene): void {
+		const nodes = Object.fromEntries(scene.nodes.entries());
+		for (const node of scene.nodes.values()) {
+			const inheritedType = this.resolve_inherited_node_type(node.parent ? nodes[node.parent] : undefined, node.path, nodes);
+			const instanceType = node.instanceScene?.root?.className;
+			const customType = this.resolve_custom_type(scene, node);
+			const type = customType || node.explicitType || inheritedType || instanceType || "Node";
+			node.setClassName(type);
+			node.description = type;
+		}
+	}
+
+	private resolve_custom_type(scene: Scene, node: SceneNode): string | undefined {
+		if (!node.customTypeScriptUid) return undefined;
+		const resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
+		if (!resource || !resource.path) return undefined;
+		const scriptPath = this.resolve_resource_path(scene.path, resource.path);
+		if (!scriptPath || !fs.existsSync(scriptPath)) return undefined;
+		try {
+			const source = fs.readFileSync(scriptPath, "utf8");
+			return source.match(/^\s*class_name\s+([A-Za-z_]\w*)/m)?.[1];
+		} catch {
+			return undefined;
+		}
 	}
 
 	private resolve_inherited_node_type(parentNode: SceneNode | undefined, nodePath: string, nodes: Record<string, SceneNode>): string | undefined {
@@ -212,10 +261,6 @@ export class SceneParser {
 		const direct = scene.nodes.get(directPath);
 		if (direct) return direct.className;
 
-		// A scene instance can itself be the root of another scene. Treat that
-		// root instance as transparent and continue resolving the requested path
-		// against the referenced scene. This is what makes A -> B -> C scene
-		// chains expose C's concrete child nodes to the outer scene.
 		if (root.instanceScene) {
 			const nestedType = this.find_instanced_node_type(root.instanceScene, relativePath, visited);
 			if (nestedType) return nestedType;

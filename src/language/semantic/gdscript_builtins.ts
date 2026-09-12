@@ -7,7 +7,8 @@ export interface GDScriptBuiltinFunction {
 	description: string;
 }
 
-const BUILTIN_URI = "gdscript://builtin/@GlobalScope";
+const GLOBAL_SCOPE_URI = "gdscript://builtin/@GlobalScope";
+const GDSCRIPT_URI = "gdscript://builtin/@GDScript";
 
 const p = (name: string, type?: string, defaultValue?: string): IndexedParameter => ({ name, type, defaultValue });
 
@@ -81,7 +82,20 @@ const BUILTINS: readonly GDScriptBuiltinFunction[] = [
 	{ name: "assert", parameters: [p("condition", "bool"), p("message", "String", "\"\"")], returnType: "void", description: "Raises an error when condition is false." },
 	{ name: "is_same", parameters: [p("a", "Variant"), p("b", "Variant")], returnType: "bool", description: "Returns whether two Variant values refer to the same object." },
 	{ name: "weakref", parameters: [p("obj", "Object")], returnType: "WeakRef", description: "Creates a weak reference to an object." },
+	{ name: "range", parameters: [p("from", "int"), p("to", "int"), p("step", "int")], returnType: "Array", description: "Returns an array containing a sequence of integers." },
+	{ name: "type_exists", parameters: [p("type", "StringName")], returnType: "bool", description: "Returns whether an Object-derived class exists in ClassDB." },
+	{ name: "get_stack", parameters: [], returnType: "Array", description: "Returns the current GDScript call stack." },
+	{ name: "print_stack", parameters: [], returnType: "void", description: "Prints the current GDScript call stack." },
+	{ name: "convert", parameters: [p("what", "Variant"), p("type", "int")], returnType: "Variant", description: "Converts a value to the requested Variant type." },
+	{ name: "is_instance_of", parameters: [p("value", "Variant"), p("type", "Variant")], returnType: "bool", description: "Returns whether a value is an instance of the given type." },
+	{ name: "dict_to_inst", parameters: [p("dictionary", "Dictionary")], returnType: "Object", description: "Creates an Object instance from a dictionary." },
+	{ name: "inst_to_dict", parameters: [p("instance", "Object")], returnType: "Dictionary", description: "Converts an Object instance to a dictionary." },
 ];
+
+const GDSCRIPT_ONLY = new Set([
+	"assert", "char", "convert", "dict_to_inst", "get_stack", "inst_to_dict", "is_instance_of", "len", "load", "ord",
+	"preload", "print_debug", "print_stack", "range", "type_exists",
+]);
 
 const BY_NAME = new Map(BUILTINS.map((builtin) => [builtin.name, builtin]));
 
@@ -89,15 +103,21 @@ export function getGDScriptBuiltin(name: string): GDScriptBuiltinFunction | unde
 	return BY_NAME.get(name);
 }
 
+export function getGDScriptBuiltinDocumentationClass(name: string): "@GlobalScope" | "@GDScript" {
+	return GDSCRIPT_ONLY.has(name) ? "@GDScript" : "@GlobalScope";
+}
+
 export function getGDScriptBuiltins(prefix = ""): readonly GDScriptBuiltinFunction[] {
 	return BUILTINS.filter((builtin) => builtin.name.startsWith(prefix));
 }
 
 export function builtinToSymbol(builtin: GDScriptBuiltinFunction): IndexedSymbol {
+	const documentationClass = getGDScriptBuiltinDocumentationClass(builtin.name);
+	const uri = documentationClass === "@GDScript" ? GDSCRIPT_URI : GLOBAL_SCOPE_URI;
 	return {
 		name: builtin.name,
 		kind: "function",
-		uri: `${BUILTIN_URI}/${builtin.name}`,
+		uri: `${uri}/${builtin.name}`,
 		range: {
 			start: { line: 0, character: 0, offset: 0 },
 			end: { line: 0, character: builtin.name.length, offset: builtin.name.length },
@@ -108,5 +128,5 @@ export function builtinToSymbol(builtin: GDScriptBuiltinFunction): IndexedSymbol
 }
 
 export function isGDScriptBuiltinUri(uri: string): boolean {
-	return uri.startsWith(`${BUILTIN_URI}/`);
+	return uri.startsWith(`${GLOBAL_SCOPE_URI}/`) || uri.startsWith(`${GDSCRIPT_URI}/`);
 }

@@ -12,7 +12,7 @@ import {
 import { make_docs_uri } from "../utils";
 import { globals } from "../extension";
 import { LanguageService } from "../language/service";
-import { getGDScriptBuiltin } from "../language/semantic/gdscript_builtins";
+import { getGDScriptBuiltin, getGDScriptBuiltinDocumentationClass } from "../language/semantic/gdscript_builtins";
 import type { NativeSymbolInspectParams } from "./documentation_types";
 
 const BUILTIN_DOCUMENTATION_CLASSES = ["@GlobalScope", "@GDScript"] as const;
@@ -57,8 +57,12 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		if (local) return local;
 
 		const word = range ? document.getText(range) : undefined;
-		if (word && getGDScriptBuiltin(word) && globals.docsProvider?.classInfo.has("@GlobalScope")) {
-			return new Location(make_docs_uri("@GlobalScope", word), new Position(0, 0));
+		const builtin = word ? getGDScriptBuiltin(word) : undefined;
+		if (builtin && globals.docsProvider?.classInfo.has("@GlobalScope")) {
+			const documentationClass = getGDScriptBuiltinDocumentationClass(builtin.name);
+			if (globals.docsProvider.classInfo.has(documentationClass)) {
+				return new Location(make_docs_uri(documentationClass, builtin.name), new Position(0, 0));
+			}
 		}
 
 		return this.provideBuiltinSymbolDefinition(document, position, token);
@@ -121,9 +125,6 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			}
 		};
 
-		// A bare method call is normally a method on `self`. Start with the
-		// script's native base class so calls such as `queue_free()` resolve
-		// without probing every native class.
 		const text = document.getText();
 		const extendsMatch = text.match(/(?:^|\n)\s*extends\s+([A-Za-z_][A-Za-z0-9_]*)/);
 		if (extendsMatch) addHierarchy(extendsMatch[1]);
