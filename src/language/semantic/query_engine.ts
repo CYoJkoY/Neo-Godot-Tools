@@ -1,4 +1,5 @@
 import { Binding, BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
+import { InheritedMemberResolver } from "../../index/inherited_member_resolution.js";
 
 export type ResolutionConfidence = "exact" | "inferred" | "partial" | "unknown";
 
@@ -67,13 +68,16 @@ function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
 export class SemanticQueryEngine {
 	private readonly symbolCache = new Map<string, CacheEntry<ResolutionResult<IndexedSymbol>>>();
 	private readonly completionCache = new Map<string, CacheEntry<ResolutionResult<readonly SemanticCompletionItem[]>>>();
+	private readonly inheritedMembers: InheritedMemberResolver;
 
 	constructor(
 		private readonly files: FileIndex,
 		private readonly symbols: SymbolIndex,
 		private readonly bindings: BindingIndex,
 		private readonly types: TypeResolutionIndex,
-	) {}
+	) {
+		this.inheritedMembers = new InheritedMemberResolver(files, symbols);
+	}
 
 	getSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
 		const key = `${uri}:${position.offset}`;
@@ -224,7 +228,7 @@ export class SemanticQueryEngine {
 		if (memberMatch || shorthandMember) {
 			const receiverName = memberMatch?.[1] ?? "self";
 			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
-			const member = receiver ? this.types.getMember(receiver, word.name) : undefined;
+			const member = receiver ? this.inheritedMembers.resolve(receiver.uri ?? "", word.name) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (receiver) return { confidence: "partial" };
 		}
