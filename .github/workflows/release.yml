@@ -13,12 +13,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Validate and package release
+  stable-release:
+    name: Stable release
+    if: ${{ !contains(github.ref_name, '.dev') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       asset: ${{ steps.release.outputs.asset }}
-      development: ${{ steps.release.outputs.development }}
       version: ${{ steps.release.outputs.version }}
 
     steps:
@@ -31,9 +33,10 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Validate TypeScript-only source tree
         shell: bash
@@ -50,37 +53,49 @@ jobs:
       - name: Compile
         run: npm run compile
 
-      - name: Validate release version
+      - name: Validate stable release tag
         id: release
-        run: npx ts-node tools/release.ts "$GITHUB_REF_NAME"
+        run: |
+          npx ts-node tools/release.ts "$GITHUB_REF_NAME"
+          if grep -q '^development=true$' "$GITHUB_OUTPUT"; then
+            echo "A development tag cannot use the stable release channel."
+            exit 1
+          fi
 
-      - name: Package stable release
-        if: steps.release.outputs.development == 'false'
+      - name: Package stable VSIX
         run: npx @vscode/vsce@latest package --out "${{ steps.release.outputs.asset }}"
-
-      - name: Package development release
-        if: steps.release.outputs.development == 'true'
-        run: npx @vscode/vsce@latest package --pre-release --out "${{ steps.release.outputs.asset }}"
 
       - name: Validate VSIX
         run: |
           test -s "${{ steps.release.outputs.asset }}"
           npx @vscode/vsce@latest ls --tree "${{ steps.release.outputs.asset }}"
 
-      - name: Upload VSIX artifact
+      - name: Upload stable VSIX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: neo-godot-tools-${{ steps.release.outputs.version }}-${{ github.ref_name }}
+          name: neo-godot-tools-stable-${{ github.ref_name }}
           path: ${{ steps.release.outputs.asset }}
           if-no-files-found: error
           retention-days: 14
 
-  github-release:
-    name: Create GitHub Release
-    needs: prepare
+      - name: Create stable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.release.outputs.asset }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${ASSET}" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+  development-release:
+    name: Development pre-release
+    if: ${{ contains(github.ref_name, '.dev') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      asset: ${{ steps.release.outputs.asset }}
+      version: ${{ steps.release.outputs.version }}
 
     steps:
       - name: Checkout
@@ -88,24 +103,61 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download VSIX artifact
-        uses: actions/download-artifact@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
-          name: neo-godot-tools-${{ needs.prepare.outputs.version }}-${{ github.ref_name }}
-          path: release
+          node-version: 22
+          cache: npm
 
-      - name: Create GitHub Release
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate TypeScript-only source tree
+        shell: bash
+        run: |
+          if git ls-files -- '*.js' | grep -q .; then
+            echo "Tracked JavaScript source files are not allowed."
+            git ls-files -- '*.js'
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Validate development release tag
+        id: release
+        run: |
+          npx ts-node tools/release.ts "$GITHUB_REF_NAME"
+          if grep -q '^development=false$' "$GITHUB_OUTPUT"; then
+            echo "A stable tag cannot use the development release channel."
+            exit 1
+          fi
+
+      - name: Package development VSIX
+        run: npx @vscode/vsce@latest package --pre-release --out "${{ steps.release.outputs.asset }}"
+
+      - name: Validate VSIX
+        run: |
+          test -s "${{ steps.release.outputs.asset }}"
+          npx @vscode/vsce@latest ls --tree "${{ steps.release.outputs.asset }}"
+
+      - name: Upload development VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neo-godot-tools-development-${{ github.ref_name }}
+          path: ${{ steps.release.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ needs.prepare.outputs.asset }}
+          ASSET: ${{ steps.release.outputs.asset }}
         run: |
-          if [ "${{ needs.prepare.outputs.development }}" = "true" ]; then
-            gh release create "$GITHUB_REF_NAME" "release/$ASSET" \
-              --title "$GITHUB_REF_NAME" \
-              --prerelease \
-              --generate-notes
-          else
-            gh release create "$GITHUB_REF_NAME" "release/$ASSET" \
-              --title "$GITHUB_REF_NAME" \
-              --generate-notes
-          fi
+          gh release create "$GITHUB_REF_NAME" "${ASSET}" \
+            --title "$GITHUB_REF_NAME" \
+            --prerelease \
+            --generate-notes
