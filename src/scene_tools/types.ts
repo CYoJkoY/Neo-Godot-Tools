@@ -54,6 +54,10 @@ export class SceneNode extends TreeItem {
 				this.customTypeScriptUid = value.match(/^"(uid:\/\/[^\"]+)"$/)?.[1] ?? "";
 				this.customTypeScriptId = value.match(/^ExtResource\(\s*"?([^\)"\s]+)"?\s*\)$/)?.[1] ?? "";
 				this.customTypeScriptSubResourceId = value.match(/^SubResource\(\s*"?([^\)"\s]+)"?\s*\)$/)?.[1] ?? "";
+				if (this.customTypeScriptUid || this.customTypeScriptId || this.customTypeScriptSubResourceId) {
+					this.hasScript = true;
+					this.contextValue += "hasScript";
+				}
 			}
 			if (line.startsWith("script = ExtResource")) {
 				this.hasScript = true;
