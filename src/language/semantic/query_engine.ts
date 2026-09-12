@@ -1,4 +1,5 @@
 import { Binding, BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
+import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./builtin_symbols";
 
 export type ResolutionConfidence = "exact" | "inferred" | "partial" | "unknown";
 
@@ -218,6 +219,9 @@ export class SemanticQueryEngine {
 		const word = wordAt(source, position.offset);
 		if (!word) return { confidence: "unknown" };
 
+		const builtin = resolveBuiltinSymbol(word.name);
+		if (builtin) return { value: builtin.symbol, confidence: "exact" };
+
 		const prefix = source.slice(0, word.start);
 		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
 		const shorthandMember = !memberMatch && prefix.endsWith(".");
@@ -279,7 +283,10 @@ export class SemanticQueryEngine {
 		const workspaceItems = this.symbols.workspaceSymbols(completionPrefix)
 			.filter((symbol) => !localNames.has(symbol.name))
 			.map(completionFromSymbol);
-		const items = [...localItems, ...workspaceItems];
+		const builtinItems = resolveBuiltinSymbols(completionPrefix)
+			.filter(({ builtin }) => !localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name))
+			.map(({ symbol }) => completionFromSymbol(symbol));
+		const items = [...localItems, ...workspaceItems, ...builtinItems];
 		if (!items.length) return { confidence: "unknown" };
 		return { value: items, confidence: "exact" };
 	}
