@@ -15,7 +15,7 @@ import { LanguageService } from "../language/service";
 import { resolveBuiltinSymbol } from "../language/semantic/builtin_symbols";
 import type { NativeSymbolInspectParams } from "./documentation_types";
 
-const BUILTIN_DOCUMENTATION_CLASSES = ["@GlobalScope", "@GDScript"] as const;
+const BUILTIN_DOCUMENTATION_CLASSES = ["@GDScript"] as const;
 
 function normalizeNativeSymbolName(value: string): string {
 	const normalized = value.trim().replace(/^func\s+/, "").replace(/\s*->\s*.*$/, "").trim();
@@ -136,8 +136,9 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		}
 
 		if (!className) return undefined;
-		if (!(await this.nativeSymbolExists(className, document.getText(range), token))) return undefined;
-		return new Location(make_docs_uri(className, document.getText(range)), new Position(0, 0));
+		const ownerClass = await this.resolveNativeMemberClass(className, document.getText(range), token);
+		if (!ownerClass) return undefined;
+		return new Location(make_docs_uri(ownerClass, document.getText(range)), new Position(0, 0));
 	}
 
 	private async provideBuiltinSymbolDefinition(
@@ -154,9 +155,8 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		if (!symbolName) return undefined;
 
 		if (explicitClassName && globals.docsProvider?.classInfo.has(explicitClassName)) {
-			if (await this.nativeSymbolExists(explicitClassName, symbolName, token)) {
-				return new Location(make_docs_uri(explicitClassName, symbolName), new Position(0, 0));
-			}
+			const ownerClass = await this.resolveNativeMemberClass(explicitClassName, symbolName, token);
+			if (ownerClass) return new Location(make_docs_uri(ownerClass, symbolName), new Position(0, 0));
 		}
 
 		const builtin = resolveBuiltinSymbol(symbolName);
@@ -165,16 +165,37 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		}
 
 		const receiver = memberReceiver(document, range);
-		if (receiver && globals.docsProvider?.classInfo.has(receiver.name)) {
-			if (await this.nativeSymbolExists(receiver.name, symbolName, token)) {
-				return new Location(make_docs_uri(receiver.name, symbolName), new Position(0, 0));
+		if (receiver) {
+			let receiverClass: string | undefined;
+			if (globals.docsProvider?.classInfo.has(receiver.name)) {
+				receiverClass = receiver.name;
+			} else {
+				const type = this.languageService.types.resolveReceiver(document.uri.toString(), document.offsetAt(receiver.range.start), receiver.name);
+				if (type?.builtin && globals.docsProvider?.classInfo.has(type.name)) receiverClass = type.name;
+			}
+			if (receiverClass) {
+				const ownerClass = await this.resolveNativeMemberClass(receiverClass, symbolName, token);
+				if (ownerClass) return new Location(make_docs_uri(ownerClass, symbolName), new Position(0, 0));
 			}
 		}
 
 		const className = await this.resolveBuiltinSymbolClass(symbolName, document, token);
 		if (!className) return undefined;
-
 		return new Location(make_docs_uri(className, symbolName), new Position(0, 0));
+	}
+
+	private async resolveNativeMemberClass(className: string, symbolName: string, token: CancellationToken): Promise<string | undefined> {
+		const docs = globals.docsProvider;
+		if (!docs || token.isCancellationRequested) return undefined;
+
+		const visited = new Set<string>();
+		let current = className;
+		while (current && !visited.has(current)) {
+			visited.add(current);
+			if (docs.classInfo.has(current) && (await this.nativeSymbolExists(current, symbolName, token))) return current;
+			current = docs.classInfo.get(current)?.inherits ?? "";
+		}
+		return undefined;
 	}
 
 	private async resolveBuiltinSymbolClass(
@@ -182,17 +203,14 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		document: TextDocument,
 		token: CancellationToken,
 	): Promise<string | undefined> {
-		const lsp = globals.lsp?.client;
 		const docs = globals.docsProvider;
-		if (!lsp || !docs || token.isCancellationRequested) return undefined;
+		if (!docs || token.isCancellationRequested) return undefined;
 
 		const candidates = this.nativeClassCandidates(document);
 		for (const nativeClass of candidates) {
 			if (token.isCancellationRequested) return undefined;
-			if (!docs.classInfo.has(nativeClass)) continue;
 			if (await this.nativeSymbolExists(nativeClass, symbolName, token)) return nativeClass;
 		}
-
 		return undefined;
 	}
 

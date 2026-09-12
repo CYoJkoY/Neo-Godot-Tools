@@ -7,7 +7,6 @@ export interface GDScriptBuiltinFunction {
 	description: string;
 }
 
-const GLOBAL_SCOPE_URI = "gdscript://builtin/@GlobalScope";
 const GDSCRIPT_URI = "gdscript://builtin/@GDScript";
 
 const p = (name: string, type?: string, defaultValue?: string): IndexedParameter => ({ name, type, defaultValue });
@@ -92,19 +91,14 @@ const BUILTINS: readonly GDScriptBuiltinFunction[] = [
 	{ name: "inst_to_dict", parameters: [p("instance", "Object")], returnType: "Dictionary", description: "Converts an Object instance to a dictionary." },
 ];
 
-const GDSCRIPT_ONLY = new Set([
-	"assert", "char", "convert", "dict_to_inst", "get_stack", "inst_to_dict", "is_instance_of", "len", "load", "ord",
-	"preload", "print_debug", "print_stack", "range", "type_exists",
-]);
-
 const BY_NAME = new Map(BUILTINS.map((builtin) => [builtin.name, builtin]));
 
 export function getGDScriptBuiltin(name: string): GDScriptBuiltinFunction | undefined {
 	return BY_NAME.get(name);
 }
 
-export function getGDScriptBuiltinDocumentationClass(name: string): "@GlobalScope" | "@GDScript" {
-	return GDSCRIPT_ONLY.has(name) ? "@GDScript" : "@GlobalScope";
+export function getGDScriptBuiltinDocumentationClass(_name: string): "@GDScript" {
+	return "@GDScript";
 }
 
 export function getGDScriptBuiltins(prefix = ""): readonly GDScriptBuiltinFunction[] {
@@ -112,12 +106,10 @@ export function getGDScriptBuiltins(prefix = ""): readonly GDScriptBuiltinFuncti
 }
 
 export function builtinToSymbol(builtin: GDScriptBuiltinFunction): IndexedSymbol {
-	const documentationClass = getGDScriptBuiltinDocumentationClass(builtin.name);
-	const uri = documentationClass === "@GDScript" ? GDSCRIPT_URI : GLOBAL_SCOPE_URI;
 	return {
 		name: builtin.name,
 		kind: "function",
-		uri: `${uri}/${builtin.name}`,
+		uri: `${GDSCRIPT_URI}/${builtin.name}`,
 		range: {
 			start: { line: 0, character: 0, offset: 0 },
 			end: { line: 0, character: builtin.name.length, offset: builtin.name.length },
@@ -128,5 +120,5 @@ export function builtinToSymbol(builtin: GDScriptBuiltinFunction): IndexedSymbol
 }
 
 export function isGDScriptBuiltinUri(uri: string): boolean {
-	return uri.startsWith(`${GLOBAL_SCOPE_URI}/`) || uri.startsWith(`${GDSCRIPT_URI}/`);
+	return uri.startsWith(`${GDSCRIPT_URI}/`);
 }
