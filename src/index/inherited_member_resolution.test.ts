@@ -37,7 +37,7 @@ describe("InheritedMemberResolver", () => {
 		const resolver = createResolver({
 			[BASE_URI]: "class_name Base\nfunc testAA():\n\tpass\n",
 			[MIDDLE_URI]: "class_name Middle\nextends Base\n",
-			[CHILD_URI]: "class_name Child\nextends Middle\nfunc child_method():\n\ttestAA()\n",
+			[CHILD_URI]: "class_name Child\nextends Middle\nfunc child_method():\n\t.testAA()\n",
 		});
 
 		expect(resolver.resolve(CHILD_URI, "testAA")?.uri).toBe(BASE_URI);
@@ -68,13 +68,13 @@ describe("SemanticQueryEngine inherited definitions", () => {
 	const sources = {
 		[BASE_URI]: "class_name Base\nfunc testAA():\n\tpass\n",
 		[MIDDLE_URI]: "class_name Middle\nextends Base\n",
-		[CHILD_URI]: "class_name Child\nextends Middle\nfunc child_method():\n\ttestAA()\n\tself.testAA()\n\tvar object: Child\n\tobject.testAA()\n",
+		[CHILD_URI]: "class_name Child\nextends Middle\nfunc child_method():\n\t.testAA()\n\tself.testAA()\n\tvar object: Child\n\tobject.testAA()\n",
 	};
 
 	it("resolves shorthand .foo() calls to the inherited declaration", () => {
 		const semantic = createSemantic(sources);
 		const source = sources[CHILD_URI];
-		const offset = source.indexOf("testAA()") + 1;
+		const offset = source.indexOf(".testAA()") + 2;
 		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(BASE_URI);
 	});
 
@@ -99,7 +99,7 @@ describe("SemanticQueryEngine inherited definitions", () => {
 		};
 		const semantic = createSemantic(overrideSources);
 		const source = overrideSources[CHILD_URI];
-		const offset = source.indexOf("testAA()") + 1;
+		const offset = source.indexOf(".testAA()") + 2;
 		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(MIDDLE_URI);
 	});
 });
