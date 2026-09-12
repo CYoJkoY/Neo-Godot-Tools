@@ -9,7 +9,7 @@ export class InspectorProvider implements TreeDataProvider<RemoteProperty> {
 	public view: TreeView<RemoteProperty>;
 
 	constructor() {
-		this.view = window.createTreeView("godotTools.nodeInspector", {
+		this.view = window.createTreeView("neoGodotTools.nodeInspector", {
 			treeDataProvider: this,
 		});
 	}
