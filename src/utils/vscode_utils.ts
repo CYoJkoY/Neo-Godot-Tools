@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 const EXTENSION_PREFIX = "godotTools";
+const COMMAND_PREFIX = "neoGodotTools";
 
 export function get_configuration(name: string, defaultValue?: any) {
 	const configValue = vscode.workspace.getConfiguration(EXTENSION_PREFIX).get(name, null);
@@ -21,7 +22,7 @@ export function set_context(name: string, value: any) {
 }
 
 export function register_command(command: string, callback: (...args: any[]) => any, thisArg?: any): vscode.Disposable {
-	return vscode.commands.registerCommand(`${EXTENSION_PREFIX}.${command}`, callback, thisArg);
+	return vscode.commands.registerCommand(`${COMMAND_PREFIX}.${command}`, callback, thisArg);
 }
 
 export function get_extension_uri(...paths: string[]) {
