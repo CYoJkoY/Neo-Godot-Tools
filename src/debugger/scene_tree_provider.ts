@@ -12,7 +12,7 @@ export class SceneTreeProvider implements TreeDataProvider<SceneNode> {
 	public view: TreeView<SceneNode>;
 
 	constructor() {
-		this.view = window.createTreeView("godotTools.activeSceneTree", {
+		this.view = window.createTreeView("neoGodotTools.activeSceneTree", {
 			treeDataProvider: this,
 		});
 	}
