@@ -212,6 +212,15 @@ export class SceneParser {
 		const direct = scene.nodes.get(directPath);
 		if (direct) return direct.className;
 
+		// A scene instance can itself be the root of another scene. Treat that
+		// root instance as transparent and continue resolving the requested path
+		// against the referenced scene. This is what makes A -> B -> C scene
+		// chains expose C's concrete child nodes to the outer scene.
+		if (root.instanceScene) {
+			const nestedType = this.find_instanced_node_type(root.instanceScene, relativePath, visited);
+			if (nestedType) return nestedType;
+		}
+
 		const segments = relativePath.split("/").filter(Boolean);
 		let currentPath = root.path;
 		for (let index = 0; index < segments.length; index++) {
