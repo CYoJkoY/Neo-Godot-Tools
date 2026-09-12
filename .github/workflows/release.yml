@@ -116,6 +116,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.development == 'false'
     runs-on: ubuntu-latest
+    environment: marketplace
     permissions:
       contents: read
       id-token: write
@@ -140,7 +141,7 @@ jobs:
         run: |
           if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ]; then
             echo "Microsoft Entra ID workload identity configuration is incomplete."
-            echo "Required repository secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID."
+            echo "Required repository or environment secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID."
             exit 1
           fi
 
