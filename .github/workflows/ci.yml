@@ -12,6 +12,9 @@ jobs:
           - os: ubuntu-latest
             godot_version: "3.6.2"
             godot_major: 3
+          - os: windows-latest
+            godot_version: "3.6.2"
+            godot_major: 3
           - os: ubuntu-latest
             godot_version: "4.7"
             godot_major: 4
@@ -77,7 +80,13 @@ jobs:
       - name: Validate Godot 3.6.2 project
         if: matrix.godot_major == 3
         working-directory: test_projects/test-smoke-project-godot3
-        run: xvfb-run --auto-servernum fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            xvfb-run --auto-servernum fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
+          else
+            fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
+          fi
         env:
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
