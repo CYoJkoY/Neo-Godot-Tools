@@ -78,15 +78,24 @@ jobs:
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
       - name: Validate Godot 3.6.2 project
-        if: matrix.godot_major == 3
+        if: matrix.godot_major == 3 && matrix.os == 'ubuntu-latest'
         working-directory: test_projects/test-smoke-project-godot3
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            xvfb-run --auto-servernum fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
-          else
-            fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
-          fi
+          xvfb-run --auto-servernum fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
+        env:
+          FGVM_HOME: ${{ runner.temp }}/fgvm
+
+      - name: Validate Godot 3.6.2 project
+        if: matrix.godot_major == 3 && matrix.os == 'windows-latest'
+        working-directory: test_projects/test-smoke-project-godot3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Godot 3.6.2 validation failed with exit code $LASTEXITCODE."
+          }
         env:
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
