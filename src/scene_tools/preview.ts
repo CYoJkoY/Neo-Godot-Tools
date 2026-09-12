@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import * as vscode from "vscode";
 import {
 	type CancellationToken,
@@ -125,7 +126,6 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 		if (editor) {
 			let fileName = editor.document.uri.fsPath;
 			const mode = get_configuration("scenePreview.previewRelatedScenes");
-			// attempt to find related scene
 			if (!fileName.endsWith(".tscn")) {
 				const searchName = fileName.replace(".gd", ".tscn").replace(".cs", ".tscn");
 
@@ -148,7 +148,6 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 					return;
 				}
 			}
-			// don't attempt to parse non-scenes
 			if (!fileName.endsWith(".tscn")) {
 				return;
 			}
@@ -210,7 +209,7 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 			return;
 		}
 
-		const uri = await convert_resource_path_to_uri(resource.path);
+		const uri = this.resolve_resource_uri(this.scene?.path, resource.path);
 		if (!uri) {
 			log.debug(`Unable to resolve script resource path '${resource.path}' for '${item.path}'.`);
 			return;
@@ -271,6 +270,24 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 		return visit(scene, item);
 	}
 
+	private resolve_resource_uri(scenePath: string | undefined, resourcePath: string): vscode.Uri | undefined {
+		if (!scenePath || !resourcePath) return undefined;
+
+		if (resourcePath.startsWith("res://")) {
+			const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(scenePath));
+			if (!folder) return undefined;
+			const filePath = resolve(folder.uri.fsPath, resourcePath.slice("res://".length));
+			return fs.existsSync(filePath) ? vscode.Uri.file(filePath) : undefined;
+		}
+
+		if (resourcePath.startsWith("user://")) return undefined;
+
+		const filePath = isAbsolute(resourcePath)
+			? resourcePath
+			: resolve(dirname(scenePath), resourcePath);
+		return fs.existsSync(filePath) ? vscode.Uri.file(filePath) : undefined;
+	}
+
 	private async open_current_scene() {
 		if (this.currentScene) {
 			const document = await vscode.workspace.openTextDocument(this.currentScene);
@@ -290,9 +307,9 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 			return;
 		}
 
-		const uri = await convert_resource_path_to_uri(resource.path);
+		const uri = this.resolve_resource_uri(this.scene.path, resource.path);
 		if (!uri) {
-			log.debug(`Unable to resolve main script resource path '${resource.path}'.`);
+			log.debug(`Unable to resolve main script resource path '${resource.path}' for scene '${this.scene.path}'.`);
 			return;
 		}
 		await vscode.window.showTextDocument(uri, { preview: true });
@@ -311,18 +328,8 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	}
 
 	private tree_selection_changed(event: vscode.TreeViewSelectionChangeEvent<SceneNode>) {
-		// const item = event.selection[0];
-		// log(item.body);
-		// const editor = vscode.window.activeTextEditor;
-		// const range = editor.document.getText()
-		// editor.revealRange(range)
 	}
 
-	/**
-	 * Scene Preview is an effective-tree view, not a view of raw [node] records.
-	 * Parent paths are authoritative because a TSCN can override a child of a
-	 * PackedScene instance before the inherited parent has been materialized.
-	 */
 	private get_scene_children(element?: SceneNode): SceneNode[] {
 		if (!this.scene?.root) return [];
 		if (!element) return [this.scene.root];
