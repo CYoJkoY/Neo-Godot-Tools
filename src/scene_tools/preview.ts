@@ -201,7 +201,7 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	}
 
 	private async open_script(item: SceneNode) {
-		const resource = this.resolve_script_resource(item);
+		const resource = this.resolve_script_resource(this.scene, item);
 		if (!resource?.path) {
 			log.debug(`No script resource found for Scene Preview node '${item.path}'.`);
 			return;
@@ -215,38 +215,57 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
-	private resolve_script_resource(item: SceneNode) {
-		if (!this.scene) return undefined;
+	private resolve_script_resource(scene: Scene | undefined, item: SceneNode): { path: string } | undefined {
+		if (!scene) return undefined;
 
-		if (item.scriptId) {
-			const resource = this.scene.externalResources.get(item.scriptId);
-			if (resource) return resource;
-		}
-
-		if (item.customTypeScriptId) {
-			const resource = this.scene.externalResources.get(item.customTypeScriptId);
-			if (resource) return resource;
-		}
-
-		if (item.customTypeScriptUid) {
-			const resource = [...this.scene.externalResources.values()].find(
-				(resource) => resource.uid === item.customTypeScriptUid,
-			);
-			if (resource) return resource;
-		}
-
-		if (item.customTypeScriptSubResourceId) {
-			const subResource = this.scene.subResources.get(item.customTypeScriptSubResourceId);
-			const scriptId = subResource?.body.match(
-				/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/,
-			)?.[1];
-			if (scriptId) {
-				const resource = this.scene.externalResources.get(scriptId);
-				if (resource) return resource;
+		const findDirect = (source: Scene, node: SceneNode): { path: string } | undefined => {
+			if (node.scriptId) {
+				const resource = source.externalResources.get(node.scriptId);
+				if (resource?.path) return resource;
 			}
-		}
 
-		return undefined;
+			if (node.customTypeScriptId) {
+				const resource = source.externalResources.get(node.customTypeScriptId);
+				if (resource?.path) return resource;
+			}
+
+			if (node.customTypeScriptUid) {
+				const resource = [...source.externalResources.values()].find(
+					(resource) => resource.uid === node.customTypeScriptUid,
+				);
+				if (resource?.path) return resource;
+			}
+
+			if (node.customTypeScriptSubResourceId) {
+				const subResource = source.subResources.get(node.customTypeScriptSubResourceId);
+				const scriptId = subResource?.body.match(
+					/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/,
+				)?.[1];
+				if (scriptId) {
+					const resource = source.externalResources.get(scriptId);
+					if (resource?.path) return resource;
+				}
+			}
+			return undefined;
+		};
+
+		const visited = new Set<string>();
+		const visit = (currentScene: Scene, currentNode: SceneNode): { path: string } | undefined => {
+			const key = `${currentScene.path}:${currentNode.path}`;
+			if (visited.has(key)) return undefined;
+			visited.add(key);
+
+			const direct = findDirect(currentScene, currentNode);
+			if (direct) return direct;
+
+			if (currentNode.instanceScene?.root) {
+				const nested = visit(currentNode.instanceScene, currentNode.instanceScene.root);
+				if (nested) return nested;
+			}
+			return undefined;
+		};
+
+		return visit(scene, item);
 	}
 
 	private async open_current_scene() {
@@ -257,18 +276,23 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	}
 
 	private async open_main_script() {
-		if (!this.scene?.root?.hasScript) {
+		const root = this.scene?.root;
+		if (!this.scene || !root) {
 			return;
 		}
-		const path = this.scene.externalResources.get(this.scene.root.scriptId)?.path;
-		if (!path) {
+
+		const resource = this.resolve_script_resource(this.scene, root);
+		if (!resource?.path) {
+			log.debug(`No main script found for Scene Preview scene '${this.scene.path}'.`);
 			return;
 		}
-		const uri = await convert_resource_path_to_uri(path);
+
+		const uri = await convert_resource_path_to_uri(resource.path);
 		if (!uri) {
+			log.debug(`Unable to resolve main script resource path '${resource.path}'.`);
 			return;
 		}
-		vscode.window.showTextDocument(uri, { preview: true });
+		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
 	private async go_to_definition(item: SceneNode) {
@@ -291,18 +315,25 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 		// editor.revealRange(range)
 	}
 
+	/**
+	 * Scene Preview is an effective-tree view, not a view of raw [node] records.
+	 * Parent paths are authoritative because a TSCN can override a child of a
+	 * PackedScene instance before the inherited parent has been materialized.
+	 */
+	private get_scene_children(element?: SceneNode): SceneNode[] {
+		if (!this.scene?.root) return [];
+		const parentPath = element?.path ?? "";
+		return [...this.scene.nodes.values()].filter(
+			(node) => node !== this.scene?.root && node.parent === parentPath,
+		);
+	}
+
 	public async getChildren(element?: SceneNode): Promise<SceneNode[]> {
-		if (!element) {
-			if (!this.scene?.root) {
-				return [];
-			}
-			return [this.scene.root];
-		}
-		return element.children;
+		return this.get_scene_children(element);
 	}
 
 	public getTreeItem(element: SceneNode): TreeItem | Thenable<TreeItem> {
-		if (element.children.length > 0) {
+		if (this.get_scene_children(element).length > 0) {
 			element.collapsibleState = TreeItemCollapsibleState.Expanded;
 		} else {
 			element.collapsibleState = TreeItemCollapsibleState.None;

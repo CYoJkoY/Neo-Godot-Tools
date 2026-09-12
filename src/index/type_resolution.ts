@@ -152,6 +152,10 @@ export class TypeResolutionIndex {
 	}
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
 		if (name === "self") return { name: "self", uri, builtin: false };
+		if (name === "super") {
+			const file = this.files.get(uri);
+			return file ? this.resolveExtends(file.ast.declarations) : undefined;
+		}
 		const binding = this.bindings.getBinding(uri, offset, name);
 		if (binding) { const type = this.resolveBinding(binding, offset); if (type) return type; }
 		return this.resolveInitializerType(uri, name, offset, new Set<string>());
