@@ -59,7 +59,7 @@ Godot 3.2 or later.
 
 # Download
 
-- [Visual Studio Marketplace **(recommended)**](https://marketplace.visualstudio.com/items?itemName=geequlim.godot-tools)
+- [Visual Studio Marketplace **(recommended)**](https://marketplace.visualstudio.com/items?itemName=CYoJkoY.neo-godot-tools)
   - Stable release, with support for automatic updates.
 - [GitHub Releases](https://github.com/CYoJkoY/Neo-Godot-Tools/releases)
   - Stable release, but no automatic updates. Can be useful if you need to install an older version of the extension.
@@ -72,7 +72,7 @@ in the Visual Studio Code documentation.
 
 # Commands
 
-The extension adds a few entries to the VS Code Command Palette under "Godot Tools":
+The extension adds its commands to the VS Code Command Palette under **"Neo Godot Tools"**.
 
 - Open workspace with Godot editor
 - List Godot's native classes (and open their documentation)
@@ -102,16 +102,16 @@ You can make Godot seamlessly reload VSCode-edited scripts by changing some addi
 
 ### VS Code
 
-You can use the following settings to configure Godot Tools:
+You can use the following settings to configure Neo Godot Tools:
 
-- `godotTools.editorPath.godot3`
-- `godotTools.editorPath.godot4`
+- `neoGodotTools.editorPath.godot3`
+- `neoGodotTools.editorPath.godot4`
 
 The path to the Godot editor executable. _Under Mac OS, this is the executable inside of Godot.app._
 
-- `godotTools.lsp.headless`
+- `neoGodotTools.lsp.headless`
 
-When using Godot >3.6 or >4.2, Headless LSP mode is available. In Headless mode, the extension will attempt to launch a windowless instance of the Godot editor to use as its Language Server.
+When using Godot >3.6 or >4.2, Headless LSP mode is available. In Headless mode, Neo Godot Tools will attempt to launch a windowless instance of the Godot editor to use as its Language Server.
 
 # GDScript Debugger
 
@@ -234,7 +234,7 @@ Godot has some Editor Settings that can help you if your workflow involves chang
 
 ### I'm using Linux and the drag + shift drop isn't working. Why?
 
-Most likely you're using Wayland as display server, and there's a limitation of support in VS Code. 
-In the exec flags, modify the snippet from `{project} --goto {file}:{line}:{col}` to 
+Most likely you're using Wayland as display server, and there's a limitation of support in VS Code.
+In the exec flags, modify the snippet from `{project} --goto {file}:{line}:{col}` to
 `{project} --goto {file}:{line}:{col} --ozone-platform=x11`, which will force VS Code to run
 through XWayland, where it works.

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-const EXTENSION_PREFIX = "godotTools";
+const EXTENSION_PREFIX = "neoGodotTools";
 const COMMAND_PREFIX = "neoGodotTools";
 
 export function get_configuration(name: string, defaultValue?: any) {
@@ -26,9 +26,9 @@ export function register_command(command: string, callback: (...args: any[]) => 
 }
 
 export function get_extension_uri(...paths: string[]) {
-	const extension = vscode.extensions.getExtension("geequlim.godot-tools");
+	const extension = vscode.extensions.getExtension("CYoJkoY.neo-godot-tools");
 	if (!extension) {
-		throw new Error("Extension 'geequlim.godot-tools' not found");
+		throw new Error("Extension 'CYoJkoY.neo-godot-tools' not found");
 	}
 	return vscode.Uri.joinPath(extension.extensionUri, ...paths);
 }
