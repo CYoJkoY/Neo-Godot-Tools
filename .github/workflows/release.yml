@@ -57,16 +57,16 @@ jobs:
 
       - name: Package stable release
         if: steps.release.outputs.development == 'false'
-        run: npx @vscode/vsce@latest package --out "${{ steps.release.outputs.asset }}"
+        run: npx @vscode/vsce@3.9.3-12 package --out "${{ steps.release.outputs.asset }}"
 
       - name: Package development release
         if: steps.release.outputs.development == 'true'
-        run: npx @vscode/vsce@latest package --pre-release --out "${{ steps.release.outputs.asset }}"
+        run: npx @vscode/vsce@3.9.3-12 package --pre-release --out "${{ steps.release.outputs.asset }}"
 
       - name: Validate VSIX
         run: |
           test -s "${{ steps.release.outputs.asset }}"
-          npx @vscode/vsce@latest ls --tree "${{ steps.release.outputs.asset }}"
+          npx @vscode/vsce@3.9.3-12 ls --tree "${{ steps.release.outputs.asset }}"
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
@@ -135,4 +135,4 @@ jobs:
       - name: Publish to Visual Studio Marketplace
         env:
           ASSET: ${{ needs.prepare.outputs.asset }}
-        run: npx @vscode/vsce@latest publish --oidc --packagePath "release/$ASSET"
+        run: npx @vscode/vsce@3.9.3-12 publish --oidc --packagePath "release/$ASSET"
