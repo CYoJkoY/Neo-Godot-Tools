@@ -20,6 +20,8 @@ export class SceneNode extends TreeItem {
 	public unique = false;
 	public hasScript = false;
 	public scriptId = "";
+	public customTypeScriptUid = "";
+	public explicitType = "";
 	public children: SceneNode[] = [];
 	public instanceScene?: Scene;
 
@@ -29,13 +31,13 @@ export class SceneNode extends TreeItem {
 		public collapsibleState?: TreeItemCollapsibleState,
 	) {
 		super(label, collapsibleState);
+		this.update_icon();
+	}
 
-		const iconName = `${className}.svg`;
-
-		this.iconPath = {
-			light: Uri.file(path.join(iconDir, "light", iconName)),
-			dark: Uri.file(path.join(iconDir, "dark", iconName)),
-		};
+	public setClassName(className: string): void {
+		if (this.className === className) return;
+		this.className = className;
+		this.update_icon();
 	}
 
 	public parse_body() {
@@ -45,9 +47,12 @@ export class SceneNode extends TreeItem {
 			let line = lines[i];
 			if (line.startsWith("tile_data")) line = "tile_data = PoolIntArray(...)";
 			if (line.startsWith("unique_name_in_owner = true")) this.unique = true;
+			if (line.startsWith("metadata/_custom_type_script = ")) {
+				this.customTypeScriptUid = line.match(/metadata\/_custom_type_script\s*=\s*"([^"]+)"/)?.[1] ?? "";
+			}
 			if (line.startsWith("script = ExtResource")) {
 				this.hasScript = true;
-				this.scriptId = line.match(/script = ExtResource\(\s*"?([\w]+)"?\s*\)/)?.[1] ?? "";
+				this.scriptId = line.match(/script = ExtResource\(\s*"?([\w.-]+)"?\s*\)/)?.[1] ?? "";
 				this.contextValue += "hasScript";
 			}
 			if (line !== "") newLines.push(line);
@@ -56,6 +61,14 @@ export class SceneNode extends TreeItem {
 		const content = new MarkdownString();
 		content.appendCodeblock(this.body, "gdresource");
 		this.tooltip = content;
+	}
+
+	private update_icon(): void {
+		const iconName = `${this.className}.svg`;
+		this.iconPath = {
+			light: Uri.file(path.join(iconDir, "light", iconName)),
+			dark: Uri.file(path.join(iconDir, "dark", iconName)),
+		};
 	}
 }
 
@@ -73,6 +86,7 @@ export class Scene {
 	public path: string;
 	public title: string;
 	public mtime: number;
+	public sourceFingerprint = "";
 	public root: SceneNode | undefined;
 	public externalResources: Map<string, GDResource> = new Map();
 	public subResources: Map<string, GDResource> = new Map();
