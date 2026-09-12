@@ -6,8 +6,8 @@
   "description": "Godot development tools for VS Code with local-first GDScript intelligence, documentation, debugging, and Godot LSP integration.",
   "repository": { "type": "git", "url": "https://github.com/CYoJkoY/Neo-Godot-Tools.git" },
   "bugs": { "url": "https://github.com/CYoJkoY/Neo-Godot-Tools/issues" },
-  "license": "MIT",
-  "author": "The Godot Engine community",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "CYoJkoY",
   "publisher": "CYoJkoY",
   "engines": { "vscode": "^1.96.0" },
   "categories": ["Programming Languages", "Linters", "Snippets", "Debuggers", "Formatters", "Other"],
@@ -72,7 +72,7 @@
         "neoGodotTools.editor.revealTerminal": { "type": "boolean", "default": true, "description": "Whether to reveal the terminal when launching the Godot Editor" },
         "neoGodotTools.formatter.maxEmptyLines": { "type": "number", "default": 2, "minimum": 0, "description": "Number of empty lines allowed anywhere in the file" },
         "neoGodotTools.formatter.denseFunctionParameters": { "type": "boolean", "default": false, "description": "Whether extra space should be removed from function parameter lists" },
-        "neoGodotTools.formatter.spacesBeforeEndOfLineComment": { "type": "string", "enum": ["1", "2"], "enumDescriptions": ["1 space before EOL comments # Like this.", "2 spaces before EOL comments  # Like this."], "default": "1", "description": "Number of spaces before an end-of-line comment" },
+        "neoGodotTools.formatter.spacesBeforeEndOfLineComment": { "type": "string", "enum": ["1", "2"], "enumDescriptions": ["1 space before EOL comments # Like this.", "2 spaces before EOL comments  # Like this."], "default": "1", "description": "Number of spaces before an end-of-line comment" },
         "neoGodotTools.lsp.serverHost": { "type": "string", "default": "127.0.0.1", "description": "The server host of the GDScript language server" },
         "neoGodotTools.lsp.serverPort": { "type": "number", "default": 6008, "minimum": 0, "maximum": 65535, "description": "The server port of the GDScript language server" },
         "neoGodotTools.lsp.headless": { "type": "boolean", "default": false, "description": "Whether to launch the LSP as a headless child process" },
@@ -203,5 +203,6 @@
     "@vscode/debugadapter": "^1.68.0", "@vscode/debugprotocol": "^1.68.0", "await-notify": "^1.0.1", "bbcode-to-ansi": "^1.0.0", "global": "^4.4.0", "marked": "^4.0.11", "net": "^1.0.2", "prismjs": "^1.30.0", "terminate": "^2.5.0", "vscode-languageclient": "^9.0.1", "vscode-oniguruma": "^2.0.0", "vscode-textmate": "^9.0.0", "ws": "^8.17.1", "ya-bbcode": "^4.0.0" },
   "homepage": "https://github.com/CYoJkoY/Neo-Godot-Tools",
   "keywords": ["godot", "gdscript", "game development", "language server", "debugger", "code completion", "go to definition", "intellisense"],
-  "pricing": "Free"
+  "pricing": "Free",
+  "sponsor": { "url": "https://cyojkoy.github.io/Payment/" }
 }

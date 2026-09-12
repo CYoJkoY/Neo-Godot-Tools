@@ -56,7 +56,7 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const settingKey = isGodot3 ? "godotTools.editorPath.godot3" : "godotTools.editorPath.godot4";
+	const settingKey = isGodot3 ? "neoGodotTools.editorPath.godot3" : "neoGodotTools.editorPath.godot4";
 	write_test_settings(TEST_PROJECT_GODOT4, settingKey, binaryPath);
 
 	console.log("Compiling extension...");
