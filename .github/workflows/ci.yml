@@ -18,18 +18,21 @@ jobs:
           - os: windows-latest
             godot_version: "4.7"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 22.x
+          node-version: 24
+          package-manager-cache: false
 
       - name: Install fgvm (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          set -euo pipefail
           curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors -o fgvm-linux-x64.tar.gz https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-linux-x64.tar.gz
           tar -xzf fgvm-linux-x64.tar.gz
           chmod +x fgvm
@@ -39,6 +42,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           curl.exe --fail --location --retry 5 --retry-delay 3 --retry-all-errors --output fgvm.zip https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-win-x64.zip
           Expand-Archive -Path "fgvm.zip" -DestinationPath "C:\fgvm"
           "C:\fgvm" | Out-File -Encoding ascii -FilePath $env:GITHUB_PATH -Append
@@ -55,11 +59,12 @@ jobs:
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Run tests against Godot ${{ matrix.godot_version }}
         shell: bash
         run: |
+          set -euo pipefail
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             xvfb-run --auto-servernum npm run test:engine -- ${{ matrix.godot_version }}
           else
@@ -72,17 +77,20 @@ jobs:
   godot3-smoke:
     name: Godot 3.6.2 smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 22.x
+          node-version: 24
+          package-manager-cache: false
 
       - name: Install fgvm
         run: |
+          set -euo pipefail
           curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors -o fgvm-linux-x64.tar.gz https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-linux-x64.tar.gz
           tar -xzf fgvm-linux-x64.tar.gz
           chmod +x fgvm
@@ -100,7 +108,7 @@ jobs:
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Compile extension
         run: npm run compile
@@ -114,21 +122,24 @@ jobs:
   build:
     name: Build extension
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 22.x
+          node-version: 24
+          package-manager-cache: false
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Reject tracked JavaScript source
         shell: bash
         run: |
+          set -euo pipefail
           if git ls-files -- '*.js' | grep -q .; then
             echo "Tracked JavaScript source files are not allowed."
             git ls-files -- '*.js'
@@ -137,6 +148,7 @@ jobs:
 
       - name: Lint and build extension
         run: |
+          set -euo pipefail
           npm run lint
           npm run compile
           npx @vscode/vsce@latest package --out neo-godot-tools.vsix
