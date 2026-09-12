@@ -4,19 +4,20 @@ on: [push, pull_request]
 
 jobs:
   test:
-    name: Test
+    name: Test Godot ${{ matrix.godot_version }} (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            godot_version: "4.5.1"
+            godot_version: "3.6.2"
+            godot_major: 3
           - os: ubuntu-latest
             godot_version: "4.7"
-          - os: windows-latest
-            godot_version: "4.5.1"
+            godot_major: 4
           - os: windows-latest
             godot_version: "4.7"
+            godot_major: 4
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -57,7 +58,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run tests against Godot ${{ matrix.godot_version }}
+      - name: Compile extension
+        run: npm run compile
+
+      - name: Run Godot 4 tests
+        if: matrix.godot_major == 4
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
@@ -69,45 +74,10 @@ jobs:
           NEO_GODOT_TOOLS_DEBUG: "false"
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
-  godot3-smoke:
-    name: Godot 3.6.2 smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22.x
-
-      - name: Install fgvm
-        run: |
-          curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors -o fgvm-linux-x64.tar.gz https://github.com/patricktcoakley/fgvm/releases/latest/download/fgvm-linux-x64.tar.gz
-          tar -xzf fgvm-linux-x64.tar.gz
-          chmod +x fgvm
-          sudo mv fgvm /usr/local/bin/fgvm
-
-      - name: Cache Godot 3.6.2
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/fgvm/installations
-          key: fgvm-ubuntu-godot-3.6.2
-
-      - name: Install Godot 3.6.2
-        run: fgvm install 3.6.2
-        env:
-          FGVM_HOME: ${{ runner.temp }}/fgvm
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Compile extension
-        run: npm run compile
-
-      - name: Smoke-test Godot 3.6.2 project
+      - name: Validate Godot 3.6.2 project
+        if: matrix.godot_major == 3
         working-directory: test_projects/test-smoke-project-godot3
-        run: xvfb-run --auto-servernum fgvm godot --query "3.6.2" --args "--headless --editor --quit"
+        run: xvfb-run --auto-servernum fgvm godot --query "${{ matrix.godot_version }}" --args "--headless --editor --quit"
         env:
           FGVM_HOME: ${{ runner.temp }}/fgvm
 
