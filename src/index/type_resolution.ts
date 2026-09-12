@@ -119,6 +119,14 @@ function collectBodyStatements(source: string, bodyRange: GDScriptFunction["body
 	return result;
 }
 
+function normalizeScriptReference(value: string): string {
+	const trimmed = value.trim();
+	const unquoted = ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
+		? trimmed.slice(1, -1)
+		: trimmed;
+	return unquoted.replace(/\\/g, "/");
+}
+
 export class TypeResolutionIndex {
 	private readonly nameCache = new Map<string, { signature: string; value: ResolvedType | null }>();
 	private readonly memberCache = new Map<string, { signature: string; members: IndexedSymbol[] }>();
@@ -197,10 +205,11 @@ export class TypeResolutionIndex {
 	private resolveExtends(declarations: GDScriptDeclaration[]): ResolvedType | undefined {
 		const declaration = declarations.find((item) => item.kind === "extends");
 		if (!declaration || declaration.kind !== "extends") return undefined;
-		return declaration.name.startsWith("res://") ? this.resolveScriptPath(declaration.name) : this.resolveName(declaration.name);
+		const reference = normalizeScriptReference(declaration.name);
+		return reference.startsWith("res://") || reference.endsWith(".gd") ? this.resolveScriptPath(reference) : this.resolveName(reference);
 	}
 	private resolveScriptPath(value: string): ResolvedType | undefined {
-		const path = value.replace(/^res:\/\//, "").replace(/\\/g, "/").replace(/^\/+/, "");
+		const path = normalizeScriptReference(value).replace(/^res:\/\//, "").replace(/^\/+/, "");
 		const matches = [...this.files.values()].filter((file) => {
 			try { return decodeURIComponent(new URL(file.uri).pathname).replace(/^\/+/, "").endsWith(path); }
 			catch { return file.uri.endsWith(path); }
