@@ -88,7 +88,7 @@ export class SceneParser {
 			const type = line.match(/type="([^"]+)"/)?.[1] ?? "";
 			const resPath = line.match(/path="([^"]+)"/)?.[1] ?? "";
 			const uid = line.match(/uid="([^"]+)"/)?.[1] ?? "";
-			const id = line.match(/\bid="?([^"\s]+)"?/)?.[1] ?? "";
+			const id = line.match(/\bid\s*=\s*"?([^"\s\]]+)"?/)?.[1] ?? "";
 
 			if (id && match.index !== undefined) {
 				scene.externalResources.set(id, {
@@ -110,7 +110,7 @@ export class SceneParser {
 			const type = line.match(/type="([^"]+)"/)?.[1] ?? "";
 			const resPath = line.match(/path="([^"]+)"/)?.[1] ?? "";
 			const uid = line.match(/uid="([^"]+)"/)?.[1] ?? "";
-			const id = line.match(/\bid="?([^"\s]+)"?/)?.[1] ?? "";
+			const id = line.match(/\bid\s*=\s*"?([^"\s\]]+)"?/)?.[1] ?? "";
 			const resource: SceneResource = {
 				path: resPath,
 				type,
