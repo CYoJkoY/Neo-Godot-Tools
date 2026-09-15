@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { attemptSettingsUpdate, get_extension_uri, clean_godot_path } from "./utils";
+import { attemptSettingsUpdate, clean_godot_path } from "./utils";
 import {
 	GDInlayHintsProvider, GDHoverProvider, GDDocumentDropEditProvider, GDDocumentLinkProvider,
 	GDSemanticTokensProvider, GDCompletionItemProvider, GDDocumentationProvider, GDDefinitionProvider,
