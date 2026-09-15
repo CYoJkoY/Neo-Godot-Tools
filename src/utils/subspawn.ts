@@ -27,7 +27,7 @@ export function killSubProcesses(owner: string) {
 					execSync(`taskkill /pid ${c.pid} /T /F`);
 				} else if (process.platform === "darwin") {
 					execSync(`kill -9 ${c.pid}`);
-			} else {
+				} else {
 					process.kill(-c.pid);
 				}
 			}
@@ -53,15 +53,28 @@ process.on("SIGINT", gracefulExitHandler);
 process.on("SIGTERM", gracefulExitHandler);
 process.on("SIGQUIT", gracefulExitHandler);
 
+function cleanQuotes(value: string): string {
+	return value.replace(/^["']|["']$/g, "");
+}
+
+function quoteWindowsStartArg(value: string): string {
+	const cleaned = cleanQuotes(value);
+	return `"${cleaned.replace(/"/g, '""')}"`;
+}
+
 function prepareSpawn(owner: string, command: string, options: SpawnOptionsWithoutStdio, args: readonly string[]) {
 	if (process.platform !== "win32" || owner !== "GodotEditor") {
 		return { command, options, args };
 	}
 
+	const cleanCommand = cleanQuotes(command);
+	const cleanArgs = args.map(cleanQuotes);
+	const commandLine = [cleanCommand, ...cleanArgs].map(quoteWindowsStartArg).join(" ");
+
 	return {
-		command,
-		args,
-		options: { ...options, detached: false, windowsHide: false },
+		command: "cmd.exe",
+		args: ["/d", "/c", "start", "", commandLine],
+		options: { ...options, detached: true, windowsHide: false },
 	};
 }
 
