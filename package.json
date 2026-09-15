@@ -2,7 +2,7 @@
   "name": "neo-godot-tools",
   "displayName": "Neo Godot Tools",
   "icon": "icon.png",
-  "version": "2.8.1",
+  "version": "2.8.2",
   "description": "Godot development tools for VS Code with local-first GDScript intelligence, documentation, debugging, and Godot LSP integration.",
   "repository": { "type": "git", "url": "https://github.com/CYoJkoY/Neo-Godot-Tools.git" },
   "bugs": { "url": "https://github.com/CYoJkoY/Neo-Godot-Tools/issues" },
