@@ -43,8 +43,6 @@ process.on("exit", () => {
 	for (const owner of Object.keys(children)) {
 		killSubProcesses(owner);
 	}
-
-	// Object.keys(children).forEach((owner) => killSubProcesses(owner));
 });
 
 function gracefulExitHandler() {
@@ -55,8 +53,8 @@ process.on("SIGINT", gracefulExitHandler);
 process.on("SIGTERM", gracefulExitHandler);
 process.on("SIGQUIT", gracefulExitHandler);
 
-export function subProcess(owner: string, command: string, options?: SpawnOptionsWithoutStdio) {
-	const childProcess = spawn(command, options);
+export function subProcess(owner: string, command: string, options?: SpawnOptionsWithoutStdio, args: readonly string[] = []) {
+	const childProcess = spawn(command, args, options);
 
 	children[owner] = children[owner] || [];
 	children[owner].push(childProcess);
