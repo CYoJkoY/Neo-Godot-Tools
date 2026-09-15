@@ -335,7 +335,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 		void vscode.window.showErrorMessage(message, ...options).then((item) => {
 			if (item === "Retry") void this.connect_to_language_server();
 			if (item === "Open workspace with Godot Editor") {
-				void vscode.commands.executeCommand("godotTools.openEditor");
+				void vscode.commands.executeCommand("neogodotTools.openEditor");
 				void this.connect_to_language_server();
 			}
 		});

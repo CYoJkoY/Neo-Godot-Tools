@@ -45,7 +45,7 @@ function hasExplicitValue(configuration: vscode.WorkspaceConfiguration, setting:
 
 function updatePreviousNamespaceSettings(): boolean {
 	let settings_changed = false;
-	const legacyConfiguration = vscode.workspace.getConfiguration("godotTools");
+	const legacyConfiguration = vscode.workspace.getConfiguration("neogodotTools");
 	const currentConfiguration = vscode.workspace.getConfiguration("neoGodotTools");
 	for (const setting of LEGACY_NAMESPACE_SETTINGS) {
 		const value = legacyConfiguration.get(setting);
