@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { attemptSettingsUpdate, get_extension_uri, clean_godot_path } from "./utils";
+import { attemptSettingsUpdate, clean_godot_path } from "./utils";
 import {
 	GDInlayHintsProvider, GDHoverProvider, GDDocumentDropEditProvider, GDDocumentLinkProvider,
 	GDSemanticTokensProvider, GDCompletionItemProvider, GDDocumentationProvider, GDDefinitionProvider,
@@ -148,16 +148,16 @@ async function open_workspace_with_editor() {
 		case "SUCCESS": {
 			const args = ["--path", projectDir, "-e"];
 			if (get_configuration("editor.verbose")) args.push("-v");
-			const existingTerminal = vscode.window.terminals.find((t) => t.name === "Godot Editor");
-			if (existingTerminal) existingTerminal.dispose();
-			const options: vscode.ExtensionTerminalOptions = {
-				name: "Godot Editor",
-				iconPath: get_extension_uri("resources/godot_icon.svg"),
-				pty: new GodotEditorTerminal(godotPath, args),
-				isTransient: true,
-			};
-			const terminal = vscode.window.createTerminal(options);
-			if (get_configuration("editor.revealTerminal")) terminal.show();
+			killSubProcesses("GodotEditor");
+			const godotProcess = subProcess("GodotEditor", godotPath, {
+				cwd: projectDir,
+				detached: true,
+				windowsHide: true,
+			}, args);
+			godotProcess.once("error", (error) => {
+				vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
+			});
+			godotProcess.unref();
 			break;
 		}
 		case "WRONG_VERSION": prompt_for_godot_executable(`Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`, settingName); break;
@@ -185,30 +185,4 @@ async function get_godot_path(): Promise<string | undefined> {
 	if (projectVersion === undefined) return undefined;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
 	return clean_godot_path(get_configuration(settingName));
-}
-
-class GodotEditorTerminal implements vscode.Pseudoterminal {
-	private writeEmitter = new vscode.EventEmitter<string>();
-	onDidWrite: vscode.Event<string> = this.writeEmitter.event;
-	private closeEmitter = new vscode.EventEmitter<number>();
-	onDidClose?: vscode.Event<number> = this.closeEmitter.event;
-	constructor(private executable: string, private args: readonly string[]) {}
-	open(initialDimensions: vscode.TerminalDimensions | undefined): void {
-		const proc = subProcess("GodotEditor", this.executable, {
-			detached: true,
-			cwd: this.args.includes("--path") ? this.args[this.args.indexOf("--path") + 1] : undefined,
-		}, this.args);
-		proc.on("error", (error) => this.writeEmitter.fire(`Failed to start Godot Editor: ${error.message}\r\n`));
-		this.writeEmitter.fire(`Starting Godot Editor process...\r\n`);
-		proc.stdout?.on("data", (data) => {
-			const out = data.toString().trim();
-			if (out) this.writeEmitter.fire(`${out}\r\n`);
-		});
-		proc.stderr?.on("data", (data) => {
-			const out = data.toString().trim();
-			if (out) this.writeEmitter.fire(`${out}\r\n`);
-		});
-		proc.on("close", (code) => this.writeEmitter.fire(`Godot Editor stopped with exit code: ${code}\r\n`));
-	}
-	close(): void { killSubProcesses("GodotEditor"); }
 }
