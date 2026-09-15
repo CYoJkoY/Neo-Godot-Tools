@@ -5,7 +5,7 @@ Original library copyright (c) 2022 Craig Wardman
 I had to vendor this library to fix the API in a couple places.
 */
 
-import { ChildProcess, execSync, spawn, SpawnOptionsWithoutStdio } from "node:child_process";
+import { ChildProcess, SpawnOptions, execSync, spawn, SpawnOptionsWithoutStdio } from "node:child_process";
 import { createLogger } from ".";
 
 const log = createLogger("subspawn");
@@ -28,7 +28,11 @@ export function killSubProcesses(owner: string) {
 				} else if (process.platform === "darwin") {
 					execSync(`kill -9 ${c.pid}`);
 				} else {
-					process.kill(-c.pid);
+					try {
+						process.kill(-c.pid, "SIGKILL");
+					} catch {
+						c.kill("SIGKILL");
+					}
 				}
 			}
 		} catch {
@@ -65,4 +69,18 @@ export function subProcess(
 	children[owner].push(childProcess);
 
 	return childProcess;
+}
+
+export function detachedProcess(
+    command: string,
+    args: readonly string[] = [],
+    options: SpawnOptions = {},
+): ChildProcess {
+    const child = spawn(command, args, {
+        ...options,
+        detached: true,
+        stdio: options.stdio ?? "ignore",
+    });
+    child.unref();
+    return child;
 }

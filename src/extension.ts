@@ -25,7 +25,9 @@ import {
 	get_project_dir, get_project_version, verify_godot_version, convert_uri_to_resource_path, is_debug_mode,
 } from "./utils";
 import { prompt_for_godot_executable } from "./utils/prompts";
-import { killSubProcesses, subProcess } from "./utils/subspawn";
+import type { ChildProcess } from "node:child_process";
+import { detachedProcess, killSubProcesses, subProcess } from "./utils/subspawn";
+
 
 interface Extension {
 	context?: vscode.ExtensionContext;
@@ -137,6 +139,44 @@ async function switch_scene_script() {
 	if (file) vscode.window.showTextDocument(file);
 }
 
+let editorProcess: ChildProcess | undefined;
+
+function is_editor_alive(): boolean {
+    const pid = editorProcess?.pid;
+    if (!pid) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function launch_detached_editor(godotPath: string, projectDir: string, args: string[]) {
+    if (is_editor_alive()) {
+        const pick = await vscode.window.showInformationMessage(
+            "The Godot editor launched from this window is already running.",
+            "Launch another instance",
+            "Cancel",
+        );
+        if (pick !== "Launch another instance") return;
+    }
+
+    const child = detachedProcess(godotPath, args, {
+        cwd: projectDir,
+        windowsHide: false,
+    });
+
+    child.once("error", (error) => {
+        vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
+    });
+    child.once("exit", () => {
+        if (editorProcess === child) editorProcess = undefined;
+    });
+
+    editorProcess = child;
+}
+
 async function open_workspace_with_editor() {
 	const projectDir = await get_project_dir();
 	const projectVersion = await get_project_version();
@@ -159,6 +199,12 @@ async function open_workspace_with_editor() {
 		case "SUCCESS": {
 			const args = ["--path", projectDir, "-e"];
 			if (get_configuration("editor.verbose")) args.push("-v");
+
+			if (get_configuration("editor.detached", true)) {
+				await launch_detached_editor(godotPath, projectDir, args);
+				break;
+			}
+
 			killSubProcesses("GodotEditor");
 			const godotProcess = subProcess("GodotEditor", godotPath, {
 				cwd: projectDir,
@@ -166,11 +212,11 @@ async function open_workspace_with_editor() {
 				windowsHide: false,
 			}, args);
 			godotProcess.stdout?.on("data", (data) => {
-                console.log(`[GodotEditor] ${data.toString().trimEnd()}`);
-            });
-            godotProcess.stderr?.on("data", (data) => {
-                console.error(`[GodotEditor] ${data.toString().trimEnd()}`);
-            });
+				console.log(`[GodotEditor] ${data.toString().trimEnd()}`);
+			});
+			godotProcess.stderr?.on("data", (data) => {
+				console.error(`[GodotEditor] ${data.toString().trimEnd()}`);
+			});
 			godotProcess.once("error", (error) => {
 				vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
 			});
