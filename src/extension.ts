@@ -146,11 +146,16 @@ async function open_workspace_with_editor() {
 	const godotPath = result.godotPath;
 	switch (result.status) {
 		case "SUCCESS": {
-			let command = `"${godotPath}" --path "${projectDir}" -e`;
-			if (get_configuration("editor.verbose")) command += " -v";
+			const args = ["--path", projectDir, "-e"];
+			if (get_configuration("editor.verbose")) args.push("-v");
 			const existingTerminal = vscode.window.terminals.find((t) => t.name === "Godot Editor");
 			if (existingTerminal) existingTerminal.dispose();
-			const options: vscode.ExtensionTerminalOptions = { name: "Godot Editor", iconPath: get_extension_uri("resources/godot_icon.svg"), pty: new GodotEditorTerminal(command), isTransient: true };
+			const options: vscode.ExtensionTerminalOptions = {
+				name: "Godot Editor",
+				iconPath: get_extension_uri("resources/godot_icon.svg"),
+				pty: new GodotEditorTerminal(godotPath, args),
+				isTransient: true,
+			};
 			const terminal = vscode.window.createTerminal(options);
 			if (get_configuration("editor.revealTerminal")) terminal.show();
 			break;
@@ -187,12 +192,22 @@ class GodotEditorTerminal implements vscode.Pseudoterminal {
 	onDidWrite: vscode.Event<string> = this.writeEmitter.event;
 	private closeEmitter = new vscode.EventEmitter<number>();
 	onDidClose?: vscode.Event<number> = this.closeEmitter.event;
-	constructor(private command: string) {}
+	constructor(private executable: string, private args: readonly string[]) {}
 	open(initialDimensions: vscode.TerminalDimensions | undefined): void {
-		const proc = subProcess("GodotEditor", this.command, { shell: true, detached: true });
-		this.writeEmitter.fire("Starting Godot Editor process...\r\n");
-		proc.stdout.on("data", (data) => { const out = data.toString().trim(); if (out) this.writeEmitter.fire(`${data}\r\n`); });
-		proc.stderr.on("data", (data) => { const out = data.toString().trim(); if (out) this.writeEmitter.fire(`${data}\r\n`); });
+		const proc = subProcess("GodotEditor", this.executable, {
+			detached: true,
+			cwd: this.args.includes("--path") ? this.args[this.args.indexOf("--path") + 1] : undefined,
+		}, this.args);
+		proc.on("error", (error) => this.writeEmitter.fire(`Failed to start Godot Editor: ${error.message}\r\n`));
+		this.writeEmitter.fire(`Starting Godot Editor process...\r\n`);
+		proc.stdout?.on("data", (data) => {
+			const out = data.toString().trim();
+			if (out) this.writeEmitter.fire(`${out}\r\n`);
+		});
+		proc.stderr?.on("data", (data) => {
+			const out = data.toString().trim();
+			if (out) this.writeEmitter.fire(`${out}\r\n`);
+		});
 		proc.on("close", (code) => this.writeEmitter.fire(`Godot Editor stopped with exit code: ${code}\r\n`));
 	}
 	close(): void { killSubProcesses("GodotEditor"); }
