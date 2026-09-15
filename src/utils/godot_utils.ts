@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export function get_editor_data_dir(): string {
 	// from: https://stackoverflow.com/a/26227660
@@ -215,12 +215,41 @@ export type VERIFY_RESULT = {
 	version?: string;
 };
 
+function resolve_windows_executable(target: string): string | undefined {
+	if (process.platform !== "win32" || path.isAbsolute(target)) {
+		return target;
+	}
+
+	try {
+		const output = execFileSync("where.exe", [target], {
+			encoding: "utf8",
+			windowsHide: true,
+		}).trim();
+		const candidates = output
+			.split(/\r?\n/)
+			.map((candidate) => candidate.trim())
+			.filter((candidate) => candidate.toLowerCase().endsWith(".exe"));
+		return candidates.find((candidate) => fs.existsSync(candidate));
+	} catch {
+		return undefined;
+	}
+}
+
 export function verify_godot_version(godotPath: string, expectedVersion: "3" | "4" | string): VERIFY_RESULT {
 	let target = clean_godot_path(godotPath);
+	if (process.platform === "win32") {
+		const resolved = resolve_windows_executable(target);
+		if (resolved) {
+			target = resolved;
+		}
+	}
 
 	let output = "";
 	try {
-		output = execSync(`"${target}" --version`).toString().trim();
+		output = execFileSync(target, ["--version"], {
+			encoding: "utf8",
+			windowsHide: true,
+		}).trim();
 	} catch {
 		if (path.isAbsolute(target)) {
 			return { status: "INVALID_EXE", godotPath: target };
@@ -228,7 +257,10 @@ export function verify_godot_version(godotPath: string, expectedVersion: "3" | "
 		const workspacePath = vscode.workspace.workspaceFolders?.[0].uri.fsPath || "";
 		target = path.resolve(workspacePath, target);
 		try {
-			output = execSync(`"${target}" --version`).toString().trim();
+			output = execFileSync(target, ["--version"], {
+				encoding: "utf8",
+				windowsHide: true,
+			}).trim();
 		} catch {
 			return { status: "INVALID_EXE", godotPath: target };
 		}
