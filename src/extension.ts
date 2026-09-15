@@ -148,18 +148,16 @@ async function open_workspace_with_editor() {
 		case "SUCCESS": {
 			const args = ["--path", projectDir, "-e"];
 			if (get_configuration("editor.verbose")) args.push("-v");
-
 			killSubProcesses("GodotEditor");
-			const process = subProcess("GodotEditor", godotPath, {
+			const godotProcess = subProcess("GodotEditor", godotPath, {
 				cwd: projectDir,
 				detached: true,
-				stdio: "ignore",
 				windowsHide: true,
 			}, args);
-			process.unref();
-			process.once("error", (error) => {
+			godotProcess.once("error", (error) => {
 				vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
 			});
+			godotProcess.unref();
 			break;
 		}
 		case "WRONG_VERSION": prompt_for_godot_executable(`Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`, settingName); break;
