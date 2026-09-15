@@ -57,7 +57,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 		set_context("connectedToLSP", false);
 
 		this.statusWidget = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right);
-		this.statusWidget.command = "godotTools.checkStatus";
+		this.statusWidget.command = "neoGodotTools.checkStatus";
 		this.statusWidget.show();
 		this.update_status_widget();
 
