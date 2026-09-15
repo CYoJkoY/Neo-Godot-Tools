@@ -186,21 +186,30 @@ export class ClientConnectionManager implements vscode.Disposable {
 
 		const port = await get_free_port();
 		if (this.disposed || generation !== this.lifecycleGeneration) return;
+		
 		this.client.port = port;
-
 		log.info(`starting headless LSP on port ${this.client.port}`);
 
-		const headlessFlags = "--headless --no-window";
-		const command = `"${godotPath}" --path "${projectDir}" --editor ${headlessFlags} --lsp-port ${this.client.port}`;
-		const lspProcess = subProcess("LSP", command, { shell: true, detached: true });
+		const args = [
+			"--path", projectDir,
+			"--editor",
+			"--headless",
+			"--no-window",
+			"--lsp-port", this.client.port.toString()
+		];
+
+		const lspProcess = subProcess("LSP", godotPath, { 
+			detached: true, 
+			windowsHide: true 
+		}, args);
 
 		const lspStdout = createLogger("lsp.stdout");
-		lspProcess.stdout.on("data", (data) => {
+		lspProcess.stdout?.on("data", (data) => {
 			const out = data.toString().trim();
 			if (out) lspStdout.debug(out);
 		});
 
-		lspProcess.stderr.on("data", () => {});
+		lspProcess.stderr?.on("data", () => {});
 		lspProcess.on("close", (code) => log.info(`LSP process exited with code ${code}`));
 	}
 
@@ -335,7 +344,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 		void vscode.window.showErrorMessage(message, ...options).then((item) => {
 			if (item === "Retry") void this.connect_to_language_server();
 			if (item === "Open workspace with Godot Editor") {
-				void vscode.commands.executeCommand("neogodotTools.openEditor");
+				void vscode.commands.executeCommand("neoGodotTools.openEditor");
 				void this.connect_to_language_server();
 			}
 		});
