@@ -53,8 +53,26 @@ process.on("SIGINT", gracefulExitHandler);
 process.on("SIGTERM", gracefulExitHandler);
 process.on("SIGQUIT", gracefulExitHandler);
 
-export function subProcess(owner: string, command: string, options?: SpawnOptionsWithoutStdio, args: readonly string[] = []) {
-	const childProcess = spawn(command, args, options);
+function quoteWindowsStartArg(value: string): string {
+	return `"${value.replace(/"/g, '""')}"`;
+}
+
+function prepareSpawn(owner: string, command: string, options: SpawnOptionsWithoutStdio, args: readonly string[]) {
+	if (process.platform !== "win32" || owner !== "GodotEditor") {
+		return { command, options, args };
+	}
+
+	const commandLine = [command, ...args].map(quoteWindowsStartArg).join(" ");
+	return {
+		command: "cmd.exe",
+		args: ["/d", "/c", "start", "", commandLine],
+		options: { ...options, detached: false },
+	};
+}
+
+export function subProcess(owner: string, command: string, options: SpawnOptionsWithoutStdio = {}, args: readonly string[] = []) {
+	const prepared = prepareSpawn(owner, command, options, args);
+	const childProcess = spawn(prepared.command, prepared.args, prepared.options);
 
 	children[owner] = children[owner] || [];
 	children[owner].push(childProcess);
