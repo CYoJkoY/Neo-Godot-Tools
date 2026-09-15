@@ -140,7 +140,18 @@ async function switch_scene_script() {
 async function open_workspace_with_editor() {
 	const projectDir = await get_project_dir();
 	const projectVersion = await get_project_version();
-	if (!projectDir || !projectVersion) return;
+	if (!projectDir) {
+        vscode.window.showErrorMessage(
+            "Neo Godot Tools: No Godot project found. Open the folder containing 'project.godot' in VS Code.",
+        );
+        return;
+    }
+    if (!projectVersion) {
+        vscode.window.showErrorMessage(
+            "Neo Godot Tools: Cannot determine Godot version from 'project.godot'.",
+        );
+        return;
+    }
 	const settingName = `editorPath.godot${projectVersion[0]}`;
 	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
 	const godotPath = result.godotPath;
@@ -151,13 +162,18 @@ async function open_workspace_with_editor() {
 			killSubProcesses("GodotEditor");
 			const godotProcess = subProcess("GodotEditor", godotPath, {
 				cwd: projectDir,
-				detached: true,
-				windowsHide: true,
+				detached: false,
+				windowsHide: false,
 			}, args);
+			godotProcess.stdout?.on("data", (data) => {
+                console.log(`[GodotEditor] ${data.toString().trimEnd()}`);
+            });
+            godotProcess.stderr?.on("data", (data) => {
+                console.error(`[GodotEditor] ${data.toString().trimEnd()}`);
+            });
 			godotProcess.once("error", (error) => {
 				vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
 			});
-			godotProcess.unref();
 			break;
 		}
 		case "WRONG_VERSION": prompt_for_godot_executable(`Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`, settingName); break;
