@@ -142,14 +142,16 @@ async function switch_scene_script() {
 let editorProcess: ChildProcess | undefined;
 
 function is_editor_alive(): boolean {
-    const pid = editorProcess?.pid;
-    if (!pid) return false;
-    try {
-        process.kill(pid, 0);
-        return true;
-    } catch {
-        return false;
-    }
+	// On Windows the tracked pid belongs to the short-lived launcher, not Godot.
+	if (process.platform === "win32") return false;
+	const pid = editorProcess?.pid;
+	if (!pid) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function launch_detached_editor(godotPath: string, projectDir: string, args: string[]) {

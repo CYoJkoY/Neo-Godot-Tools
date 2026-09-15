@@ -69,7 +69,7 @@
         "neoGodotTools.editorPath.godot3": { "type": "string", "default": "godot3", "description": "Path to the Godot 3 editor executable. Supports environment variables using '${env:VAR_NAME}'." },
         "neoGodotTools.editorPath.godot4": { "type": "string", "default": "godot", "description": "Path to the Godot 4 editor executable. Supports environment variables using '${env:VAR_NAME}'." },
         "neoGodotTools.editor.verbose": { "type": "boolean", "default": false, "description": "Whether to launch the Godot Editor with the --verbose flag" },
-        "neoGodotTools.editor.detached": { "type": "boolean", "default": true, "description": "Keep the Godot editor running after VS Code exits. When disabled, the editor is terminated together with the extension host (previous behavior)." },
+        "neoGodotTools.editor.detached": { "type": "boolean", "default": true, "description": "Launch the Godot Editor as a detached process so it keeps running (and can prompt to save) after VS Code is closed." },
 				"neoGodotTools.editor.revealTerminal": { "type": "boolean", "default": true, "description": "Whether to reveal the terminal when launching the Godot Editor" },
         "neoGodotTools.formatter.maxEmptyLines": { "type": "number", "default": 2, "minimum": 0, "description": "Number of empty lines allowed anywhere in the file" },
         "neoGodotTools.formatter.denseFunctionParameters": { "type": "boolean", "default": false, "description": "Whether extra space should be removed from function parameter lists" },

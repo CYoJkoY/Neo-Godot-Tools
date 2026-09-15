@@ -71,16 +71,44 @@ export function subProcess(
 	return childProcess;
 }
 
+function quote_for_cmd(value: string): string {
+	return `"${value.replace(/"/g, '""')}"`;
+}
+
 export function detachedProcess(
-    command: string,
-    args: readonly string[] = [],
-    options: SpawnOptions = {},
+	command: string,
+	args: readonly string[] = [],
+	options: SpawnOptions = {},
 ): ChildProcess {
-    const child = spawn(command, args, {
-        ...options,
-        detached: true,
-        stdio: options.stdio ?? "ignore",
-    });
-    child.unref();
-    return child;
+	if (process.platform === "win32") {
+		// DETACHED_PROCESS does not break the parent/child link that `taskkill /T`
+		// walks when the IDE shuts the extension host down. Launching through
+		// `cmd /c start` re-parents the real process, so it outlives the IDE and
+		// gets a chance to prompt for unsaved changes.
+		const cwd = String(options.cwd ?? process.cwd());
+		const commandLine = [
+			"/d /s /c start \"\" /d",
+			quote_for_cmd(cwd),
+			quote_for_cmd(command),
+			...args.map(quote_for_cmd),
+		].join(" ");
+
+		const child = spawn("cmd.exe", [commandLine], {
+			...options,
+			detached: true,
+			stdio: "ignore",
+			windowsHide: true,
+			windowsVerbatimArguments: true,
+		});
+		child.unref();
+		return child;
+	}
+
+	const child = spawn(command, args, {
+		...options,
+		detached: true,
+		stdio: options.stdio ?? "ignore",
+	});
+	child.unref();
+	return child;
 }
