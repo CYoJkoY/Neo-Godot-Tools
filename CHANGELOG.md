@@ -1,5 +1,29 @@
 # Changelog
 
+### 2.8.1
+
+- [**Scene Preview and Definition Navigation Overhaul**](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/59)
+  - Fix Scene Preview tree population and main script opening ([#64](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/64), [#67](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/67))
+  - Fix Ctrl+Click navigation for GDScript inner-class methods ([#65](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/65))
+  - Show function parameters in hover provider ([#66](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/66))
+  - Generalize native function definition navigation and resolve native/GDScript definition targets ([#68](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/68), [#69](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/69))
+- [**Reliably launch Godot Editor on Windows**](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/83)
+  - Restore missing LSP status bar command ([#73](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/73))
+  - Launch Godot editor directly from status action and notification ([#74](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/74), [#75](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/75))
+  - Bypass Windows shell quoting issues by launching the validated Godot executable directly via the native `child_process.spawn` API ([#77](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/77), [#81](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/81))
+  - Pass the Godot executable and CLI arguments separately, and surface spawn errors in the terminal instead of failing silently
+  - Fix Godot editor launch validation and process output tracking ([#85](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/85))
+- [**Scene Parser and Settings Fixes**](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/70)
+  - Fix scene-parser to correctly parse unquoted Godot 3 resource IDs ([#70](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/70))
+  - Correct configuration namespace casing to `neoGodotTools` and fix internal namespace/command references ([#86](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/86))
+- [**CI and Release Workflow Improvements**](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/60)
+  - Add stable and development release channels ([#60](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/60))
+  - Repair release workflow dependency setup ([#61](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/61))
+  - Standardize Godot version validation and remove version-specific CI validation ([#62](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/62), [#63](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/63))
+- **Miscellaneous**
+  - Add Neo-Godot-Tools icon and ignore `desktop.ini`
+  - Bump package version to 2.8.1 and update dev dependencies
+
 ### 2.8.0
 
 * [**Migrate references to the local semantic query engine**](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/9)
