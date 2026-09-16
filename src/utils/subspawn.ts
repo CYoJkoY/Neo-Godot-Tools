@@ -16,43 +16,35 @@ interface DictionaryOfStringChildProcessArray {
 const children: DictionaryOfStringChildProcessArray = {};
 
 export function killSubProcesses(owner: string) {
-    if (!(owner in children)) {
-        return;
-    }
-    for (const c of children[owner]) {
-        try {
-            if (c.pid) {
-                if (owner === "GodotEditor") {
-                    if (process.platform === "win32") {
-                        execSync(`taskkill /pid ${c.pid} /T`);
-                    } else if (process.platform === "darwin") {
-                        execSync(`kill -TERM ${c.pid}`);
-                    } else {
-                        try {
-                            process.kill(-c.pid, "SIGTERM");
-                        } catch {
-                            c.kill("SIGTERM");
-                        }
-                    }
-                } else {
-                    if (process.platform === "win32") {
-                        execSync(`taskkill /pid ${c.pid} /T /F`);
-                    } else if (process.platform === "darwin") {
-                        execSync(`kill -9 ${c.pid}`);
-                    } else {
-                        try {
-                            process.kill(-c.pid, "SIGKILL");
-                        } catch {
-                            c.kill("SIGKILL");
-                        }
-                    }
-                }
-            }
-        } catch {
-            log.error(`couldn't kill task ${owner}`);
-        }
-    }
-    children[owner] = [];
+	if (owner === "GodotEditor") {
+		children[owner] = [];
+		return;
+	}
+
+	if (!(owner in children)) {
+		return;
+	}
+
+	for (const c of children[owner]) {
+		try {
+			if (c.pid) {
+				if (process.platform === "win32") {
+					execSync(`taskkill /pid ${c.pid} /T /F`);
+				} else if (process.platform === "darwin") {
+					execSync(`kill -9 ${c.pid}`);
+				} else {
+					try {
+						process.kill(-c.pid, "SIGKILL");
+					} catch {
+						c.kill("SIGKILL");
+					}
+				}
+			}
+		} catch {
+			log.error(`couldn't kill task ${owner}`);
+		}
+	}
+	children[owner] = [];
 }
 
 process.on("exit", () => {
@@ -84,7 +76,48 @@ export function subProcess(
 }
 
 function quote_for_cmd(value: string): string {
-	return `"${value.replace(/"/g, '""')}"`;
+	const trailing = value.match(/\\*$/)?.[0] ?? "";
+	return `"${value.replace(/"/g, '""')}${trailing}"`;
+}
+
+function quote_for_ps(value: string): string {
+	return `'${value.replace(/'/g, "''")}'`;
+}
+
+function spawn_via_powershell(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+): ChildProcess {
+	const argList = args.length > 0 ? `@(${args.map(quote_for_ps).join(",")})` : "@()";
+	const script =
+		`Start-Process -FilePath ${quote_for_ps(command)} ` +
+		`-ArgumentList ${argList} -WorkingDirectory ${quote_for_ps(cwd)}`;
+
+	return spawn(
+		"powershell.exe",
+		["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+		{ windowsHide: true, windowsVerbatimArguments: true, stdio: "ignore" },
+	);
+}
+
+function spawn_via_cmd_start(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+): ChildProcess {
+	const commandLine = [
+		"/d /s /c start \"\" /d",
+		quote_for_cmd(cwd),
+		quote_for_cmd(command),
+		...args.map(quote_for_cmd),
+	].join(" ");
+
+	return spawn("cmd.exe", [commandLine], {
+		windowsHide: true,
+		windowsVerbatimArguments: true,
+		stdio: "ignore",
+	});
 }
 
 export function detachedProcess(
@@ -92,35 +125,33 @@ export function detachedProcess(
 	args: readonly string[] = [],
 	options: SpawnOptions = {},
 ): ChildProcess {
-	if (process.platform === "win32") {
-		// DETACHED_PROCESS does not break the parent/child link that `taskkill /T`
-		// walks when the IDE shuts the extension host down. Launching through
-		// `cmd /c start` re-parents the real process, so it outlives the IDE and
-		// gets a chance to prompt for unsaved changes.
-		const cwd = String(options.cwd ?? process.cwd());
-		const commandLine = [
-			"/d /s /c start \"\" /d",
-			quote_for_cmd(cwd),
-			quote_for_cmd(command),
-			...args.map(quote_for_cmd),
-		].join(" ");
+	const cwd = String(options.cwd ?? process.cwd());
 
-		const child = spawn("cmd.exe", [commandLine], {
-			...options,
-			detached: true,
-			stdio: "ignore",
-			windowsHide: true,
-			windowsVerbatimArguments: true,
+	// Windows
+	if (process.platform === "win32") {
+		const child = spawn_via_powershell(command, args, cwd);
+		child.once("error", () => {
+			log.warn("detachedProcess: Start-Process failed, falling back to cmd /c start");
+			try {
+				const fallback = spawn_via_cmd_start(command, args, cwd);
+				fallback.unref();
+			} catch (error) {
+				log.error(`detachedProcess: fallback launch failed: ${error}`);
+			}
 		});
 		child.unref();
 		return child;
 	}
 
-	const child = spawn(command, args, {
-		...options,
-		detached: true,
-		stdio: options.stdio ?? "ignore",
-	});
+	// MacOS
+	if (process.platform === "darwin") {
+		const child = spawn(command, args, { ...options, detached: true, stdio: "ignore" });
+		child.unref();
+		return child;
+	}
+
+	// Linux + Other
+	const child = spawn(command, args, { ...options, detached: true, stdio: "ignore" });
 	child.unref();
 	return child;
 }

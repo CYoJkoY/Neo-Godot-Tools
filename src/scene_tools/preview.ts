@@ -27,6 +27,7 @@ import {
 } from "../utils";
 import { SceneParser } from "./parser";
 import type { Scene, SceneNode } from "./types";
+import { apply_custom_class_icons } from "./node_icons";
 
 const log = createLogger("scenes.preview");
 
@@ -164,6 +165,14 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 
 		const document = await vscode.workspace.openTextDocument(this.currentScene);
 		this.scene = this.parser.parse_scene(document);
+
+		if (this.scene) {
+			try {
+				await apply_custom_class_icons(this.scene);
+			} catch (error) {
+				console.warn("[ScenePreview] icon resolution failed", error);
+			}
+		}
 
 		this.tree.message = this.scene?.title ?? "";
 
