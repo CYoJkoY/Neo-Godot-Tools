@@ -16,31 +16,43 @@ interface DictionaryOfStringChildProcessArray {
 const children: DictionaryOfStringChildProcessArray = {};
 
 export function killSubProcesses(owner: string) {
-	if (!(owner in children)) {
-		return;
-	}
-
-	for (const c of children[owner]) {
-		try {
-			if (c.pid) {
-				if (process.platform === "win32") {
-					execSync(`taskkill /pid ${c.pid} /T /F`);
-				} else if (process.platform === "darwin") {
-					execSync(`kill -9 ${c.pid}`);
-				} else {
-					try {
-						process.kill(-c.pid, "SIGKILL");
-					} catch {
-						c.kill("SIGKILL");
-					}
-				}
-			}
-		} catch {
-			log.error(`couldn't kill task ${owner}`);
-		}
-	}
-
-	children[owner] = [];
+    if (!(owner in children)) {
+        return;
+    }
+    for (const c of children[owner]) {
+        try {
+            if (c.pid) {
+                if (owner === "GodotEditor") {
+                    if (process.platform === "win32") {
+                        execSync(`taskkill /pid ${c.pid} /T`);
+                    } else if (process.platform === "darwin") {
+                        execSync(`kill -TERM ${c.pid}`);
+                    } else {
+                        try {
+                            process.kill(-c.pid, "SIGTERM");
+                        } catch {
+                            c.kill("SIGTERM");
+                        }
+                    }
+                } else {
+                    if (process.platform === "win32") {
+                        execSync(`taskkill /pid ${c.pid} /T /F`);
+                    } else if (process.platform === "darwin") {
+                        execSync(`kill -9 ${c.pid}`);
+                    } else {
+                        try {
+                            process.kill(-c.pid, "SIGKILL");
+                        } catch {
+                            c.kill("SIGKILL");
+                        }
+                    }
+                }
+            }
+        } catch {
+            log.error(`couldn't kill task ${owner}`);
+        }
+    }
+    children[owner] = [];
 }
 
 process.on("exit", () => {
