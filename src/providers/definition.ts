@@ -18,9 +18,21 @@ import type { NativeSymbolInspectParams } from "./documentation_types";
 const BUILTIN_DOCUMENTATION_CLASSES = ["@GDScript"] as const;
 
 function normalizeNativeSymbolName(value: string): string {
-	const normalized = value.trim().replace(/^func\s+/, "").replace(/\s*->\s*.*$/, "").trim();
-	const qualified = normalized.match(/(?:^|\.)([A-Za-z_][A-Za-z0-9_]*)(?:\s*\([^)]*\))?$/);
-	return qualified?.[1] ?? normalized.replace(/\s*\([^)]*\)\s*$/, "");
+    let normalized = value.trim();
+    normalized = normalized.replace(/\s*->\s*.*$/, "").trim();
+    normalized = normalized.replace(/^func\s+/, "").trim();
+    normalized = normalized.replace(/\s*\([^)]*\)\s*$/, "").trim();
+
+    const typeMatch = normalized.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(.*)/);
+    if (typeMatch && typeMatch[1] !== "operator") {
+        normalized = typeMatch[2].trim();
+    }
+
+    if (normalized.startsWith(".")) {
+        normalized = normalized.slice(1);
+    }
+    
+    return normalized;
 }
 
 function splitNativeSymbolTarget(value: string): { className?: string; symbolName: string } {

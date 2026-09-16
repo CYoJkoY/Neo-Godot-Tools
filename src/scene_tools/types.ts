@@ -6,6 +6,8 @@ import {
 } from "vscode";
 import * as path from "node:path";
 import { get_extension_uri } from "../utils";
+import * as fs from "node:fs";
+import { globals } from "../extension";
 
 const iconDir = get_extension_uri("resources", "godot_icons").fsPath;
 
@@ -73,13 +75,33 @@ export class SceneNode extends TreeItem {
 		this.tooltip = content;
 	}
 
-	private update_icon(): void {
-		const iconName = `${this.className}.svg`;
-		this.iconPath = {
-			light: Uri.file(path.join(iconDir, "light", iconName)),
-			dark: Uri.file(path.join(iconDir, "dark", iconName)),
-		};
-	}
+    private update_icon(): void {
+        let className = this.className;
+        let iconName = `${className}.svg`;
+
+        const iconPath = path.join(iconDir, "light", iconName); 
+        
+        if (!fs.existsSync(iconPath) && globals.docsProvider) {
+            let current = className;
+            while (current && globals.docsProvider.classInfo.has(current)) {
+                const parent = globals.docsProvider.classInfo.get(current)?.inherits ?? "";
+                if (!parent) break;
+                
+                const parentIcon = `${parent}.svg`;
+                if (fs.existsSync(path.join(iconDir, "light", parentIcon))) {
+                    className = parent;
+                    iconName = parentIcon;
+                    break;
+                }
+                current = parent;
+            }
+        }
+
+        this.iconPath = {
+            light: Uri.file(path.join(iconDir, "light", iconName)),
+            dark: Uri.file(path.join(iconDir, "dark", iconName)),
+        };
+    }
 }
 
 export interface GDResource {
