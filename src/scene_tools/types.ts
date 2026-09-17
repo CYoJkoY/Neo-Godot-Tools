@@ -7,7 +7,8 @@ import {
 import * as path from "node:path";
 import { get_extension_uri } from "../utils";
 import * as fs from "node:fs";
-import { globals } from "../extension";
+const DEFAULT_NODE_ICON = "Node";
+
 
 const iconDir = get_extension_uri("resources", "godot_icons").fsPath;
 
@@ -75,33 +76,29 @@ export class SceneNode extends TreeItem {
 		this.tooltip = content;
 	}
 
+	public iconClass = "";
+
+	public setIconClass(className: string): void {
+		if (this.iconClass === className) return;
+		this.iconClass = className;
+		this.update_icon();
+	}
+
     private update_icon(): void {
-        let className = this.className;
-        let iconName = `${className}.svg`;
-
-        const iconPath = path.join(iconDir, "light", iconName); 
-        
-        if (!fs.existsSync(iconPath) && globals.docsProvider) {
-            let current = className;
-            while (current && globals.docsProvider.classInfo.has(current)) {
-                const parent = globals.docsProvider.classInfo.get(current)?.inherits ?? "";
-                if (!parent) break;
-                
-                const parentIcon = `${parent}.svg`;
-                if (fs.existsSync(path.join(iconDir, "light", parentIcon))) {
-                    className = parent;
-                    iconName = parentIcon;
-                    break;
-                }
-                current = parent;
-            }
-        }
-
-        this.iconPath = {
-            light: Uri.file(path.join(iconDir, "light", iconName)),
-            dark: Uri.file(path.join(iconDir, "dark", iconName)),
-        };
-    }
+		const iconName = `${this.iconClass || this.className}.svg`;
+		if (!fs.existsSync(path.join(iconDir, "light", iconName)) && !fs.existsSync(path.join(iconDir, "dark", iconName))) {
+			if (!this.iconClass && !fs.existsSync(path.join(iconDir, "light", `${this.className}.svg`))) {
+				this.setIconClass(DEFAULT_NODE_ICON);
+				return;
+			}
+			this.iconPath = undefined;
+			return;
+		}
+		this.iconPath = {
+			light: Uri.file(path.join(iconDir, "light", iconName)),
+			dark: Uri.file(path.join(iconDir, "dark", iconName)),
+		};
+	}
 }
 
 export interface GDResource {

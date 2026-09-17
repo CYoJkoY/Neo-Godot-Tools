@@ -21,6 +21,58 @@ import { globals } from "../extension";
 
 const log = createLogger("providers.docs");
 
+const DOC_TARGET_FOCUS_SCRIPT = `function(target){
+  var PREFIXES = ["method","constant","property","signal","enum","constructor","operator","annotation","theme-item"];
+  function strip(raw){
+    var s = String(raw || "");
+    for (var i = 0; i < PREFIXES.length; i++) {
+      var p = PREFIXES[i] + "-";
+      if (s.slice(0, p.length).toLowerCase() === p) return s.slice(p.length);
+    }
+    return s;
+  }
+  function candidates(raw){
+    var out = [];
+    var name = strip(raw);
+    var push = function(v){ if (v && out.indexOf(v) === -1) out.push(v); };
+    push(raw); push(raw.toLowerCase());
+    if (name) {
+      for (var i = 0; i < PREFIXES.length; i++) push(PREFIXES[i] + "-" + name);
+      for (var j = 0; j < PREFIXES.length; j++) push(PREFIXES[j] + "-" + name.toLowerCase());
+    }
+    return out;
+  }
+  function focus(el){
+    el.scrollIntoView({ block: "start", inline: "nearest" });
+    el.classList && el.classList.add("ngdt-doc-target");
+    if (el.style) {
+      el.style.outline = "2px solid #f0a35e";
+      el.style.outlineOffset = "2px";
+      el.style.borderRadius = "4px";
+    }
+  }
+  var ids = candidates(target);
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) { focus(el); return; }
+  }
+  var name = strip(target);
+  var attrs = ["data-symbol","data-symbol-name","data-name","name","data-member","data-anchor"];
+  for (var a = 0; a < attrs.length; a++) {
+    var nodes = document.querySelectorAll("[" + attrs[a] + "]");
+    for (var n = 0; n < nodes.length; n++) {
+      var v = nodes[n].getAttribute(attrs[a]) || "";
+      if (v === name || v.toLowerCase() === name.toLowerCase() || v === target) { focus(nodes[n]); return; }
+    }
+  }
+  var heads = document.querySelectorAll("h1,h2,h3,h4,h5,dt,summary,.symbol,.member,.method,.constant");
+  for (var h = 0; h < heads.length; h++) {
+    var text = (heads[h].textContent || "").trim();
+    if (text === name || text === name + "()" || text.replace(/\\(\\)$/, "") === name) { focus(heads[h]); return; }
+  }
+  window.scrollTo(0, 0);
+}`;
+
 export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 	public classInfo = new Map<string, GodotNativeClassInfo>();
 	public symbolDb = new Map<string, GodotNativeSymbol>();
@@ -135,10 +187,9 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 				const targetJson = JSON.stringify(target);
 				classHtml = classHtml.replace(
 					"</body>",
-					`<script>requestAnimationFrame(() => requestAnimationFrame(() => { const element = document.getElementById(${targetJson}); if (element) element.scrollIntoView(); }));</script></body>`,
+					`<script>${DOC_TARGET_FOCUS_SCRIPT}(${targetJson});</script></body>`,
 				);
 			}
-
 			panel.webview.html = classHtml;
 		}
 

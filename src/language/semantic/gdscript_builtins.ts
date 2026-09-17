@@ -7,10 +7,10 @@ export interface GDScriptBuiltinFunction {
 	description: string;
 }
 
+let documentationTargetMajor: number | undefined = undefined;
+
 const GDSCRIPT_URI = "gdscript://builtin/@GDScript";
-
 const p = (name: string, type?: string, defaultValue?: string): IndexedParameter => ({ name, type, defaultValue });
-
 const BUILTINS: readonly GDScriptBuiltinFunction[] = [
 	{ name: "abs", parameters: [p("x", "Variant")], returnType: "Variant", description: "Returns the absolute value of x." },
 	{ name: "absi", parameters: [p("x", "int")], returnType: "int", description: "Returns the absolute value of an integer." },
@@ -90,15 +90,36 @@ const BUILTINS: readonly GDScriptBuiltinFunction[] = [
 	{ name: "dict_to_inst", parameters: [p("dictionary", "Dictionary")], returnType: "Object", description: "Creates an Object instance from a dictionary." },
 	{ name: "inst_to_dict", parameters: [p("instance", "Object")], returnType: "Dictionary", description: "Converts an Object instance to a dictionary." },
 ];
-
 const BY_NAME = new Map(BUILTINS.map((builtin) => [builtin.name, builtin]));
+const GODOT4_GLOBAL_SCOPE_FUNCTIONS = new Set([
+	"abs", "absf", "absi", "acos", "acosh", "angle_difference", "asin", "asinh", "atan", "atan2", "atanh",
+	"bezier_derivative", "bezier_interpolate", "bytes_to_var", "bytes_to_var_with_objects", "ceil", "ceilf",
+	"ceili", "clamp", "clampf", "clampi", "cos", "cosh", "cubic_interpolate", "cubic_interpolate_angle",
+	"cubic_interpolate_in_time", "db_to_linear", "deg_to_rad", "ease", "exp", "floor", "floorf", "floorf",
+	"floori", "fmod", "fposmod", "get_invalid_float_size", "hash", "inverse_lerp", "is_equal_approx",
+	"is_finite", "is_inf", "is_instance_id_valid", "is_instance_valid", "is_nan", "is_same", "is_zero_approx",
+	"lerp", "lerp_angle", "lerpf", "linear_to_db", "log", "max", "maxf", "maxi", "min", "minf", "mini",
+	"move_toward", "nearest_po2", "pingpong", "posmod", "pow", "print_orphan_nodes", "rad_to_deg",
+	"rand_from_seed", "randf", "randf_range", "randfn", "randi", "randi_range", "randomize", "remap",
+	"rid_allocate", "rid_from_int64", "rotate_toward", "round", "roundf", "roundi", "sign", "signf",
+	"signi", "sin", "sinh", "smoothstep", "snapped", "snappedf", "snappedi", "sqrt", "step_decimals",
+	"tan", "tanh", "var_to_bytes", "var_to_bytes_with_objects", "wrap", "wrapf", "wrapi",
+]);
+
+export function setBuiltinDocumentationTarget(major: number | undefined): void {
+	if (major === documentationTargetMajor) return;
+	documentationTargetMajor = major;
+}
 
 export function getGDScriptBuiltin(name: string): GDScriptBuiltinFunction | undefined {
 	return BY_NAME.get(name);
 }
 
-export function getGDScriptBuiltinDocumentationClass(_name: string): "@GDScript" {
-	return "@GDScript";
+export function getGDScriptBuiltinDocumentationClass(name: string): "@GlobalScope" | "@GDScript" {
+	if (documentationTargetMajor !== undefined && documentationTargetMajor < 4) {
+		return "@GDScript";
+	}
+	return GODOT4_GLOBAL_SCOPE_FUNCTIONS.has(name) ? "@GlobalScope" : "@GDScript";
 }
 
 export function getGDScriptBuiltins(prefix = ""): readonly GDScriptBuiltinFunction[] {
