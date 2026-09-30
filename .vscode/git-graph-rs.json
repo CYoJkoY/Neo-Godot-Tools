@@ -1,0 +1,22 @@
+{
+    "issueLinkingConfig": {
+        "issue": "#(\\d+)",
+        "url": "https://github.com/CYoJkoY/Neo-Godot-Tools/issues/$1"
+    },
+    "pinnedBranches": [],
+    "pinnedCommits": [],
+    "pullRequestConfig": {
+        "provider": "github",
+        "hostRootUrl": "https://github.com",
+        "sourceRemote": "origin",
+        "sourceOwner": "CYoJkoY",
+        "sourceRepo": "Neo-Godot-Tools",
+        "destRemote": "origin",
+        "destOwner": "CYoJkoY",
+        "destRepo": "Neo-Godot-Tools",
+        "destProjectId": "",
+        "destBranch": "master",
+        "custom": null
+    },
+    "exportedAt": 1790700053311
+}
