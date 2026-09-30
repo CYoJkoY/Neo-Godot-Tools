@@ -24,12 +24,31 @@ function bindingKind(kind: Binding["kind"]): vscode.CompletionItemKind {
 		case "constant": return vscode.CompletionItemKind.Constant;
 		case "signal": return vscode.CompletionItemKind.Event;
 		case "enum": return vscode.CompletionItemKind.Enum;
+		case "enum_member": return vscode.CompletionItemKind.EnumMember;
 	}
 }
 
 function isGlobalCompletionContext(document: vscode.TextDocument, position: vscode.Position): boolean {
 	const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
 	return !/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.\w*$/.test(before);
+}
+
+/**
+ * Appends the `##` documentation of a symbol, matching the layout produced by the
+ * Godot language server that the LSP fallback delegates to.
+ */
+function appendDocumentation(markdown: vscode.MarkdownString, symbol: IndexedSymbol): void {
+	if (!symbol.documentation) return;
+	markdown.appendMarkdown(`\n\n${symbol.documentation}`);
+}
+
+/**
+ * VS Code alphabetizes completion items without a `sortText`. The semantic layer
+ * assigns each item an explicit priority, which is encoded here so the proposed
+ * order (locals, class members, workspace, builtins) survives.
+ */
+function completionSortText(priority: number): string {
+	return String(Math.max(0, priority)).padStart(6, "0");
 }
 
 function parameterLabel(parameter: IndexedParameter): string {
@@ -131,11 +150,12 @@ export class LanguageService implements vscode.Disposable {
 		if (token?.isCancellationRequested) return undefined;
 		const result = languageProfiler.measure("semantic.completion", () => this.semantic.getCompletions(document.uri.toString(), { offset: document.offsetAt(position) }));
 		if (token?.isCancellationRequested) return undefined;
-		const items = result.value?.map((item) => {
+		const items = result.value?.map((item, index) => {
 			const completion = new vscode.CompletionItem(item.name, bindingKind(item.kind as Binding["kind"]));
 			completion.detail = item.kind === "function"
 				? `${item.name}()${item.returnType ? ` -> ${item.returnType}` : ""}`
 				: `${item.kind} ${item.name}${item.type ? `: ${item.type}` : ""}`;
+			completion.sortText = completionSortText(item.priority ?? index);
 			return completion;
 		}) ?? [];
 		if (isGlobalCompletionContext(document, position)) {
@@ -147,6 +167,7 @@ export class LanguageService implements vscode.Disposable {
 				const completion = new vscode.CompletionItem(builtin.name, vscode.CompletionItemKind.Function);
 				completion.detail = `${builtin.name}(${builtin.parameters.map(parameterLabel).join(", ")})${builtin.returnType ? ` -> ${builtin.returnType}` : ""}`;
 				completion.documentation = new vscode.MarkdownString(builtin.description);
+				completion.sortText = completionSortText(items.length);
 				items.push(completion);
 			}
 		}
@@ -203,12 +224,25 @@ export class LanguageService implements vscode.Disposable {
 		}
 		const markdown = new vscode.MarkdownString();
 		markdown.appendCodeblock(this.symbolLabel(symbol), "gdscript");
+		appendDocumentation(markdown, symbol);
 		return new vscode.Hover(markdown, this.range(symbol.range));
 	}
 
+	/**
+	 * Complements a symbol produced by the semantic engine with the metadata only
+	 * available on the indexed declaration (parameters and `##` documentation).
+	 */
 	private hydrateHoverSymbol(symbol: IndexedSymbol): IndexedSymbol {
-		if (symbol.kind !== "function" || symbol.parameters !== undefined) return symbol;
-		return this.files.get(symbol.uri)?.symbols.find((candidate) => candidate.kind === "function" && candidate.range.start.offset === symbol.range.start.offset) ?? symbol;
+		const indexed = this.files.get(symbol.uri)?.symbols.find((candidate) => candidate.range.start.offset === symbol.range.start.offset);
+		if (!indexed) return symbol;
+		const hydrated: IndexedSymbol = { ...symbol };
+		hydrated.parameters = symbol.parameters ?? indexed.parameters;
+		hydrated.documentation = symbol.documentation ?? indexed.documentation;
+		hydrated.type = symbol.type ?? indexed.type;
+		hydrated.returnType = symbol.returnType ?? indexed.returnType;
+		hydrated.static = symbol.static ?? indexed.static;
+		hydrated.containerName = symbol.containerName ?? indexed.containerName;
+		return hydrated;
 	}
 
 	private symbolForBinding(binding: Binding): IndexedSymbol | undefined {

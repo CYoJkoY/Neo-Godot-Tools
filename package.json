@@ -25,14 +25,19 @@
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
     "generate-icons": "ts-node tools/generate_icons.ts",
     "test": "vscode-test",
+    "test:unit": "tsc -p tsconfig.test.json && node tools/run_unit_tests.cjs",
     "test:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm test",
     "test:engine": "ts-node tools/run_tests.ts"
   },
   "contributes": {
-    "customEditors": [{ "viewType": "gddoc", "displayName": "Godot Documentation", "selector": [{ "filenamePattern": "*.gddoc" }] }],
+    "customEditors": [
+      { "viewType": "gddoc", "displayName": "Godot Documentation", "selector": [{ "filenamePattern": "*.gddoc" }] },
+      { "viewType": "neoGodotTools.resourceInspector", "displayName": "Resource Inspector", "selector": [{ "filenamePattern": "*.tres" }], "priority": "option" }
+    ],
     "commands": [
       { "category": "Neo Godot Tools", "command": "neoGodotTools.openEditor", "title": "Open workspace with Godot editor" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.openEditorSettings", "title": "Open EditorSettings File" },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.openResourceInspector", "title": "Open Resource Inspector" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.startLanguageServer", "title": "Start the GDScript Language Server for this workspace" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.stopLanguageServer", "title": "Stop the GDScript Language Server for this workspace" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.listGodotClasses", "title": "List Godot classes" },
@@ -82,7 +87,14 @@
         "neoGodotTools.lsp.autoReconnect.attempts": { "type": "number", "default": 10, "description": "How many times the client will attempt to reconnect" },
         "neoGodotTools.scenePreview.previewRelatedScenes": { "enum": ["anyFolder", "sameFolder", "off"], "enumDescriptions": ["Attempt to preview a related scene from anywhere in the workspace.", "Attempt to preview a related scene from the same folder.", "Do not attempt to preview a related scene."], "default": "sameFolder", "description": "Controls where the Scene Preview will search for related scenes when viewing a script file." },
         "neoGodotTools.inlayHints.gdscript": { "type": "boolean", "default": false, "description": "Whether to enable inlay hints in GDScript files (experimental)" },
-        "neoGodotTools.inlayHints.gdresource": { "type": "boolean", "default": true, "description": "Whether to enable inlay hints in GDResource (.tscn, .tres, etc) files" }
+        "neoGodotTools.inlayHints.gdresource": { "type": "boolean", "default": true, "description": "Whether to enable inlay hints in GDResource (.tscn, .tres, etc) files" },
+        "neoGodotTools.resource.inspector.openIn": {
+          "type": "string",
+          "enum": ["editor", "panel"],
+          "enumDescriptions": ["Open .tres files in a dedicated Resource Inspector editor tab", "Show the Resource Inspector in the side panel"],
+          "default": "editor",
+          "description": "Where the Resource Inspector opens when using the Open Resource Inspector command."
+        }
       }
     },
     "languages": [
@@ -135,11 +147,15 @@
     "views": { "debug": [
       { "id": "neoGodotTools.activeSceneTree", "name": "Active Scene Tree", "icon": "resources/godot_icon.svg" },
       { "id": "neoGodotTools.nodeInspector", "name": "Inspector", "icon": "resources/godot_icon.svg" }
-    ], "neoGodotTools": [{ "id": "neoGodotTools.scenePreview", "name": "Scene Preview", "icon": "resources/godot_icon.svg" }] },
+    ], "neoGodotTools": [
+      { "id": "neoGodotTools.scenePreview", "name": "Scene Preview", "icon": "resources/godot_icon.svg" },
+      { "id": "neoGodotTools.resourceInspector", "name": "Resource Inspector", "icon": "resources/godot_icon.svg" }
+    ] },
     "viewsWelcome": [
       { "view": "neoGodotTools.activeSceneTree", "contents": "Scene Tree data has not been requested" },
       { "view": "neoGodotTools.nodeInspector", "contents": "Node has not been inspected" },
-      { "view": "neoGodotTools.scenePreview", "contents": "Open a Scene to see a preview of its structure" }
+      { "view": "neoGodotTools.scenePreview", "contents": "Open a Scene to see a preview of its structure" },
+      { "view": "neoGodotTools.resourceInspector", "contents": "Open a .tres resource to edit it in the Resource Inspector" }
     ],
     "menus": {
       "commandPalette": [
@@ -180,7 +196,8 @@
       "explorer/context": [
         { "command": "neoGodotTools.debugger.pinFile", "group": "2_workspace", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && !(resourcePath in neoGodotTools.context.pinnedScene)" },
         { "command": "neoGodotTools.debugger.unpinFile", "group": "2_workspace", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && (resourcePath in neoGodotTools.context.pinnedScene)" },
-        { "command": "neoGodotTools.copyResourcePath", "group": "6_copypath" }
+        { "command": "neoGodotTools.copyResourcePath", "group": "6_copypath" },
+        { "command": "neoGodotTools.openResourceInspector", "group": "2_workspace", "when": "resourceExtname == .tres" }
       ],
       "editor/title/run": [
         { "command": "neoGodotTools.debugger.debugCurrentFile", "group": "navigation@10", "when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace" },

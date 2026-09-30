@@ -1,6 +1,7 @@
 import {
 	GDScriptClass,
 	GDScriptClassName,
+	GDScriptEnumMember,
 	GDScriptConstant,
 	GDScriptDeclaration,
 	GDScriptDiagnostic,
@@ -51,6 +52,14 @@ class Parser {
 	}
 
 	private parseDeclaration(indent: number): GDScriptDeclaration | undefined {
+		const start = this.current();
+		if (start.indent !== indent) return undefined;
+		if (this.atValue("@")) {
+			// Annotations decorate the declaration that follows them; skipping the
+			// prefix keeps `@export var speed := 1.0` visible to the index.
+			this.skipAnnotations();
+			if (this.atLineEnd()) return undefined;
+		}
 		const token = this.current();
 		if (token.indent !== indent) return undefined;
 		if (this.isKeyword("class_name")) return this.parseClassName();
@@ -101,7 +110,7 @@ class Parser {
 		const start = this.current();
 		this.advance();
 		const nameToken = this.at("identifier") && !this.atValue("{") ? this.advance() : undefined;
-		const members: string[] = [];
+		const members: GDScriptEnumMember[] = [];
 		if (this.atValue("{")) {
 			this.advance();
 			while (!this.at("eof") && !this.atValue("}")) {
@@ -109,11 +118,13 @@ class Parser {
 					this.advance();
 					continue;
 				}
-				members.push(this.advance().value);
+				const member = this.advance();
+				let value: string | undefined;
 				if (this.atValue("=")) {
 					this.advance();
-					this.skipExpressionUntil([",", "}"]);
+					value = this.readEnumValue();
 				}
+				members.push({ name: member.value, value, range: this.range(member.start, member.end) });
 				if (this.atValue(",")) this.advance();
 			}
 			if (this.atValue("}")) this.advance();
@@ -231,7 +242,7 @@ class Parser {
 				this.advance();
 				type = this.parseType();
 			}
-			if (this.atValue("=")) {
+			if (this.atValue("=") || this.atValue(":=")) {
 				this.advance();
 				defaultValue = this.readParameterExpression();
 			}
@@ -253,7 +264,7 @@ class Parser {
 				if (depth === 0) break;
 				depth--;
 			}
-			if (depth === 0 && [",", "=", "->", "\n"].includes(value)) break;
+			if (depth === 0 && [",", "=", "->", ":", "\n"].includes(value)) break;
 			parts.push(this.advance().value);
 		}
 		return parts.join("");
@@ -304,6 +315,37 @@ class Parser {
 			previousLine = token.line;
 		}
 		return this.range(bodyStart, bodyEnd);
+	}
+
+	/** Skips `@annotation` prefixes (including their arguments) on a declaration line. */
+	private skipAnnotations(): void {
+		while (this.atValue("@") && !this.at("eof")) {
+			this.advance();
+			if (this.at("identifier")) this.advance();
+			if (this.atValue("(")) this.skipBalanced("(", ")");
+		}
+	}
+
+	private skipBalanced(open: string, close: string): void {
+		let depth = 0;
+		while (!this.at("eof")) {
+			const value = this.advance().value;
+			if (value === open) depth++;
+			else if (value === close && --depth <= 0) return;
+		}
+	}
+
+	private readEnumValue(): string {
+		const parts: string[] = [];
+		let depth = 0;
+		while (!this.at("eof")) {
+			const value = this.current().value;
+			if (depth === 0 && (value === "," || value === "}")) break;
+			if ("([{".includes(value)) depth++;
+			if (")]}".includes(value)) depth--;
+			parts.push(this.advance().value);
+		}
+		return parts.join(" ").trim();
 	}
 
 	private skipExpressionUntil(values: string[]) {

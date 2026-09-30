@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { FileIndex } from "./file_index";
 import { ReferenceIndex, collectReferences } from "./references";
 import { SymbolIndex } from "./symbol_index";
@@ -13,9 +14,9 @@ func heal(amount: int) -> void:
 describe("reference index", () => {
 	it("collects code identifiers but not comments or strings", () => {
 		const references = collectReferences(`${source}\n# health health\nvar label = "health"\n`, "file:///player.gd");
-		expect(references.filter((reference) => reference.name === "health")).toHaveLength(4);
-		expect(references.some((reference) => reference.name === "amount")).toBe(true);
-		expect(references.some((reference) => reference.name === "class_name")).toBe(false);
+		assert.equal((references.filter((reference) => reference.name === "health")).length, 4);
+		assert.equal(references.some((reference) => reference.name === "amount"), true);
+		assert.equal(references.some((reference) => reference.name === "class_name"), false);
 	});
 
 	it("replaces references incrementally with the file", () => {
@@ -27,12 +28,12 @@ describe("reference index", () => {
 		references.update("file:///player.gd");
 
 		const player = symbols.find("Player")[0];
-		expect(references.findForSymbol(player, true)).toHaveLength(1);
+		assert.equal((references.findForSymbol(player, true)).length, 1);
 
 		files.update("file:///player.gd", "class_name Enemy\nvar health: int\nhealth = 1\n");
 		symbols.update("file:///player.gd");
 		references.update("file:///player.gd");
-		expect(references.find("Player")).toHaveLength(0);
-		expect(references.find("health")).toHaveLength(2);
+		assert.equal((references.find("Player")).length, 0);
+		assert.equal((references.find("health")).length, 2);
 	});
 });

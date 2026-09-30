@@ -21,6 +21,12 @@ export interface SemanticCompletionItem {
 	returnType?: string;
 	containerName?: string;
 	uri: string;
+	/**
+	 * Sort priority of the completion item: lower values come first. The value is
+	 * assigned by the completion context (local scope before class members before
+	 * workspace symbols before builtins) so editors cannot alphabetize it away.
+	 */
+	priority: number;
 }
 
 interface QueryDependencySnapshot {
@@ -69,7 +75,7 @@ function symbolFromBinding(binding: Binding): IndexedSymbol {
 	};
 }
 
-function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
+function completionFromSymbol(symbol: IndexedSymbol, priority: number): SemanticCompletionItem {
 	return {
 		name: symbol.name,
 		kind: symbol.kind,
@@ -77,6 +83,7 @@ function completionFromSymbol(symbol: IndexedSymbol): SemanticCompletionItem {
 		returnType: symbol.returnType,
 		containerName: symbol.containerName,
 		uri: symbol.uri,
+		priority,
 	};
 }
 
@@ -253,7 +260,11 @@ export class SemanticQueryEngine {
 			const receiverName = memberMatch?.[1] ?? "super";
 			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
 			const containerName = receiver?.symbol?.kind === "class" ? receiver.symbol.name : undefined;
-			const member = receiver ? this.inheritedMembers.resolve(receiver.uri ?? "", word.name, containerName) : undefined;
+			const member = receiver
+				? receiver.symbol?.kind === "enum"
+					? this.types.getMember(receiver, word.name)
+					: this.inheritedMembers.resolve(receiver.uri ?? "", word.name, containerName)
+				: undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (receiver) return { confidence: "partial" };
 		}
@@ -284,10 +295,8 @@ export class SemanticQueryEngine {
 			const members = this.types.getMembers(receiver);
 			if (!members.length) return { confidence: "unknown" };
 			const memberPrefix = word?.name ?? "";
-			return {
-				value: members.filter((member) => member.name.startsWith(memberPrefix)).map(completionFromSymbol),
-				confidence: "exact",
-			};
+			const filtered = members.filter((member) => member.name.startsWith(memberPrefix));
+			return { value: filtered.map((member, index) => completionFromSymbol(member, index)), confidence: "exact" };
 		}
 		if (prefix.endsWith(".")) {
 			const receiver = this.types.resolveReceiver(uri, wordStart, "super");
@@ -295,24 +304,28 @@ export class SemanticQueryEngine {
 			const members = this.types.getMembers(receiver);
 			if (!members.length) return { confidence: "unknown" };
 			const memberPrefix = word?.name ?? "";
-			return {
-				value: members.filter((member) => member.name.startsWith(memberPrefix)).map(completionFromSymbol),
-				confidence: "exact",
-			};
+			const filtered = members.filter((member) => member.name.startsWith(memberPrefix));
+			return { value: filtered.map((member, index) => completionFromSymbol(member, index)), confidence: "exact" };
 		}
 
 		const completionPrefix = word?.name ?? "";
 		const bindings = this.bindings.getVisibleBindings(uri, position.offset);
+		// `getVisibleBindings` yields the innermost scope first, which is exactly the
+		// completion priority of Godot's editor: locals, then class members, then
+		// script members. Workspace and builtin symbols follow.
 		const localItems = bindings
 			.filter((binding) => binding.name.startsWith(completionPrefix))
-			.map((binding) => completionFromSymbol(symbolFromBinding(binding)));
+			.map((binding, index) => completionFromSymbol(symbolFromBinding(binding), index));
 		const localNames = new Set(localItems.map((item) => item.name));
 		const workspaceItems = this.symbols.workspaceSymbols(completionPrefix)
+			// Members of named enums are only valid after `EnumName.`.
+			.filter((symbol) => !(symbol.kind === "enum_member" && symbol.containerName))
 			.filter((symbol) => !localNames.has(symbol.name))
-			.map(completionFromSymbol);
+			.sort((left, right) => left.name.localeCompare(right.name) || left.uri.localeCompare(right.uri) || left.range.start.offset - right.range.start.offset)
+			.map((symbol, index) => completionFromSymbol(symbol, localItems.length + index));
 		const builtinItems = resolveBuiltinSymbols(completionPrefix)
 			.filter(({ builtin }) => !localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name))
-			.map(({ symbol }) => completionFromSymbol(symbol));
+			.map(({ symbol }, index) => completionFromSymbol(symbol, localItems.length + workspaceItems.length + index));
 		const items = [...localItems, ...workspaceItems, ...builtinItems];
 		if (!items.length) return { confidence: "unknown" };
 		return { value: items, confidence: "exact" };

@@ -36,6 +36,6 @@ test("parses nested classes and enums", () => {
 	assert.equal(result.ast.declarations[0].kind, "class");
 	if (result.ast.declarations[0].kind === "class") {
 		assert.equal(result.ast.declarations[0].declarations[0].kind, "enum");
-		assert.deepEqual(result.ast.declarations[0].declarations[0].members, ["WEAPON", "ARMOR"]);
+		assert.deepEqual(result.ast.declarations[0].declarations[0].members.map((member) => member.name), ["WEAPON", "ARMOR"]);
 	}
 });

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { SemanticQueryEngine } from "./query_engine.js";
 import type { BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
 
@@ -66,8 +67,8 @@ describe("SemanticQueryEngine", () => {
 			},
 		});
 		const result = engine.getSymbol(uri, { offset: 2 });
-		expect(result.confidence).toBe("exact");
-		expect(result.value?.name).toBe("player");
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "player");
 	});
 
 	it("returns the cached symbol result until its URI is invalidated", () => {
@@ -81,38 +82,38 @@ describe("SemanticQueryEngine", () => {
 			},
 		});
 		const first = engine.getSymbol(uri, { offset: 2 });
-		expect(engine.getSymbol(uri, { offset: 2 })).toBe(first);
+		assert.equal(engine.getSymbol(uri, { offset: 2 }), first);
 		engine.invalidate([uri]);
-		expect(engine.getSymbol(uri, { offset: 2 })).not.toBe(first);
+		assert.notEqual(engine.getSymbol(uri, { offset: 2 }), first);
 	});
 
 	it("invalidates a symbol cache entry when its global symbol dependency changes", () => {
 		const dependency = { value: "v1" };
 		const engine = engineFor("player", { symbolSignature: dependency });
 		const first = engine.getSymbol(uri, { offset: 2 });
-		expect(engine.getSymbol(uri, { offset: 2 })).toBe(first);
+		assert.equal(engine.getSymbol(uri, { offset: 2 }), first);
 		dependency.value = "v2";
-		expect(engine.getSymbol(uri, { offset: 2 })).not.toBe(first);
+		assert.notEqual(engine.getSymbol(uri, { offset: 2 }), first);
 	});
 
 	it("returns partial confidence for an ambiguous symbol", () => {
 		const first = { ...variable, uri: "file:///project/player.gd" };
 		const second = { ...variable, uri: "file:///project/enemy.gd" };
 		const engine = engineFor("player", { fileSymbols: [], workspace: [first, second] });
-		expect(engine.getSymbol(uri, { offset: 3 }).confidence).toBe("partial");
+		assert.equal(engine.getSymbol(uri, { offset: 3 }).confidence, "partial");
 	});
 
 	it("returns unknown confidence when no semantic information is available", () => {
 		const engine = engineFor("unknown_name", { fileSymbols: [] });
-		expect(engine.getSymbol(uri, { offset: 4 }).confidence).toBe("unknown");
+		assert.equal(engine.getSymbol(uri, { offset: 4 }).confidence, "unknown");
 	});
 
 	it("resolves named types and exposes their members", () => {
 		const member: IndexedSymbol = { ...variable, name: "move", kind: "function" };
 		const engine = engineFor("Player", { members: [member] });
 		const type = engine.getType(uri, { offset: 2 }, "Player");
-		expect(type.confidence).toBe("exact");
-		expect(engine.getMembers(type.value!).value).toEqual([member]);
+		assert.equal(type.confidence, "exact");
+		assert.deepEqual(engine.getMembers(type.value!).value, [member]);
 	});
 
 	it("uses the same local resolution boundary for hover", () => {
@@ -126,8 +127,8 @@ describe("SemanticQueryEngine", () => {
 			},
 		});
 		const result = engine.getHover(uri, { offset: 2 });
-		expect(result.confidence).toBe("exact");
-		expect(result.value?.name).toBe("player");
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "player");
 	});
 
 	it("returns exact references for a bound symbol and filters its declaration when requested", () => {
@@ -143,8 +144,8 @@ describe("SemanticQueryEngine", () => {
 			},
 			references: [declaration, reference],
 		});
-		expect(engine.getReferences(uri, { offset: 2 }, true).value).toEqual([declaration, reference]);
-		expect(engine.getReferences(uri, { offset: 2 }, false).value).toEqual([reference]);
+		assert.deepEqual(engine.getReferences(uri, { offset: 2 }, true).value, [declaration, reference]);
+		assert.deepEqual(engine.getReferences(uri, { offset: 2 }, false).value, [reference]);
 	});
 
 	it("returns local and workspace completion candidates with local names taking precedence", () => {
@@ -157,8 +158,8 @@ describe("SemanticQueryEngine", () => {
 			fileSymbols: [local],
 		});
 		const result = engine.getCompletions(uri, { offset: 2 });
-		expect(result.confidence).toBe("exact");
-		expect(result.value?.map((item) => item.name)).toEqual(["player", "print_player"]);
+		assert.equal(result.confidence, "exact");
+		assert.deepEqual(result.value?.map((item) => item.name), ["player", "print_player"]);
 	});
 
 	it("returns cached completion results until its URI is invalidated", () => {
@@ -166,25 +167,25 @@ describe("SemanticQueryEngine", () => {
 			visibleBindings: [{ name: "player", uri, declarationRange: variable.range, kind: "local", type: "Player" }],
 		});
 		const first = engine.getCompletions(uri, { offset: 2 });
-		expect(engine.getCompletions(uri, { offset: 2 })).toBe(first);
+		assert.equal(engine.getCompletions(uri, { offset: 2 }), first);
 		engine.invalidate([uri]);
-		expect(engine.getCompletions(uri, { offset: 2 })).not.toBe(first);
+		assert.notEqual(engine.getCompletions(uri, { offset: 2 }), first);
 	});
 
 	it("invalidates completion cache entries when the workspace candidate set changes", () => {
 		const dependency = { value: "v1" };
 		const engine = engineFor("pl", { workspaceSignature: dependency });
 		const first = engine.getCompletions(uri, { offset: 2 });
-		expect(engine.getCompletions(uri, { offset: 2 })).toBe(first);
+		assert.equal(engine.getCompletions(uri, { offset: 2 }), first);
 		dependency.value = "v2";
-		expect(engine.getCompletions(uri, { offset: 2 })).not.toBe(first);
+		assert.notEqual(engine.getCompletions(uri, { offset: 2 }), first);
 	});
 
 	it("returns member completions from a resolved receiver", () => {
 		const move: IndexedSymbol = { ...variable, name: "move", kind: "function" };
 		const engine = engineFor("player.mo", { resolvedType: playerType, members: [move] });
 		const result = engine.getCompletions(uri, { offset: 8 });
-		expect(result.confidence).toBe("exact");
-		expect(result.value?.map((item) => item.name)).toEqual(["move"]);
+		assert.equal(result.confidence, "exact");
+		assert.deepEqual(result.value?.map((item) => item.name), ["move"]);
 	});
 });
