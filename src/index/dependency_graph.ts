@@ -32,17 +32,28 @@ function candidateKeys(value: string): string[] {
 	return name && name !== path ? [path, name] : [path];
 }
 
+function collectClassNames(declarations: GDScriptDeclaration[]): string[] {
+	return declarations.flatMap((declaration) => {
+		if (declaration.kind === "class_name") return [declaration.name];
+		if (declaration.kind === "class") return collectClassNames(declaration.declarations);
+		return [];
+	});
+}
+
 export class DependencyGraph {
 	private readonly outgoing = new Map<string, DependencyEdge[]>();
 	private readonly incoming = new Map<string, Set<string>>();
 	private readonly unresolved = new Map<string, Set<string>>();
+	private readonly classNames = new Map<string, string[]>();
 
 	constructor(private readonly files: FileIndex) {}
 
 	update(uri: string): string[] {
+		const previousClassNames = [...(this.classNames.get(uri) ?? [])];
 		this.removeOutgoing(uri);
+		this.rememberClassNames(uri);
 		const file = this.files.get(uri);
-		if (!file) return [];
+		if (!file) return this.refreshForTarget(uri, previousClassNames);
 		const targets = new Map<string, DependencyEdge>();
 		for (const value of collectExtends(file.ast.declarations)) this.addCandidate(uri, value, "extends", targets);
 		for (const value of collectPreloads(file.source)) this.addCandidate(uri, value, "preload", targets);
@@ -53,7 +64,7 @@ export class DependencyGraph {
 			dependents.add(uri);
 			this.incoming.set(edge.to, dependents);
 		}
-		return this.refreshForTarget(uri);
+		return this.refreshForTarget(uri, previousClassNames);
 	}
 
 	getDependencies(uri: string): readonly DependencyEdge[] { return this.outgoing.get(uri) ?? []; }
@@ -75,12 +86,13 @@ export class DependencyGraph {
 
 	remove(uri: string): string[] {
 		const dependents = [...this.getDependents(uri)];
+		const keys = this.targetKeys(uri);
 		for (const dependent of dependents) {
 			const edges = this.outgoing.get(dependent) ?? [];
 			const remaining = edges.filter((edge) => edge.to !== uri);
 			if (remaining.length !== edges.length) {
 				this.outgoing.set(dependent, remaining);
-				for (const key of this.targetKeys(uri)) {
+				for (const key of keys) {
 					const candidates = this.unresolved.get(key) ?? new Set<string>();
 					candidates.add(dependent);
 					this.unresolved.set(key, candidates);
@@ -90,6 +102,7 @@ export class DependencyGraph {
 		this.removeOutgoing(uri);
 		this.incoming.delete(uri);
 		for (const entries of this.incoming.values()) entries.delete(uri);
+		this.classNames.delete(uri);
 		return dependents;
 	}
 
@@ -97,15 +110,34 @@ export class DependencyGraph {
 		this.outgoing.clear();
 		this.incoming.clear();
 		this.unresolved.clear();
+		this.classNames.clear();
 	}
 
-	private refreshForTarget(uri: string): string[] {
+	private refreshForTarget(uri: string, extraKeys: readonly string[] = []): string[] {
 		const candidates = new Set<string>();
-		for (const key of this.targetKeys(uri)) {
+		for (const key of [...this.targetKeys(uri), ...extraKeys]) {
 			for (const candidate of this.unresolved.get(key) ?? []) candidates.add(candidate);
 		}
 		for (const candidate of candidates) this.update(candidate);
 		return [...candidates];
+	}
+
+	/** Records the class names the graph last saw for a file (used for refresh bookkeeping). */
+	private rememberClassNames(uri: string): void {
+		const names = this.classNamesOf(uri);
+		if (names.length) this.classNames.set(uri, names);
+		else this.classNames.delete(uri);
+	}
+
+	private classNamesOf(uri: string): string[] {
+		const file = this.files.get(uri);
+		return file ? collectClassNames(file.ast.declarations) : [];
+	}
+
+	/** Resolves a project `class_name` against the current file index. */
+	private resolveClassName(value: string): string | undefined {
+		const matches = [...this.files.values()].filter((file) => collectClassNames(file.ast.declarations).includes(value));
+		return matches.length === 1 ? matches[0].uri : undefined;
 	}
 
 	private addCandidate(uri: string, value: string, reason: DependencyEdge["reason"], targets: Map<string, DependencyEdge>): void {
@@ -138,6 +170,8 @@ export class DependencyGraph {
 			const matches = [...this.files.values()].filter((file) => normalizePath(this.pathFromUri(file.uri)).endsWith(path));
 			return matches.length === 1 ? matches[0].uri : undefined;
 		}
+		const named = this.resolveClassName(value.split(".")[0]);
+		if (named) return named;
 		const name = value.split("/").pop()?.replace(/\.gd$/, "");
 		if (!name) return undefined;
 		const matches = [...this.files.values()].filter((file) => this.pathFromUri(file.uri).endsWith(`/${name}.gd`));
@@ -147,7 +181,7 @@ export class DependencyGraph {
 	private targetKeys(uri: string): string[] {
 		const path = normalizePath(this.pathFromUri(uri));
 		const name = path.split("/").pop();
-		return name && name !== path ? [path, name] : [path];
+		return [...(name && name !== path ? [path, name] : [path]), ...(this.classNames.get(uri) ?? this.classNamesOf(uri))];
 	}
 
 	private pathFromUri(uri: string): string {

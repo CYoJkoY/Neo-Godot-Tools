@@ -21,6 +21,7 @@ function symbolSignature(symbol: IndexedSymbol): unknown {
 		type: symbol.type,
 		returnType: symbol.returnType,
 		static: symbol.static,
+		documentation: symbol.documentation,
 		parameters: symbol.parameters?.map((parameter) => ({
 			name: parameter.name,
 			type: parameter.type,

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { DependencyGraph } from "./dependency_graph.js";
 import { FileIndex } from "./file_index.js";
 
@@ -11,11 +12,11 @@ describe("DependencyGraph", () => {
 
 		files.update(sourceUri, 'const Base = preload("res://base.gd")');
 		graph.update(sourceUri);
-		expect(graph.getDependencies(sourceUri)).toEqual([]);
+		assert.deepEqual(graph.getDependencies(sourceUri), []);
 
 		files.update(targetUri, "class_name Base");
-		expect(graph.update(targetUri)).toEqual([sourceUri]);
-		expect(graph.getDependencies(sourceUri)).toEqual([
+		assert.deepEqual(graph.update(targetUri), [sourceUri]);
+		assert.deepEqual(graph.getDependencies(sourceUri), [
 			{ from: sourceUri, to: targetUri, reason: "preload" },
 		]);
 	});
@@ -30,12 +31,12 @@ describe("DependencyGraph", () => {
 		files.update(sourceUri, 'const Base = preload("res://base.gd")');
 		graph.update(targetUri);
 		graph.update(sourceUri);
-		expect(graph.getDependents(targetUri)).toEqual([sourceUri]);
+		assert.deepEqual(graph.getDependents(targetUri), [sourceUri]);
 
 		const dependents = graph.remove(targetUri);
 		files.remove(targetUri);
 		for (const dependent of dependents) graph.update(dependent);
 
-		expect(graph.getDependencies(sourceUri)).toEqual([]);
+		assert.deepEqual(graph.getDependencies(sourceUri), []);
 	});
 });

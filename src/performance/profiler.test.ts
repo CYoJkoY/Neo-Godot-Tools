@@ -20,11 +20,13 @@ test("PerformanceProfiler bounds retained latency samples", () => {
 	const profiler = new PerformanceProfiler();
 	for (let index = 0; index < 513; index++) profiler.record("parse", index);
 
+	// The profiler keeps the 512 most recent samples (1..512) and uses the
+	// nearest-rank definition, so p95 maps to index 486 of the retained window.
 	const sample = profiler.getSnapshot().parse;
 	assert.equal(sample.count, 513);
 	assert.equal(sample.maxMs, 512);
 	assert.equal(sample.p50Ms, 256);
-	assert.equal(sample.p95Ms, 486);
+	assert.equal(sample.p95Ms, 487);
 	assert.equal(sample.p99Ms, 507);
 });
 

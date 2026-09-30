@@ -1,0 +1,319 @@
+/**
+ * Parsing and text-preserving editing of Godot `.tres` resource files.
+ *
+ * The inspector keeps the file as the source of truth: every edit rewrites only
+ * the affected lines, so the `[gd_resource ...]` header, the property order and
+ * comments elsewhere in the file survive untouched.
+ */
+
+import { parseVariant, VariantValue } from "./values.js";
+
+export interface PropertyEntry {
+	name: string;
+	valueText: string;
+	line: number;
+	/** Inclusive last line of a multi-line value. */
+	endLine: number;
+	value: VariantValue;
+}
+
+export interface ExtResourceEntry {
+	id: string;
+	type: string;
+	path?: string;
+	uid?: string;
+	line: number;
+	endLine: number;
+}
+
+export interface SubResourceEntry {
+	id: string;
+	type: string;
+	line: number;
+	endLine: number;
+	properties: PropertyEntry[];
+}
+
+export interface ResourceDocument {
+	text: string;
+	lineEnding: string;
+	resourceType: string;
+	scriptClass?: string;
+	format?: string;
+	uid?: string;
+	loadSteps?: string;
+	headerLine: number;
+	extResources: ExtResourceEntry[];
+	subResources: SubResourceEntry[];
+	properties: PropertyEntry[];
+}
+
+const SECTION_RE = /^\[([a-z_]+)\s*(.*)\]$/;
+const ATTRIBUTE_RE = /([A-Za-z_][A-Za-z0-9_]*)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s\]]+)/g;
+
+function unquote(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+		return value.slice(1, -1).replace(/\\(.)/g, "$1");
+	}
+	return value;
+}
+
+function parseAttributes(text: string): Record<string, string> {
+	const attributes: Record<string, string> = {};
+	for (const match of text.matchAll(ATTRIBUTE_RE)) {
+		attributes[match[1]] = unquote(match[2]) ?? match[2];
+	}
+	return attributes;
+}
+
+/** Returns the last line of an assignment whose value spans multiple lines. */
+function assignmentEndLine(lines: string[], start: number): number {
+	let depth = 0;
+	let quoted: string | undefined;
+	for (let line = start; line < lines.length; line++) {
+		const text = line === start ? lines[line].slice(lines[line].indexOf("=") + 1) : lines[line];
+		for (let index = 0; index < text.length; index++) {
+			const char = text[index];
+			if (quoted) {
+				if (char === "\\") index++;
+				else if (char === quoted) quoted = undefined;
+				continue;
+			}
+			if (char === '"' || char === "'") { quoted = char; continue; }
+			if (char === "(" || char === "[" || char === "{") depth++;
+			else if (char === ")" || char === "]" || char === "}") depth--;
+		}
+		if (depth <= 0 && !quoted) return line;
+	}
+	return lines.length - 1;
+}
+
+function parseProperties(lines: string[], start: number, end: number): PropertyEntry[] {
+	const properties: PropertyEntry[] = [];
+	for (let line = start; line < end; line++) {
+		const match = lines[line].match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+		if (!match) continue;
+		const endLine = assignmentEndLine(lines, line);
+		const valueText = lines.slice(line, endLine + 1).map((text, index) => (index === 0 ? text.slice(text.indexOf("=") + 1) : text)).join("\n").trim();
+		properties.push({ name: match[1], valueText, line, endLine, value: parseVariant(valueText).value });
+		line = endLine;
+	}
+	return properties;
+}
+
+function findSectionEnd(lines: string[], start: number): number {
+	let line = start;
+	while (line < lines.length && !SECTION_RE.test(lines[line].trim())) line++;
+	// Trailing blank lines belong to the file, not to the section.
+	while (line > start && lines[line - 1].trim() === "") line--;
+	return line;
+}
+
+export function parseResourceDocument(text: string): ResourceDocument {
+	const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+	const lines = text.split(/\r?\n/);
+	const document: ResourceDocument = {
+		text,
+		lineEnding,
+		resourceType: "Resource",
+		headerLine: -1,
+		extResources: [],
+		subResources: [],
+		properties: [],
+	};
+
+	for (let line = 0; line < lines.length; line++) {
+		const trimmed = lines[line].trim();
+		const section = trimmed.match(SECTION_RE);
+		if (!section) continue;
+		const name = section[1];
+		const attributes = parseAttributes(section[2]);
+		const end = findSectionEnd(lines, line + 1);
+		if (name === "gd_resource") {
+			document.headerLine = line;
+			document.resourceType = attributes.type ?? "Resource";
+			document.scriptClass = attributes.script_class;
+			document.format = attributes.format;
+			document.uid = attributes.uid;
+			document.loadSteps = attributes.load_steps;
+		} else if (name === "ext_resource") {
+			document.extResources.push({
+				id: attributes.id ?? "",
+				type: attributes.type ?? "Resource",
+				path: attributes.path,
+				uid: attributes.uid,
+				line,
+				endLine: end - 1,
+			});
+		} else if (name === "sub_resource") {
+			document.subResources.push({
+				id: attributes.id ?? "",
+				type: attributes.type ?? "Resource",
+				line,
+				endLine: end - 1,
+				properties: parseProperties(lines, line + 1, end),
+			});
+		} else if (name === "resource") {
+			document.properties = parseProperties(lines, line + 1, end);
+		}
+		line = end - 1;
+	}
+	return document;
+}
+
+export type ResourceEdit =
+	| { kind: "setProperty"; name: string; value: string; target?: string }
+	| { kind: "revertProperty"; name: string; defaultValue?: string; target?: string }
+	| { kind: "addExtResource"; type: string; path: string; uid?: string }
+	| { kind: "addSubResource"; type: string; properties?: Record<string, string> }
+	| { kind: "duplicateSubResource"; id: string }
+	| { kind: "renameSubResource"; id: string; newId: string }
+	| { kind: "deleteSubResource"; id: string };
+
+export interface EditResult {
+	text: string;
+	/** Ids created by `addSubResource`/`duplicateSubResource`. */
+	createdIds: string[];
+}
+
+/** Generates the next free `Type_N` sub-resource id. */
+export function uniqueSubResourceId(type: string, existing: readonly string[]): string {
+	const base = `${type || "Resource"}`;
+	let index = 1;
+	while (existing.includes(`${base}_${index}`)) index++;
+	return `${base}_${index}`;
+}
+
+/** Generates the next free `N_xxxx` external resource id. */
+export function uniqueExtResourceId(existing: readonly string[]): string {
+	let index = 1;
+	while (existing.some((id) => id.startsWith(`${index}_`))) index++;
+	return `${index}_res`;
+}
+
+function indentOf(line: string): string {
+	return line.match(/^\s*/)?.[0] ?? "";
+}
+
+function insertLine(lines: string[], index: number, text: string): void {
+	lines.splice(Math.max(0, Math.min(index, lines.length)), 0, text);
+}
+
+/** Inserts a `[sub_resource]` block before the `[resource]` section (or at the end). */
+function insertSubResource(lines: string[], type: string, id: string, properties: Record<string, string>): void {
+	let target = lines.findIndex((line) => /^\s*\[resource\]/.test(line));
+	if (target === -1) target = lines.length;
+	const block: string[] = [];
+	if (target > 0 && lines[target - 1].trim() !== "") block.push("");
+	block.push(`[sub_resource type="${type}" id="${id}"]`);
+	for (const [name, value] of Object.entries(properties)) block.push(`${name} = ${value}`);
+	if (lines[target] !== undefined && lines[target].trim() !== "") block.push("");
+	for (const [offset, text] of block.entries()) insertLine(lines, target + offset, text);
+}
+
+function replaceRange(lines: string[], start: number, end: number, replacement: string[]): void {
+	lines.splice(start, end - start + 1, ...replacement);
+}
+
+/** Replaces every reference to `id`; `replacement===undefined` turns them into `null`. */
+function replaceReferences(text: string, id: string, replacement?: string): string {
+	return text.replace(/(Ext|Sub)Resource\(\s*"([^"]*)"\s*\)/g, (match, prefix: string, referenceId: string) => {
+		if (referenceId !== id) return match;
+		return replacement ? `${prefix}Resource("${replacement}")` : "null";
+	});
+}
+
+/** Rewrites every `ExtResource("id")`/`SubResource("id")` reference in `text`. */
+export function rewriteReferences(text: string, oldId: string, newId: string): string {
+	return replaceReferences(text, oldId, newId);
+}
+
+/** Replaces every reference to a removed id with `null`. */
+export function dropReferences(text: string, id: string): string {
+	return replaceReferences(text, id);
+}
+
+export function applyResourceEdits(text: string, edits: readonly ResourceEdit[]): EditResult {
+	let current = text;
+	const createdIds: string[] = [];
+	for (const edit of edits) {
+		const document = parseResourceDocument(current);
+		const lines = current.split(/\r?\n/);
+		if (edit.kind === "setProperty" || edit.kind === "revertProperty") {
+			// `target` addresses a property of a sub-resource instead of the file's
+			// own `[resource]` section.
+			const owner = edit.target ? document.subResources.find((entry) => entry.id === edit.target) : undefined;
+			if (edit.target && !owner) continue;
+			const properties = owner ? owner.properties : document.properties;
+			const property = properties.find((entry) => entry.name === edit.name);
+			const value = edit.kind === "setProperty" ? edit.value : edit.defaultValue;
+			if (property) {
+				if (edit.kind === "revertProperty" && value === undefined) {
+					// No known default: drop the explicit value so Godot falls back to it.
+					replaceRange(lines, property.line, property.endLine, []);
+					if (lines[property.line]?.trim() === "" && lines[property.line - 1]?.trim() === "") replaceRange(lines, property.line, property.line, []);
+				} else {
+					replaceRange(lines, property.line, property.endLine, [`${indentOf(lines[property.line])}${edit.name} = ${value}`]);
+				}
+			} else if (value !== undefined) {
+				const anchor = owner
+					? (owner.properties.length ? owner.properties[owner.properties.length - 1].endLine + 1 : owner.line + 1)
+					: (() => {
+						const resourceIndex = lines.findIndex((line) => /^\s*\[resource\]/.test(line));
+						return resourceIndex === -1 ? lines.length : resourceIndex + 1;
+					})();
+				insertLine(lines, anchor, `${edit.name} = ${value}`);
+			}
+		} else if (edit.kind === "addSubResource") {
+			const id = uniqueSubResourceId(edit.type, document.subResources.map((entry) => entry.id));
+			insertSubResource(lines, edit.type, id, edit.properties ?? {});
+			createdIds.push(id);
+		} else if (edit.kind === "addExtResource") {
+			const id = uniqueExtResourceId(document.extResources.map((entry) => entry.id));
+			const attributes = [`type="${edit.type}"`];
+			if (edit.uid) attributes.push(`uid="${edit.uid}"`);
+			attributes.push(`path="${edit.path}"`);
+			const target = document.extResources.length
+				? document.extResources[document.extResources.length - 1].endLine + 1
+				: Math.max(0, document.headerLine + 1);
+			const block = ["", `[ext_resource ${attributes.join(" ")} id="${id}"]`];
+			if (target >= lines.length || lines[target].trim() !== "") block.push("");
+			for (const [offset, text] of block.entries()) insertLine(lines, target + offset, text);
+			createdIds.push(id);
+		} else if (edit.kind === "duplicateSubResource") {
+			const source = document.subResources.find((entry) => entry.id === edit.id);
+			if (!source) continue;
+			const id = uniqueSubResourceId(source.type, document.subResources.map((entry) => entry.id));
+			const body = lines.slice(source.line + 1, source.endLine + 1).join("\n");
+			const insert = [`[sub_resource type="${source.type}" id="${id}"]`];
+			if (body.trim()) insert.push(body);
+			const after = lines[source.endLine + 1];
+			if (after === undefined || after.trim() !== "") insert.push("");
+			else insert.unshift("");
+			for (const [offset, line] of insert.entries()) insertLine(lines, source.endLine + 1 + offset, line);
+			createdIds.push(id);
+		} else if (edit.kind === "renameSubResource") {
+			const source = document.subResources.find((entry) => entry.id === edit.id);
+			if (!source) continue;
+			replaceRange(lines, source.line, source.line, [`[sub_resource type="${source.type}" id="${edit.newId}"]`]);
+			const body = lines.join(document.lineEnding);
+			current = rewriteReferences(body, edit.id, edit.newId);
+			continue;
+		} else if (edit.kind === "deleteSubResource") {
+			const source = document.subResources.find((entry) => entry.id === edit.id);
+			if (!source) continue;
+			replaceRange(lines, source.line, source.endLine, []);
+			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "") replaceRange(lines, source.line, source.line, []);
+			current = dropReferences(lines.join(document.lineEnding), edit.id);
+			continue;
+		}
+		current = lines.join(document.lineEnding);
+	}
+	return { text: current, createdIds };
+}
+
+/** Writes back the (edited) document; identical to the input when nothing changed. */
+export function serializeResourceDocument(text: string, edits: readonly ResourceEdit[] = []): string {
+	return edits.length ? applyResourceEdits(text, edits).text : text;
+}

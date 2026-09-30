@@ -13,6 +13,7 @@ function symbolSignature(symbol: IndexedSymbol): string {
 		type: symbol.type,
 		parameters: symbol.parameters,
 		static: symbol.static,
+		documentation: symbol.documentation,
 	});
 }
 
@@ -72,7 +73,13 @@ export class SymbolIndex {
 				if (!normalized || symbol.name.toLowerCase().includes(normalized)) result.push(symbol);
 			}
 		}
-		return result;
+		// The file map has no meaningful order; sort so completions and signatures
+		// stay stable no matter when each file was indexed.
+		return result.sort((left, right) =>
+			left.name.localeCompare(right.name) ||
+			left.uri.localeCompare(right.uri) ||
+			left.range.start.offset - right.range.start.offset,
+		);
 	}
 
 	workspaceSignature(query = ""): string {

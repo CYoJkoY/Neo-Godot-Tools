@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
 
 describe("UpdateScheduler", () => {
@@ -12,9 +13,9 @@ describe("UpdateScheduler", () => {
 		scheduler.enqueue({ uri: "file:///player.gd", version: 2, source: "var hp = 2" });
 		await scheduler.flush();
 
-		expect(applied).toHaveLength(1);
-		expect(applied[0].version).toBe(2);
-		expect(applied[0].source).toBe("var hp = 2");
+		assert.equal((applied).length, 1);
+		assert.equal(applied[0].version, 2);
+		assert.equal(applied[0].source, "var hp = 2");
 		scheduler.dispose();
 	});
 
@@ -22,6 +23,9 @@ describe("UpdateScheduler", () => {
 		let resolveApply: (() => void) | undefined;
 		let first: ScheduledUpdate | undefined;
 		const scheduler = new UpdateScheduler(1000, async (update) => {
+			// Only the first update is held in-flight; later updates are applied
+			// immediately so the flush can drain the queue.
+			if (first) return;
 			first = update;
 			await new Promise<void>((resolve) => {
 				resolveApply = resolve;
@@ -32,8 +36,8 @@ describe("UpdateScheduler", () => {
 		const flush = scheduler.flush();
 		await Promise.resolve();
 		scheduler.enqueue({ uri: "file:///player.gd", version: 2, source: "var hp = 2" });
-		expect(first).toBeDefined();
-		expect(scheduler.isCurrent(first!)).toBe(false);
+		assert.ok(first);
+		assert.equal(scheduler.isCurrent(first!), false);
 		resolveApply!();
 		await flush;
 		scheduler.dispose();
@@ -49,7 +53,7 @@ describe("UpdateScheduler", () => {
 		scheduler.enqueue({ uri: "file:///player.gd", version: 0 });
 		await scheduler.waitForIdle();
 
-		expect(applied).toBe(1);
+		assert.equal(applied, 1);
 		scheduler.dispose();
 	});
 });

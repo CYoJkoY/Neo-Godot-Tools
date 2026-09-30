@@ -5,6 +5,7 @@ import * as csharp from "prismjs/components/prism-csharp";
 import { marked } from "marked";
 import type { GodotNativeSymbol } from "./documentation_types";
 import { createLogger, get_extension_uri } from "../utils";
+import { doc_symbol_anchor } from "../utils/doc_anchor";
 import yabbcode = require("ya-bbcode");
 
 const log = createLogger("providers.docs_builder");
@@ -56,6 +57,86 @@ if (theme === vscode.ColorThemeKind.Dark) {
 	}`;
 }
 
+/**
+ * Scrolls the documentation page to a symbol. Anchors are kind-prefixed
+ * (`method-abs`), so the lookup also falls back to plain names and to the
+ * `data-symbol` attributes for pages generated before the anchors existed.
+ */
+export const DOC_FOCUS_FUNCTION = `function ngdtFocus(target){
+  if (!target) return;
+  var PREFIXES = ["method","constant","property","signal","enum","constructor","operator","annotation","theme-item"];
+  function strip(raw){
+    var s = String(raw || "");
+    for (var i = 0; i < PREFIXES.length; i++) {
+      var p = PREFIXES[i] + "-";
+      if (s.slice(0, p.length).toLowerCase() === p) return s.slice(p.length);
+    }
+    return s;
+  }
+  function candidates(raw){
+    var out = [];
+    var name = strip(raw);
+    var push = function(v){ if (v && out.indexOf(v) === -1) out.push(v); };
+    push(raw); push(raw.toLowerCase());
+    if (name) {
+      for (var i = 0; i < PREFIXES.length; i++) push(PREFIXES[i] + "-" + name);
+      for (var j = 0; j < PREFIXES.length; j++) push(PREFIXES[j] + "-" + name.toLowerCase());
+    }
+    return out;
+  }
+  function focus(el){
+    el.scrollIntoView({ block: "start", inline: "nearest" });
+    el.classList && el.classList.add("ngdt-doc-target");
+    if (el.style) {
+      el.style.outline = "2px solid #f0a35e";
+      el.style.outlineOffset = "2px";
+      el.style.borderRadius = "4px";
+    }
+  }
+  var ids = candidates(target);
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) { focus(el); return; }
+  }
+  var name = strip(target);
+  var attrs = ["data-symbol","data-symbol-name","data-name","name","data-member","data-anchor"];
+  for (var a = 0; a < attrs.length; a++) {
+    var nodes = document.querySelectorAll("[" + attrs[a] + "]");
+    for (var n = 0; n < nodes.length; n++) {
+      var v = nodes[n].getAttribute(attrs[a]) || "";
+      if (v === name || v.toLowerCase() === name.toLowerCase() || v === target) { focus(nodes[n]); return; }
+    }
+  }
+  var heads = document.querySelectorAll("h1,h2,h3,h4,h5,dt,summary,.symbol,.member,.method,.constant");
+  for (var h = 0; h < heads.length; h++) {
+    var text = (heads[h].textContent || "").trim();
+    if (text === name || text === name + "()" || text.replace(/\\(\\)$/, "") === name) { focus(heads[h]); return; }
+  }
+  window.scrollTo(0, 0);
+}`;
+
+/** Maps a native symbol kind onto the documentation anchor prefix. */
+function symbol_doc_kind(kind: SymbolKind | undefined): string {
+	switch (kind) {
+		case SymbolKind.Method:
+		case SymbolKind.Function: return "method";
+		case SymbolKind.Constructor: return "constructor";
+		case SymbolKind.Operator: return "operator";
+		case SymbolKind.Property:
+		case SymbolKind.Variable: return "property";
+		case SymbolKind.Constant:
+		case SymbolKind.EnumMember: return "constant";
+		case SymbolKind.Event: return "signal";
+		case SymbolKind.Enum: return "enum";
+		default: return "method";
+	}
+}
+
+/** Element id / navigation anchor of a native symbol, e.g. `method-abs`. */
+function symbol_element_id(symbol: GodotNativeSymbol): string {
+	return doc_symbol_anchor(symbol_doc_kind(symbol.kind), symbol.name);
+}
+
 export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSymbol, target?: string): string {
 	const pagemapJsUri = webview.asWebviewUri(get_extension_uri("media", "pagemap.js"));
 	const prismCssUri = webview.asWebviewUri(get_extension_uri("media", "prism.css"));
@@ -65,7 +146,7 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 	if (target) {
 		initialFocus = `
 			window.addEventListener('load', event => {
-				document.getElementById('${target}').scrollIntoView();
+				ngdtFocus(${JSON.stringify(target)});
 			});
 		`;
 	}
@@ -88,13 +169,14 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 			
 			<script src="${pagemapJsUri}"></script>
 			<script>
+				${DOC_FOCUS_FUNCTION}
 				pagemap(document.querySelector('#minimap'), ${options});			
 				${initialFocus};
 
 				var vscode = acquireVsCodeApi();
 				function inspect(native_class, symbol_name) {
 					if (typeof (godot_class) != 'undefined' && godot_class == native_class) {
-						document.getElementById(symbol_name).scrollIntoView();
+						ngdtFocus(symbol_name);
 					} else {
 						vscode.postMessage({
 							type: 'INSPECT_NATIVE_SYMBOL',
@@ -109,7 +191,7 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 					const message = event.data;
 					switch (message.command) {
 						case 'focus':
-							document.getElementById(message.target).scrollIntoView();
+							ngdtFocus(message.target);
 							break;
 					}
 				});
@@ -120,10 +202,6 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 
 export function make_symbol_document(symbol: GodotNativeSymbol): string {
 	const classlink = make_link(symbol.native_class, undefined);
-
-	function make_symbol_id(name: string) {
-		return name.replace(/[^A-Za-z0-9_-]/g, "_");
-	}
 
 	function make_function_signature(s: GodotNativeSymbol, with_class = false) {
 		const parts = /\((.*)?\)\s*\-\>\s*(([A-z0-9]+)?)$/.exec(s.detail ?? "");
@@ -137,7 +215,7 @@ export function make_symbol_document(symbol: GodotNativeSymbol): string {
 		);
 		args = args.replace(/\s=\s(.*?)[\,\)]/g, "");
 		return `${ret_type} ${with_class ? `${classlink}.` : ""}${element("a", s.name, {
-			href: `#${make_symbol_id(s.name)}`,
+			href: `#${symbol_element_id(s)}`,
 		})}( ${args} )`;
 	}
 
@@ -151,7 +229,7 @@ export function make_symbol_document(symbol: GodotNativeSymbol): string {
 					return { body: "" };
 				}
 				const type = make_link(parts[2], undefined);
-				const name = element("a", s.name, { href: `#${make_symbol_id(s.name)}` });
+				const name = element("a", s.name, { href: `#${symbol_element_id(s)}` });
 				const title = element("h4", `${type} ${with_class ? `${classlink}.` : ""}${s.name}`);
 				const doc = element("p", format_documentation(s.documentation, symbol.native_class));
 				const div = element("div", title + doc);
@@ -251,34 +329,34 @@ export function make_symbol_document(symbol: GodotNativeSymbol): string {
 					log.debug(`Unable to render symbol "${s.name}" (unhandled SymbolKind ${s.kind})`);
 					continue;
 				}
-				const id = make_symbol_id(s.name);
+				const id = symbol_element_id(s);
 				switch (s.kind) {
 					case SymbolKind.Property:
 					case SymbolKind.Variable:
 						properties_index += element("li", elements.index ?? "");
-						propertyies += element("li", elements.body, { id });
+						propertyies += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 					case SymbolKind.Constant:
-						constants += element("li", elements.body, { id });
+						constants += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 					case SymbolKind.Event:
-						signals += element("li", elements.body, { id });
+						signals += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 					case SymbolKind.Constructor:
 						constructors_index += element("li", elements.index ?? "");
-						constructors += element("li", elements.body, { id });
+						constructors += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 					case SymbolKind.Method:
 					case SymbolKind.Function:
 						methods_index += element("li", elements.index ?? "");
-						methods += element("li", elements.body, { id });
+						methods += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 					case SymbolKind.Operator:
 						operators_index += element("li", elements.index ?? "");
-						operators += element("li", elements.body, { id });
+						operators += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 					default:
-						others += element("li", elements.body, { id });
+						others += element("li", elements.body, { id, "data-symbol": s.name });
 						break;
 				}
 			}

@@ -130,7 +130,7 @@ export function builtinToSymbol(builtin: GDScriptBuiltinFunction): IndexedSymbol
 	return {
 		name: builtin.name,
 		kind: "function",
-		uri: `${GDSCRIPT_URI}/${builtin.name}`,
+		uri: `gdscript://builtin/${getGDScriptBuiltinDocumentationClass(builtin.name)}/${builtin.name}`,
 		range: {
 			start: { line: 0, character: 0, offset: 0 },
 			end: { line: 0, character: builtin.name.length, offset: builtin.name.length },

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { FileIndex } from "./file_index";
 import { BindingIndex } from "./bindings";
 import { SymbolIndex } from "./symbol_index";
@@ -19,9 +20,9 @@ describe("binding index", () => {
 		const bindings = createIndex(source);
 		const parameter = bindings.getBinding("file:///player.gd", source.indexOf("health +="), "health");
 		const references = bindings.findReferences(parameter!.id);
-		expect(parameter?.kind).toBe("parameter");
-		expect(references).toHaveLength(3);
-		expect(references.some((reference) => reference.range.start.offset === source.indexOf("self.health") + 5)).toBe(false);
+		assert.equal(parameter?.kind, "parameter");
+		assert.equal((references).length, 3);
+		assert.equal(references.some((reference) => reference.range.start.offset === source.indexOf("self.health") + 5), false);
 	});
 
 	it("keeps two local variables with the same name in separate functions independent", () => {
@@ -29,10 +30,10 @@ describe("binding index", () => {
 		const bindings = createIndex(source);
 		const first = bindings.getBinding("file:///player.gd", source.indexOf("value += 1"), "value");
 		const second = bindings.getBinding("file:///player.gd", source.indexOf("value += 2"), "value");
-		expect(first).toBeDefined();
-		expect(second).toBeDefined();
-		expect(first?.id).not.toBe(second?.id);
-		expect(bindings.findReferences(first!.id)).toHaveLength(2);
-		expect(bindings.findReferences(second!.id)).toHaveLength(2);
+		assert.ok(first);
+		assert.ok(second);
+		assert.notEqual(first?.id, second?.id);
+		assert.equal((bindings.findReferences(first!.id)).length, 2);
+		assert.equal((bindings.findReferences(second!.id)).length, 2);
 	});
 });
