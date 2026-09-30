@@ -10,12 +10,14 @@ export class FileIndex {
 		const previous = this.files.get(uri);
 		if (previous?.source === source && !parsed) {
 			if (previous.version === version) return previous;
-			const file = { ...previous, version };
-			this.files.set(uri, file);
+			// The semantic snapshot is unchanged: keep the same object identity and
+			// only advance the document version so callers can reuse cached results.
+			const file = previous;
+			file.version = version;
 			return file;
 		}
 		const result = languageProfiler.measure("parse", () => parsed ?? parseGDScript(source));
-		const symbols = languageProfiler.measure("collectSymbols", () => collectSymbols(result.ast, uri));
+		const symbols = languageProfiler.measure("collectSymbols", () => collectSymbols(result.ast, uri, source));
 		const file: IndexedFile = {
 			uri,
 			version,

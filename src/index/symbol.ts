@@ -12,6 +12,7 @@ export type IndexedSymbolKind =
 	| "extends"
 	| "signal"
 	| "enum"
+	| "enum_member"
 	| "constant"
 	| "variable"
 	| "function";
@@ -26,6 +27,8 @@ export interface IndexedSymbol {
 	type?: string;
 	parameters?: IndexedParameter[];
 	static?: boolean;
+	/** Contents of the `##` documentation comments attached to the declaration. */
+	documentation?: string;
 }
 
 export interface IndexedFile {
@@ -39,7 +42,29 @@ export interface IndexedFile {
 	apiFingerprint: string;
 }
 
-export function declarationToSymbol(declaration: GDScriptDeclaration, uri: string, containerName?: string): IndexedSymbol | undefined {
+/**
+ * Returns the `##` documentation comment block written above `line`.
+ *
+ * Annotation lines (`@export`, `@onready`, ...) may sit between the comments and
+ * the declaration, so they are skipped while walking upwards.
+ */
+export function extractDocumentation(source: string, line: number): string | undefined {
+	if (line <= 0) return undefined;
+	const lines = source.split(/\r?\n/);
+	const parts: string[] = [];
+	for (let candidate = line - 1; candidate >= 0; candidate--) {
+		const text = lines[candidate];
+		if (/^\s*@/.test(text)) continue;
+		const match = text.match(/^\s*##(.*)$/);
+		if (!match) break;
+		parts.unshift(match[1].replace(/^ /, "").trimEnd());
+	}
+	if (!parts.length) return undefined;
+	const documentation = parts.join("\n").replace(/\s+$/, "");
+	return documentation.length ? documentation : undefined;
+}
+
+export function declarationToSymbol(declaration: GDScriptDeclaration, uri: string, containerName?: string, source?: string): IndexedSymbol | undefined {
 	if (!declaration.name || declaration.kind === "extends") return undefined;
 	const symbol: IndexedSymbol = {
 		name: declaration.name,
@@ -58,14 +83,37 @@ export function declarationToSymbol(declaration: GDScriptDeclaration, uri: strin
 		}));
 	}
 	if (declaration.kind === "constant" || declaration.kind === "variable") symbol.type = declaration.type;
+	if (source) {
+		const documentation = extractDocumentation(source, declaration.range.start.line);
+		if (documentation) symbol.documentation = documentation;
+	}
 	return symbol;
 }
 
-export function collectSymbols(ast: GDScriptScript, uri: string): IndexedSymbol[] {
+export function collectSymbols(ast: GDScriptScript, uri: string, source?: string): IndexedSymbol[] {
 	const symbols: IndexedSymbol[] = [];
 	const visit = (declarations: GDScriptDeclaration[], containerName?: string) => {
 		for (const declaration of declarations) {
-			const symbol = declarationToSymbol(declaration, uri, containerName);
+			if (declaration.kind === "enum") {
+				// Named enums are types whose members are only reachable through the
+				// enum name; members of unnamed enums act as plain script constants.
+				const symbol = declarationToSymbol(declaration, uri, containerName, source);
+				if (symbol) symbols.push(symbol);
+				for (const member of declaration.members) {
+					const documentation = source ? extractDocumentation(source, member.range.start.line) : undefined;
+					symbols.push({
+						name: member.name,
+						kind: "enum_member",
+						uri,
+						range: member.range,
+						containerName: declaration.name ?? containerName,
+						type: declaration.name,
+						...(documentation ? { documentation } : {}),
+					});
+				}
+				continue;
+			}
+			const symbol = declarationToSymbol(declaration, uri, containerName, source);
 			if (symbol) symbols.push(symbol);
 			if (declaration.kind === "class") visit(declaration.declarations, declaration.name);
 		}

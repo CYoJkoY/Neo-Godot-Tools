@@ -1,4 +1,5 @@
-import { expect, describe, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { BindingIndex } from "./bindings.js";
 import { FileIndex } from "./file_index.js";
 import { InheritedMemberResolver } from "./inherited_member_resolution.js";
@@ -40,7 +41,7 @@ describe("InheritedMemberResolver", () => {
 			[CHILD_URI]: "class_name Child\nextends Middle\nfunc child_method():\n\t.testAA()\n",
 		});
 
-		expect(resolver.resolve(CHILD_URI, "testAA")?.uri).toBe(BASE_URI);
+		assert.equal(resolver.resolve(CHILD_URI, "testAA")?.uri, BASE_URI);
 	});
 
 	it("selects the nearest override instead of stopping at the first parent", () => {
@@ -50,7 +51,7 @@ describe("InheritedMemberResolver", () => {
 			[CHILD_URI]: "class_name Child\nextends Middle\n",
 		});
 
-		expect(resolver.resolve(CHILD_URI, "testAA")?.uri).toBe(MIDDLE_URI);
+		assert.equal(resolver.resolve(CHILD_URI, "testAA")?.uri, MIDDLE_URI);
 	});
 
 	it("resolves a current-class override before inherited definitions", () => {
@@ -60,7 +61,7 @@ describe("InheritedMemberResolver", () => {
 			[CHILD_URI]: "class_name Child\nextends Middle\nfunc testAA():\n\tpass\n",
 		});
 
-		expect(resolver.resolve(CHILD_URI, "testAA")?.uri).toBe(CHILD_URI);
+		assert.equal(resolver.resolve(CHILD_URI, "testAA")?.uri, CHILD_URI);
 	});
 
 	it("resolves a function scoped to an inner class without confusing it with top-level functions", () => {
@@ -68,7 +69,7 @@ describe("InheritedMemberResolver", () => {
 			[CHILD_URI]: "class_name Child\nclass Worker:\n\tfunc run():\n\t\tpass\nfunc run():\n\tpass\n",
 		});
 
-		expect(resolver.resolve(CHILD_URI, "run", "Worker")?.range.start.line).toBe(2);
+		assert.equal(resolver.resolve(CHILD_URI, "run", "Worker")?.range.start.line, 2);
 	});
 });
 
@@ -83,21 +84,21 @@ describe("SemanticQueryEngine inherited definitions", () => {
 		const semantic = createSemantic(sources);
 		const source = sources[CHILD_URI];
 		const offset = source.indexOf(".testAA()") + 2;
-		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(BASE_URI);
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset }).value?.uri, BASE_URI);
 	});
 
 	it("resolves explicit self.foo() calls to the inherited declaration", () => {
 		const semantic = createSemantic(sources);
 		const source = sources[CHILD_URI];
 		const offset = source.indexOf("self.testAA") + "self.".length + 1;
-		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(BASE_URI);
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset }).value?.uri, BASE_URI);
 	});
 
 	it("resolves typed object.foo() calls to the inherited declaration", () => {
 		const semantic = createSemantic(sources);
 		const source = sources[CHILD_URI];
 		const offset = source.indexOf("object.testAA") + "object.".length + 1;
-		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(BASE_URI);
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset }).value?.uri, BASE_URI);
 	});
 
 	it("uses the intermediate override when it exists", () => {
@@ -108,7 +109,7 @@ describe("SemanticQueryEngine inherited definitions", () => {
 		const semantic = createSemantic(overrideSources);
 		const source = overrideSources[CHILD_URI];
 		const offset = source.indexOf(".testAA()") + 2;
-		expect(semantic.getDefinition(CHILD_URI, { offset }).value?.uri).toBe(MIDDLE_URI);
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset }).value?.uri, MIDDLE_URI);
 	});
 
 	it("resolves Ctrl+Click on a method of a GDScript inner class", () => {
@@ -119,8 +120,8 @@ describe("SemanticQueryEngine inherited definitions", () => {
 		const source = innerSources[CHILD_URI];
 		const offset = source.indexOf("Worker.run") + "Worker.".length + 1;
 		const definition = semantic.getDefinition(CHILD_URI, { offset });
-		expect(definition.confidence).toBe("exact");
-		expect(definition.value?.name).toBe("run");
-		expect(definition.value?.containerName).toBe("Worker");
+		assert.equal(definition.confidence, "exact");
+		assert.equal(definition.value?.name, "run");
+		assert.equal(definition.value?.containerName, "Worker");
 	});
 });

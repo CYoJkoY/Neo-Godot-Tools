@@ -3,7 +3,10 @@ import { GDScriptFunction, GDScriptToken, lexGDScript } from "../analyzer/index.
 interface LineInfo {
 	line: number;
 	indent: number;
+	/** Offset of the first non-whitespace token on the line. */
 	start: number;
+	/** Offset of the line itself, including its leading indentation. */
+	lineStart: number;
 	end: number;
 	tokens: GDScriptToken[];
 }
@@ -20,7 +23,14 @@ function collectLines(source: string, bodyRange: GDScriptFunction["bodyRange"]):
 			current.tokens.push(token);
 			current.end = token.end;
 		} else {
-			lines.set(token.line, { line: token.line, indent: token.indent, start: token.start, end: token.end, tokens: [token] });
+			lines.set(token.line, {
+				line: token.line,
+				indent: token.indent,
+				start: token.start,
+				lineStart: token.start - token.indent,
+				end: token.end,
+				tokens: [token],
+			});
 		}
 	}
 	return [...lines.values()].sort((a, b) => a.line - b.line);
@@ -82,28 +92,42 @@ function branchGroups(lines: LineInfo[]): Array<{ start: number; end: number; br
  */
 export function collectControlFlowAssignments(source: string, bodyRange: GDScriptFunction["bodyRange"], name: string, offset: number): string[] | undefined {
 	const lines = collectLines(source, bodyRange);
+	if (!lines.length) return undefined;
+
+	const lineStart = (lineIndex: number): number => lines[lineIndex]?.lineStart ?? Number.POSITIVE_INFINITY;
+	const contentEnd = (lineIndex: number): number => lines[Math.min(lineIndex, lines.length) - 1]?.end ?? Number.NEGATIVE_INFINITY;
+
+	// Post-branch values are collected from the last group that ends before the
+	// offset so later assignments win over earlier ones.
+	let postValues: string[] | undefined;
+	let postMatched = false;
+
 	for (const group of branchGroups(lines)) {
-		const groupStart = lines[group.start].start;
-		const groupEnd = group.end < lines.length ? lines[group.end].start : Number.POSITIVE_INFINITY;
-		if (offset < groupStart || offset > groupEnd) continue;
+		const groupStart = lineStart(group.start);
+		const groupEnd = contentEnd(group.end);
+		if (offset < groupStart) continue;
+
+		if (offset >= groupEnd) {
+			const values = group.branches.map((branch) => assignment(lines.slice(branch.start, branch.end), name, Number.POSITIVE_INFINITY));
+			if (values.some((value) => value !== undefined)) {
+				const hasElse = group.branches.some((branch) => branch.keyword === "else");
+				postValues = hasElse && values.every((value): value is string => Boolean(value)) ? values : [];
+				postMatched = true;
+			}
+			continue;
+		}
 
 		for (const branch of group.branches) {
-			const branchStart = branch.start < lines.length ? lines[branch.start].start : groupEnd;
-			const branchEnd = branch.end < lines.length ? lines[branch.end].start : groupEnd;
-			if (offset >= branchStart && offset <= branchEnd) {
+			const branchStart = lineStart(branch.start);
+			// A branch owns everything up to the line that follows its body, so a
+			// reference on a dedented line is never attributed to the branch.
+			const branchEnd = branch.end < lines.length ? lineStart(branch.end) : Number.POSITIVE_INFINITY;
+			if (offset >= branchStart && offset < branchEnd) {
 				const value = assignment(lines.slice(branch.start, branch.end), name, offset);
 				return value ? [value] : undefined;
 			}
 		}
-
-		if (offset >= groupEnd) {
-			const values = group.branches.map((branch) => assignment(lines.slice(branch.start, branch.end), name, Number.POSITIVE_INFINITY));
-			const hasRelevantAssignment = values.some((value) => value !== undefined);
-			if (!hasRelevantAssignment) return undefined;
-			const hasElse = group.branches.some((branch) => branch.keyword === "else");
-			if (!hasElse || !values.every((value): value is string => Boolean(value))) return [];
-			return values;
-		}
 	}
-	return undefined;
+
+	return postMatched ? postValues : undefined;
 }

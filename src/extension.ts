@@ -10,6 +10,7 @@ import {
 } from "./providers";
 import { ClientConnectionManager } from "./lsp";
 import { ScenePreviewProvider } from "./scene_tools";
+import { ResourceInspectorProvider } from "./resource_inspector/provider";
 import { GodotDebugger } from "./debugger";
 import { DebugServer } from "./dev/debug_server";
 import { FormattingProvider } from "./formatter";
@@ -35,6 +36,7 @@ interface Extension {
 	languageService?: LanguageService;
 	debug?: GodotDebugger;
 	scenePreviewProvider?: ScenePreviewProvider;
+	resourceInspector?: ResourceInspectorProvider;
 	linkProvider?: GDDocumentLinkProvider;
 	dropsProvider?: GDDocumentDropEditProvider;
 	hoverProvider?: GDHoverProvider;
@@ -62,6 +64,7 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback(), new RenameFallback());
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context);
+	globals.resourceInspector = new ResourceInspectorProvider(context);
 	globals.linkProvider = new GDDocumentLinkProvider(context);
 	globals.dropsProvider = new GDDocumentDropEditProvider(context);
 	globals.hoverProvider = new GDHoverProvider(context, globals.languageService, new HoverFallback());
@@ -87,6 +90,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		register_command("openEditor", open_workspace_with_editor),
+		register_command("openResourceInspector", (uri?: vscode.Uri) => globals.resourceInspector?.openResourceInspector(uri)),
 		register_command("openEditorSettings", open_godot_editor_settings),
 		register_command("copyResourcePath", copy_resource_path),
 		register_command("listGodotClasses", list_classes),

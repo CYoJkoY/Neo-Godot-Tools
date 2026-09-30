@@ -187,7 +187,10 @@ export async function apply_custom_class_icons(scene: Scene): Promise<void> {
 				node.setIconClass(node.className);
 				continue;
 			}
-			const scriptPath = node_script_path(node, current, projectDir);
+			// Scenes may serialize custom nodes with the global class name as their
+			// type (`type="Hitbox"`) and no script resource; the class index maps
+			// that name back to the script so the base engine icon can be used.
+			const scriptPath = node_script_path(node, current, projectDir) ?? classIndex.script_for(node.className);
 			const base = scriptPath ? resolve_base_class(scriptPath) : undefined;
 			node.setIconClass(base ?? DEFAULT_NODE_ICON);
 		}

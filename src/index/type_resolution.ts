@@ -136,7 +136,7 @@ export class TypeResolutionIndex {
 	resolveName(name: string): ResolvedType | undefined {
 		const normalized = name.trim().replace(/^const\s+/, "");
 		if (BUILTIN_TYPES.has(normalized)) return { name: normalized, builtin: true };
-		const matches = this.symbols.find(normalized).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class");
+		const matches = this.symbols.find(normalized).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class" || (symbol.kind === "enum" && !symbol.containerName));
 		const signature = matches.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`).join("|");
 		const cached = this.nameCache.get(normalized);
 		if (cached && cached.signature === signature) return cached.value ?? undefined;
@@ -146,6 +146,7 @@ export class TypeResolutionIndex {
 		return result;
 	}
 	resolveBinding(binding: Binding, offset = binding.declarationRange.start.offset): ResolvedType | undefined {
+		if (binding.kind === "enum") return this.resolveEnumBinding(binding);
 		if (binding.type) return this.resolveName(binding.type);
 		if (binding.kind === "function") return binding.returnType ? this.resolveName(binding.returnType) : this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
 		return this.resolveInitializerType(binding.uri, binding.name, offset, new Set<string>());
@@ -162,6 +163,7 @@ export class TypeResolutionIndex {
 	}
 	getMembers(type: ResolvedType): IndexedSymbol[] {
 		if (!type.uri) return [];
+		if (type.symbol?.kind === "enum") return this.enumMembers(type.symbol);
 		const signature = this.memberSignature(type.uri, new Set<string>());
 		const cached = this.memberCache.get(type.uri);
 		if (cached && cached.signature === signature) return cached.members;
@@ -174,6 +176,8 @@ export class TypeResolutionIndex {
 		return members.length === 1 ? members[0] : undefined;
 	}
 	resolveMemberReturnType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
+		// The value of `EnumName.Member` is the enum itself.
+		if (member.kind === "enum_member") return type;
 		if (member.returnType) return this.resolveName(member.returnType);
 		if (member.type) return this.resolveName(member.type);
 		return member.kind === "function" ? this.resolveFunctionReturnType(member.uri, member.name, new Set<string>()) : undefined;
@@ -186,6 +190,23 @@ export class TypeResolutionIndex {
 		if (affected.size) for (const [name, cached] of this.nameCache) if (cached.value === null) this.nameCache.delete(name);
 	}
 	clear(): void { this.nameCache.clear(); this.memberCache.clear(); this.statementCache.clear(); }
+	/** Resolves the declaration behind an enum binding instead of guessing by name. */
+	private resolveEnumBinding(binding: Binding): ResolvedType | undefined {
+		const symbol = this.symbols.find(binding.name).find((candidate) =>
+			candidate.kind === "enum" &&
+			candidate.uri === binding.uri &&
+			candidate.range.start.offset === binding.declarationRange.start.offset,
+		);
+		if (symbol) return { name: binding.name, uri: binding.uri, symbol, builtin: false };
+		return this.resolveName(binding.name);
+	}
+
+	private enumMembers(symbol: IndexedSymbol): IndexedSymbol[] {
+		const file = this.files.get(symbol.uri);
+		if (!file) return [];
+		return file.symbols.filter((candidate) => candidate.kind === "enum_member" && candidate.containerName === symbol.name);
+	}
+
 	private memberSignature(uri: string, visited: Set<string>): string {
 		if (visited.has(uri)) return `cycle:${uri}`;
 		visited.add(uri);
@@ -199,7 +220,8 @@ export class TypeResolutionIndex {
 		visited.add(uri);
 		const file = this.files.get(uri);
 		if (!file) return [];
-		const own = file.symbols.filter((symbol) => !symbol.containerName);
+		// `class_name` is the type itself, not one of its members.
+		const own = file.symbols.filter((symbol) => !symbol.containerName && symbol.kind !== "class_name");
 		const base = this.resolveExtends(file.ast.declarations);
 		const inherited = base?.uri ? this.collectMembers(base.uri, visited) : [];
 		const result = [...own];

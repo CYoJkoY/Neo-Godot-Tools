@@ -2,7 +2,7 @@ import { GDScriptDeclaration, GDScriptFunction, GDScriptToken, SourceRange, lexG
 import { FileIndex } from "./file_index";
 import { IndexedFile, IndexedSymbol } from "./symbol";
 
-export type BindingKind = "parameter" | "local" | "member" | "function" | "class" | "constant" | "class_name" | "signal" | "enum";
+export type BindingKind = "parameter" | "local" | "member" | "function" | "class" | "constant" | "class_name" | "signal" | "enum" | "enum_member";
 
 export interface Binding {
 	id: string;
@@ -23,8 +23,11 @@ export interface BoundReference {
 	range: SourceRange;
 }
 
+type ScopeKind = "root" | "class" | "function";
+
 interface Scope {
 	range: SourceRange;
+	kind: ScopeKind;
 	parent?: Scope;
 	children: Scope[];
 	bindings: Map<string, Binding[]>;
@@ -50,6 +53,7 @@ function bindingKind(symbol: IndexedSymbol): BindingKind | undefined {
 		case "class_name": return "class_name";
 		case "signal": return "signal";
 		case "enum": return "enum";
+	case "enum_member": return "enum_member";
 		default: return undefined;
 	}
 }
@@ -94,14 +98,14 @@ function addLocalDeclarations(source: string, fn: GDScriptFunction, scope: Scope
 	}
 }
 
-function createScope(range: SourceRange, parent?: Scope): Scope {
-	const scope: Scope = { range, parent, children: [], bindings: new Map() };
+function createScope(range: SourceRange, kind: ScopeKind, parent?: Scope): Scope {
+	const scope: Scope = { range, kind, parent, children: [], bindings: new Map() };
 	parent?.children.push(scope);
 	return scope;
 }
 
 function buildScopes(source: string, file: IndexedFile, uri: string): Scope {
-	const root = createScope(file.ast.range);
+	const root = createScope(file.ast.range, "root");
 	for (const symbol of file.symbols) {
 		const kind = bindingKind(symbol);
 		if (kind && !symbol.containerName) addBinding(root, {
@@ -119,7 +123,7 @@ function buildScopes(source: string, file: IndexedFile, uri: string): Scope {
 	const visit = (declarations: GDScriptDeclaration[], parent: Scope) => {
 		for (const declaration of declarations) {
 			if (declaration.kind === "class") {
-				const classScope = createScope(declaration.range, parent);
+				const classScope = createScope(declaration.range, "class", parent);
 				for (const symbol of file.symbols) {
 					if (symbol.containerName !== declaration.name) continue;
 					const kind = bindingKind(symbol);
@@ -139,7 +143,7 @@ function buildScopes(source: string, file: IndexedFile, uri: string): Scope {
 				continue;
 			}
 			if (declaration.kind !== "function") continue;
-			const functionScope = createScope(declaration.range, parent);
+			const functionScope = createScope(declaration.range, "function", parent);
 			addParameters(functionScope, declaration, uri);
 			addLocalDeclarations(source, declaration, functionScope, uri);
 		}
@@ -189,18 +193,37 @@ export class BindingIndex {
 	}
 
 	getBinding(uri: string, offset: number, name: string): Binding | undefined {
+		return this.resolveBinding(uri, offset, name, true);
+	}
+
+	/**
+	 * Resolves a member access such as `self.health`. Function scopes are skipped
+	 * so a parameter or local variable that shadows a script member does not
+	 * capture the reference.
+	 */
+	getMemberBinding(uri: string, offset: number, name: string): Binding | undefined {
+		return this.resolveBinding(uri, offset, name, false);
+	}
+
+	private resolveBinding(uri: string, offset: number, name: string, allowFunctionScopes: boolean): Binding | undefined {
 		const root = this.scopes.get(uri);
 		if (!root) return undefined;
 		let scope: Scope | undefined = findInnermostScope(root, offset);
 		while (scope) {
-			const binding = findBinding(scope, name, offset);
-			if (binding) return binding;
+			if (allowFunctionScopes || scope.kind !== "function") {
+				const binding = findBinding(scope, name, offset);
+				if (binding) return binding;
+			}
 			scope = scope.parent;
 		}
 		const global = this.bindings.get(name) ?? [];
 		return global.length === 1 ? global[0] : undefined;
 	}
 
+	/**
+	 * Bindings visible at `offset`, ordered by completion priority: innermost
+	 * scope first, then enclosing scopes, and inside a scope by declaration order.
+	 */
 	getVisibleBindings(uri: string, offset: number): Binding[] {
 		const root = this.scopes.get(uri);
 		if (!root) return [];
@@ -208,13 +231,16 @@ export class BindingIndex {
 		const names = new Set<string>();
 		let scope: Scope | undefined = findInnermostScope(root, offset);
 		while (scope) {
+			const visible: Binding[] = [];
 			for (const [name] of scope.bindings) {
 				if (names.has(name)) continue;
 				const binding = findBinding(scope, name, offset);
 				if (!binding) continue;
 				names.add(name);
-				result.push(binding);
+				visible.push(binding);
 			}
+			visible.sort((left, right) => left.declarationRange.start.offset - right.declarationRange.start.offset);
+			result.push(...visible);
 			scope = scope.parent;
 		}
 		return result;
@@ -253,8 +279,16 @@ export class BindingIndex {
 			const token = tokens[index];
 			if (token.kind !== "identifier" || nonReferenceIdentifiers.has(token.value)) continue;
 			const previous = tokens[index - 1]?.value;
-			const previousPrevious = tokens[index - 2]?.value;
-			if (previous === "." && previousPrevious !== "self") continue;
+			if (previous === ".") {
+				const previousPrevious = tokens[index - 2]?.value;
+				if (previousPrevious !== "self") continue;
+				// `self.member` always addresses the script member, never a local
+				// variable or parameter with the same name.
+				const member = this.getMemberBinding(uri, token.start, token.value);
+				if (!member) continue;
+				result.push({ bindingId: member.id, name: token.value, uri, range: tokenRange(token) });
+				continue;
+			}
 			const binding = this.getBinding(uri, token.start, token.value);
 			if (!binding) continue;
 			result.push({ bindingId: binding.id, name: token.value, uri, range: tokenRange(token) });

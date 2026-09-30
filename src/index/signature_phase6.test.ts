@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { FileIndex } from "./file_index";
 import { SymbolIndex } from "./symbol_index";
 
@@ -9,10 +10,10 @@ describe("indexed signatures", () => {
 		files.update("file:///player.gd", "func heal(amount: int, factor: float = 1.0) -> int:\n\treturn int(amount * factor)\n");
 		symbols.update("file:///player.gd");
 		const healFunction = symbols.find("heal")[0];
-		expect(healFunction.parameters).toEqual([
+		assert.deepEqual(healFunction.parameters, [
 			{ name: "amount", type: "int", defaultValue: undefined },
 			{ name: "factor", type: "float", defaultValue: "1.0" },
 		]);
-		expect(healFunction.returnType).toBe("int");
+		assert.equal(healFunction.returnType, "int");
 	});
 });

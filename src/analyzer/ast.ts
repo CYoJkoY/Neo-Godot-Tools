@@ -61,10 +61,16 @@ export interface GDScriptSignal extends GDScriptNode {
 	parameters: GDScriptParameter[];
 }
 
+export interface GDScriptEnumMember {
+	name: string;
+	value?: string;
+	range: SourceRange;
+}
+
 export interface GDScriptEnum extends GDScriptNode {
 	kind: "enum";
 	name?: string;
-	members: string[];
+	members: GDScriptEnumMember[];
 }
 
 export interface GDScriptConstant extends GDScriptNode {

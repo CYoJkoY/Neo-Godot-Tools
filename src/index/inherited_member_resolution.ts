@@ -3,6 +3,9 @@ import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
 import { SymbolIndex } from "./symbol_index.js";
 
+/** Member kinds that can be resolved through `receiver.name` expressions. */
+const MEMBER_KINDS = new Set(["variable", "constant", "signal", "function", "enum", "class"]);
+
 function normalizeScriptReference(value: string): string {
 	const trimmed = value.trim();
 	const unquoted = ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
@@ -26,8 +29,8 @@ export class InheritedMemberResolver {
 		if (!file) return undefined;
 
 		const own = file.symbols.find((symbol) =>
-			symbol.kind === "function" &&
-			symbol.name === name &&
+			MEMBER_KINDS.has(symbol.kind) &&
+				symbol.name === name &&
 			(containerName ? symbol.containerName === containerName : !symbol.containerName),
 		);
 		if (own) return own;

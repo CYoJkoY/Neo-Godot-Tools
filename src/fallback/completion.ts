@@ -17,14 +17,17 @@ export class CompletionFallback {
 			} as any, token) as LspCompletion | null | undefined;
 			if (!result) return undefined;
 			const items = Array.isArray(result) ? result : result.items ?? [];
-			return new vscode.CompletionList(items.map((item) => this.toItem(item)), !Array.isArray(result) && result.isIncomplete);
+			return new vscode.CompletionList(items.map((item, index) => this.toItem(item, index)), !Array.isArray(result) && result.isIncomplete);
 		} catch {
 			return undefined;
 		}
 	}
 
-	private toItem(item: LspCompletionItem): vscode.CompletionItem {
+	private toItem(item: LspCompletionItem, index: number): vscode.CompletionItem {
 		const completion = new vscode.CompletionItem(item.label);
+		// The Godot language server already returns items in its preferred order;
+		// encode it so VS Code does not fall back to alphabetical sorting.
+		completion.sortText = String(index).padStart(6, "0");
 		completion.detail = item.detail;
 		completion.insertText = item.insertText;
 		if (typeof item.documentation === "string") completion.documentation = new vscode.MarkdownString(item.documentation);
