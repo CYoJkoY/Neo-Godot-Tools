@@ -15,10 +15,15 @@ export interface ResourceDiagnostic {
 
 export interface ValidationOptions {
 	/**
-	 * Whether the metadata describes every property the resource can have. Only
-	 * then can a property that is missing from it be reported as unknown — with
-	 * partial knowledge (script exports alone) engine properties would show up as
-	 * false positives.
+	 * Whether the metadata is *authoritative* for the resource type, i.e. it
+	 * came from the engine (the connected language server) and therefore lists
+	 * every property the resource can have, including inherited ones.
+	 *
+	 * Only then may a property that is missing from it be reported as unknown.
+	 * With partial knowledge — script `@export`s alone, the properties already
+	 * present in the file, or no metadata at all — perfectly valid engine
+	 * properties would be flagged, which is exactly the noise the inspector has
+	 * to avoid.
 	 */
 	complete?: boolean;
 }
@@ -72,7 +77,9 @@ export function validateResourceDocument(
 	const known = new Map(metadata.map((property) => [property.name, property]));
 	// Properties that exist in the file are only known from the file itself.
 	const declared = new Set(metadata.filter((property) => property.source !== "file").map((property) => property.name));
-	const complete = options.complete ?? true;
+	// Default to "not authoritative": an unknown property is only worth a
+	// warning when the caller can prove the property does not exist.
+	const complete = options.complete ?? false;
 
 	visitValues(document, (name, value, line) => {
 		const plainName = name.includes(".") ? name.slice(name.indexOf(".") + 1) : name;

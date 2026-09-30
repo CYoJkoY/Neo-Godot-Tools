@@ -48,6 +48,7 @@ Godot development tools for Visual Studio Code with local-first GDScript intelli
   - hover previews for external and sub-resources
   - inlay hints
   - in-editor Scene Preview
+  - Resource Inspector: a Godot-style property sidebar for `.tres` files
 - **GDShader (`.gdshader`)** syntax highlighting
 
 ## Compatibility
@@ -133,8 +134,19 @@ Extension settings use the `neoGodotTools.*` namespace:
 - `neoGodotTools.formatter.*`
 - `neoGodotTools.scenePreview.*`
 - `neoGodotTools.inlayHints.*`
+- `neoGodotTools.resource.inspector.openIn`
+- `neoGodotTools.resource.inspector.diagnostics`
 
 When the selected Godot version supports headless LSP operation, Neo Godot Tools can launch a windowless Godot process for the language server.
+
+### Resource Inspector
+
+`.tres` files open in the text editor by default. `Neo Godot Tools: Open Resource Inspector` (or **Open With… → Resource Inspector**) shows the same resource in a Godot-like property sidebar: every property of the `[resource]` section and of each `[sub_resource]` gets a widget that fits its value, and edits are written back into the text file, so the file stays the source of truth.
+
+- `neoGodotTools.resource.inspector.openIn` chooses between a dedicated editor tab and the side panel.
+- `neoGodotTools.resource.inspector.diagnostics` reports resource problems (dangling `ExtResource`/`SubResource` ids, unparsable values, type mismatches against the attached script) in the Problems view. It is **off** by default: without the Godot language server's complete property list the inspector cannot tell a real mistake from a property it does not know about, and Godot's own inspector does not flag resources either.
+
+The inspector understands both Godot 3 and Godot 4 text-resource syntax, including `PoolColorArray`, `Transform`, `StringName("…")` and `ExtResource( 1 )`.
 
 ## Architecture
 

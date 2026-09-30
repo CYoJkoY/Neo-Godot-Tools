@@ -38,6 +38,8 @@ export interface WidgetSpec {
 	kind: WidgetKind;
 	/** Number of grouped numeric fields for vector-like values. */
 	components?: number;
+	/** Whole numbers only (`int` properties). */
+	integer?: boolean;
 	min?: number;
 	max?: number;
 	step?: number;
@@ -290,7 +292,10 @@ export function widgetForProperty(metadata: PropertyMetadata | undefined, value:
 	if (components && components > 1) return { kind: "vector", components };
 	if (type === "int" || type === "float" || value.kind === "int" || value.kind === "float") {
 		const range = parseRangeHint(metadata?.hintString);
-		return { kind: "number", step: range.step ?? (type === "int" ? 1 : undefined), min: range.min, max: range.max };
+		const widget: WidgetSpec = { kind: "number", step: range.step ?? (type === "int" ? 1 : undefined), min: range.min, max: range.max };
+		// Integer properties must not end up with `3.7` written into the file.
+		if (type === "int") widget.integer = true;
+		return widget;
 	}
 	if (type === "Array" || value.kind === "Array" || value.kind.startsWith("Packed")) {
 		const arrayType = metadata?.type.match(/^Array\[([^\]]*)\]$/)?.[1];
@@ -309,7 +314,7 @@ export function widgetForProperty(metadata: PropertyMetadata | undefined, value:
 const NON_RESOURCE_TYPES = new Set([
 	"Variant", "bool", "int", "float", "String", "StringName", "NodePath", "Color",
 	"Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Vector4i", "Rect2", "Rect2i",
-	"Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB",
+	"Transform2D", "Transform3D", "Projection", "Basis", "Quaternion", "Plane", "AABB",
 	"Array", "Dictionary", "PackedByteArray", "PackedInt32Array", "PackedInt64Array",
 	"PackedFloat32Array", "PackedFloat64Array", "PackedStringArray", "PackedVector2Array",
 	"PackedVector3Array", "PackedVector4Array", "PackedColorArray",
