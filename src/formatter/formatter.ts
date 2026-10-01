@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { format_document } from "./textmate";
+import { format_document_async } from "./textmate";
 import { createLogger } from "../utils";
 
 const log = createLogger("formatter");
@@ -14,6 +14,6 @@ export class FormattingProvider implements vscode.DocumentFormattingEditProvider
 	}
 
 	public provideDocumentFormattingEdits(document: vscode.TextDocument) {
-		return format_document(document);
+		return format_document_async(document);
 	}
 }

@@ -17,6 +17,14 @@ interface WebviewSandbox {
 	serializeList(form: { name: string; body: string; wrapped: boolean }, items: string[]): string;
 	defaultListEntry(form: { name: string; body: string; wrapped: boolean }): string;
 	splitTopLevel(text: string): string[];
+	propertyRow(
+		property: Record<string, unknown>,
+		model: unknown,
+		commit: (...args: unknown[]) => void,
+		revert: (...args: unknown[]) => void,
+	): {
+		children: Array<{ children?: unknown[]; listeners?: Record<string, (event: unknown) => void> }>;
+	};
 }
 
 function loadWebview(): WebviewSandbox {
@@ -26,11 +34,18 @@ function loadWebview(): WebviewSandbox {
 	const messages: unknown[] = [];
 	const element = () => ({
 		style: {},
-		children: [] as unknown[],
-		addEventListener: () => {},
+		children: [] as any[],
+		listeners: {} as Record<string, (event: unknown) => void>,
+		classList: { contains: () => false },
+		addEventListener(event: string, listener: (event: unknown) => void) {
+			this.listeners[event] = listener;
+		},
 		removeEventListener: () => {},
 		setAttribute: () => {},
-		appendChild: (child: unknown) => child,
+		appendChild(child: unknown) {
+			this.children.push(child);
+			return child;
+		},
 	});
 	const sandbox = {
 		acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) }),
@@ -47,6 +62,25 @@ function loadWebview(): WebviewSandbox {
 }
 
 describe("resource inspector webview", () => {
+	it("routes sub-resource property edits to their owning resource", () => {
+		const webview = loadWebview();
+		const edits: unknown[][] = [];
+		const row = webview.propertyRow(
+			{
+				name: "roughness",
+				raw: "0.4",
+				target: "StandardMaterial3D_1",
+				metadata: { type: "float", defaultValue: "0.5" },
+				widget: { kind: "text" },
+			},
+			{},
+			(...args) => edits.push(args),
+			() => {},
+		);
+		row.children[1].listeners?.change?.({ target: { value: "0.8" } });
+		assert.deepEqual(edits[0], ["roughness", "0.8", "StandardMaterial3D_1"]);
+	});
+
 	it("keeps list containers when entries change", () => {
 		const webview = loadWebview();
 		const cases: Array<{ raw: string; items: string[]; expected: string }> = [

@@ -64,12 +64,18 @@ function componentNumber(components, index, commit) {
 }
 
 function propertyRow(property, model, commit, revert) {
-	const row = element("div", { class: "row" });
-	const label = element("label", { text: property.metadata ? property.metadata.name : property.name, title: property.metadata ? property.metadata.type : "" });
-	row.appendChild(label);
+	const defaultValue = property.metadata && property.metadata.defaultValue;
+	const modified = defaultValue !== undefined && property.raw.trim() !== String(defaultValue).trim();
+	const row = element("div", { class: "row property-row" + (modified ? " modified" : "") });
+	row.setAttribute("data-search", (property.name + " " + (property.metadata && property.metadata.type || "")).toLowerCase());
+	const heading = element("div", { class: "property-heading" }, [
+		element("label", { text: property.metadata ? property.metadata.name : property.name, title: property.metadata ? property.metadata.type : "" }),
+		element("span", { class: "type-badge", text: property.metadata && property.metadata.type || "Variant" }),
+	]);
+	row.appendChild(heading);
 
 	const widget = property.widget || { kind: "text" };
-	const set = (value) => commit(property.name, value);
+	const set = (value) => commit(property.name, value, property.target);
 	let control;
 
 	if (widget.kind === "checkbox") {
@@ -297,16 +303,40 @@ function dictionaryEditor(property, set) {
 	return container;
 }
 
+let currentSearch = "";
+let modifiedOnly = false;
+
+function applyPropertyFilters() {
+	const rows = Array.from(app.querySelectorAll(".property-row"));
+	const query = currentSearch.trim().toLowerCase();
+	let visible = 0;
+	for (const row of rows) {
+		const matchesText = !query || (row.getAttribute("data-search") || "").includes(query);
+		const matchesModified = !modifiedOnly || row.classList.contains("modified");
+		row.hidden = !matchesText || !matchesModified;
+		if (!row.hidden) {
+			visible++;
+			const parentResource = row.closest("details");
+			if (parentResource && (query || modifiedOnly)) parentResource.open = true;
+		}
+	}
+	const count = document.getElementById("property-count");
+	if (count) count.textContent = visible + " shown";
+}
+
 function render(model) {
 	app.textContent = "";
 	if (!model) {
 		app.appendChild(element("p", { class: "empty", text: "Open a .tres file to edit it in the Resource Inspector." }));
 		return;
 	}
-	app.appendChild(element("h2", { text: model.resourceType + (model.scriptClass ? " (" + model.scriptClass + ")" : "") }));
+	app.appendChild(element("header", { class: "resource-header" }, [
+		element("div", { class: "eyebrow", text: "GODOT RESOURCE" }),
+		element("h2", { text: model.resourceType + (model.scriptClass ? " · " + model.scriptClass : "") }),
+	]));
 	const header = element("div", { class: "toolbar" }, [
-		element("button", { text: "Open raw text", onclick: () => post("openText", {}) }),
-		element("button", { text: "Reload", onclick: () => post("reload", {}) }),
+		element("button", { class: "filled", text: "Open raw text", onclick: () => post("openText", {}) }),
+		element("button", { class: "tonal", text: "↻  Reload", onclick: () => post("reload", {}) }),
 	]);
 	app.appendChild(header);
 
@@ -318,36 +348,68 @@ function render(model) {
 		app.appendChild(list);
 	}
 
-	app.appendChild(element("h3", { text: "Properties" }));
+	const propertyHeader = element("div", { class: "section-heading" }, [
+		element("h3", { text: "Properties" }),
+		element("span", { id: "property-count", class: "count", text: model.properties.length + " properties" }),
+	]);
+	app.appendChild(propertyHeader);
+	const tools = element("div", { class: "property-tools" });
+	const search = element("input", { id: "property-search", type: "search", placeholder: "Search properties…", value: currentSearch, "aria-label": "Search properties" });
+	search.addEventListener("input", () => { currentSearch = search.value; applyPropertyFilters(); });
+	const modifiedButton = element("button", { class: "filter-button" + (modifiedOnly ? " active" : ""), text: "●  Modified" });
+	modifiedButton.setAttribute("aria-pressed", String(modifiedOnly));
+	modifiedButton.addEventListener("click", () => { modifiedOnly = !modifiedOnly; render(model); });
+	tools.appendChild(search);
+	tools.appendChild(modifiedButton);
+	app.appendChild(tools);
+
 	const commit = (name, value, target) => post("setProperty", { name: name, value: value, target: target });
 	const revert = (name, defaultValue, target) => post("revertProperty", { name: name, defaultValue: defaultValue, target: target });
-	for (const property of model.properties) {
-		app.appendChild(propertyRow(property, model, commit, revert));
-	}
+	const propertyContainer = element("section", { class: "property-list" });
+	for (const property of model.properties) propertyContainer.appendChild(propertyRow(property, model, commit, revert));
+	app.appendChild(propertyContainer);
 
-	app.appendChild(element("h3", { text: "Sub-resources" }));
-	const subContainer = element("div", {});
+	const subSection = element("section", { class: "resource-section" });
+	subSection.appendChild(element("div", { class: "section-heading" }, [element("h3", { text: "Sub-resources" })]));
 	for (const sub of model.subResources) {
-		const body = element("div", {});
+		const body = element("div", { class: "subresource-body" });
 		for (const property of sub.properties) body.appendChild(propertyRow(Object.assign({}, property, { target: sub.id }), model, commit, revert));
-		subContainer.appendChild(element("details", {}, [
-			element("summary", { text: sub.type + " · " + sub.id }),
+		const actions = element("div", { class: "subresource-actions" }, [
+			element("button", { class: "text-button", text: "Duplicate", onclick: () => post("duplicateSubResource", { id: sub.id }) }),
+			element("button", { class: "text-button", text: "Rename", onclick: () => post("renameSubResource", { id: sub.id }) }),
+			element("button", { class: "text-button danger", text: "Delete", onclick: () => post("deleteSubResource", { id: sub.id }) }),
+		]);
+		subSection.appendChild(element("details", { class: "resource-card" }, [
+			element("summary", {}, [element("span", { class: "resource-type", text: sub.type }), element("code", { text: sub.id })]),
 			body,
-			element("div", { class: "res" }, [
-				element("button", { text: "Duplicate", onclick: () => post("duplicateSubResource", { id: sub.id }) }),
-				element("button", { text: "Delete", onclick: () => post("deleteSubResource", { id: sub.id }) }),
-			]),
+			actions,
 		]));
 	}
-	subContainer.appendChild(element("button", { text: "Add sub-resource", onclick: () => post("addSubResource", { subType: "Resource" }) }));
-	app.appendChild(subContainer);
+	const addSub = element("button", { class: "tonal add-resource", text: "+  Add sub-resource", onclick: () => post("addSubResource", {}) });
+	subSection.appendChild(addSub);
+	app.appendChild(subSection);
 
-	app.appendChild(element("h3", { text: "External resources" }));
+	const extSection = element("section", { class: "resource-section" });
+	extSection.appendChild(element("div", { class: "section-heading" }, [element("h3", { text: "External resources" })]));
 	for (const resource of model.extResources) {
-		const link = element("button", { text: (resource.broken ? "⚠ " : "") + resource.path, class: resource.broken ? "broken" : "", onclick: () => post("openExtResource", { id: resource.id }) });
-		app.appendChild(element("div", { class: "res" }, [element("span", { text: resource.id }), link]));
+		const link = element("button", { text: (resource.broken ? "⚠  " : "↗  ") + (resource.path || resource.id), class: "resource-link" + (resource.broken ? " broken" : ""), onclick: () => post("openExtResource", { id: resource.id }) });
+		extSection.appendChild(element("div", { class: "external-row" }, [
+			element("code", { class: "resource-id", text: resource.id }),
+			element("span", { class: "type-badge", text: resource.type }),
+			link,
+		]));
 	}
+	extSection.appendChild(element("button", { class: "tonal add-resource", text: "+  Add external resource", onclick: () => post("addExternalResource", {}) }));
+	app.appendChild(extSection);
+	applyPropertyFilters();
 }
+
+window.addEventListener("keydown", (event) => {
+	if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+		event.preventDefault();
+		document.getElementById("property-search")?.focus();
+	}
+});
 
 // The file changed outside the panel while edits were pending: let the user pick.
 function showExternalChangeBanner() {
@@ -379,29 +441,102 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-	:root { color-scheme: light dark; }
-	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); padding: 8px; }
-	h2 { font-size: 1.05em; margin: 4px 0 8px; }
-	h3 { font-size: 0.95em; margin: 12px 0 4px; text-transform: uppercase; opacity: 0.7; }
-	.row { display: grid; grid-template-columns: minmax(120px, 32%) 1fr auto; gap: 6px; align-items: center; padding: 2px 0; }
-	.row > label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.row input, .row select, .row textarea { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); padding: 2px 4px; }
-	.banner { position: sticky; top: 0; display: flex; gap: 6px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); padding: 6px; margin-bottom: 6px; }
-	.res { grid-template-columns: auto 1fr auto auto; }
-	.revert { background: none; border: none; cursor: pointer; color: var(--vscode-descriptionForeground); }
-	details > summary { cursor: pointer; }
-	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 4px; }
-	.entry { display: grid; grid-template-columns: 1fr auto auto auto; gap: 4px; align-items: center; margin: 2px 0; }
-	.entry .kv { display: grid; grid-template-columns: 1fr 1fr auto; gap: 4px; }
-	.diagnostics { margin: 6px 0; }
+	:root {
+		color-scheme: light dark;
+		--ri-surface: var(--vscode-sideBar-background, var(--vscode-editor-background));
+		--ri-card: color-mix(in srgb, var(--vscode-foreground) 4%, var(--ri-surface));
+		--ri-border: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+		--ri-muted: var(--vscode-descriptionForeground, #777);
+		--ri-accent: var(--vscode-button-background, #1a73e8);
+		--ri-radius: 12px;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0; padding: 16px 14px 28px;
+		background: var(--ri-surface); color: var(--vscode-foreground);
+		font-family: "Google Sans", Roboto, var(--vscode-font-family), sans-serif;
+		font-size: var(--vscode-font-size); line-height: 1.45;
+	}
+	button, input, select, textarea { font: inherit; }
+	button { color: inherit; }
+	button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+		outline: 2px solid var(--vscode-focusBorder, #1a73e8); outline-offset: 2px;
+	}
+	.resource-header { padding: 4px 2px 8px; }
+	.eyebrow { color: var(--ri-muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+	h2 { font-size: 20px; line-height: 1.3; font-weight: 600; margin: 4px 0 0; overflow-wrap: anywhere; }
+	h3 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .01em; }
+	.toolbar { display: flex; gap: 8px; margin: 8px 0 20px; }
+	.toolbar button, .tonal, .filter-button, .text-button, .add-resource {
+		min-height: 32px; border: 0; border-radius: 999px; padding: 6px 13px;
+		cursor: pointer; transition: background-color .14s ease, transform .14s ease;
+	}
+	.toolbar button:hover, .tonal:hover, .filter-button:hover, .text-button:hover { filter: brightness(1.08); }
+	.toolbar .filled { background: var(--ri-accent); color: var(--vscode-button-foreground, white); font-weight: 600; }
+	.tonal, .filter-button { background: color-mix(in srgb, var(--ri-accent) 14%, var(--ri-surface)); color: var(--vscode-foreground); }
+	.filter-button { white-space: nowrap; }
+	.filter-button.active { background: color-mix(in srgb, var(--ri-accent) 25%, var(--ri-surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ri-accent) 45%, transparent); }
+	.section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 20px 2px 8px; }
+	.count { color: var(--ri-muted); font-size: 11px; }
+	.property-tools { display: flex; gap: 8px; margin: 0 0 10px; }
+	#property-search { flex: 1; min-width: 0; height: 34px; border-radius: 999px; padding: 0 13px; }
+	input, select, textarea {
+		width: 100%; min-width: 0; color: var(--vscode-input-foreground);
+		background: var(--vscode-input-background); border: 1px solid var(--ri-border);
+		border-radius: 8px; padding: 6px 9px;
+	}
+	input:hover, select:hover, textarea:hover { border-color: color-mix(in srgb, var(--ri-accent) 45%, var(--ri-border)); }
+	.property-list { display: grid; gap: 5px; }
+	.property-row[hidden] { display: none; }
+	.row { display: grid; grid-template-columns: minmax(110px, 30%) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 7px; border-radius: 10px; border: 1px solid transparent; }
+	.row:hover { background: var(--ri-card); border-color: var(--ri-border); }
+	.row.modified { border-left: 2px solid var(--ri-accent); padding-left: 6px; }
+	.property-heading { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+	.property-heading label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+	.type-badge { width: fit-content; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ri-muted); font: 10px/1.4 var(--vscode-editor-font-family, monospace); }
+	.row input, .row select, .row textarea { min-height: 30px; }
+	.row input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--ri-accent); }
+	.row input[type="color"] { padding: 3px; min-height: 34px; }
+	.row textarea { resize: vertical; }
+	.revert { width: 27px; height: 27px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: var(--ri-muted); font-size: 18px; }
+	.revert:hover { background: var(--ri-card); color: var(--vscode-foreground); }
+	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(55px, 1fr)); gap: 6px; align-items: center; }
+	.res { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+	.entry { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center; margin: 5px 0; }
+	.entry.kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+	.entry button, .res button, .toolbar button, .text-button { font-size: 11px; }
+	button:not(.revert) { border: 0; border-radius: 8px; cursor: pointer; }
+	.resource-section { margin-top: 22px; }
+	.resource-card { background: var(--ri-card); border: 1px solid var(--ri-border); border-radius: var(--ri-radius); margin: 7px 0; padding: 0 12px; }
+	.resource-card > summary { display: flex; align-items: center; gap: 8px; min-height: 42px; cursor: pointer; list-style: none; }
+	.resource-card > summary::-webkit-details-marker { display: none; }
+	.resource-card > summary::before { content: "▸"; color: var(--ri-muted); transition: transform .15s; }
+	.resource-card[open] > summary::before { transform: rotate(90deg); }
+	.resource-type { font-weight: 600; }
+	code { font: 11px var(--vscode-editor-font-family, monospace); color: var(--ri-muted); }
+	.subresource-body { border-top: 1px solid var(--ri-border); padding: 6px 0; }
+	.subresource-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 4px 0 8px; }
+	.text-button { background: transparent; color: var(--vscode-textLink-foreground, var(--ri-accent)); }
+	.text-button.danger { color: var(--vscode-errorForeground); }
+	.add-resource { width: 100%; margin-top: 7px; border: 1px dashed var(--ri-border); background: transparent; text-align: center; }
+	.external-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--ri-border); }
+	.resource-id { color: var(--vscode-foreground); }
+	.resource-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: transparent; color: var(--vscode-textLink-foreground, var(--ri-accent)); padding: 4px; }
+	.broken { color: var(--vscode-errorForeground); }
+	.diagnostics { padding: 10px 12px 10px 28px; border-radius: 10px; background: var(--ri-card); margin: 8px 0; }
 	.diagnostics .error { color: var(--vscode-errorForeground); }
 	.diagnostics .warning { color: var(--vscode-editorWarning-foreground); }
-	.res { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; }
-	.res button, .toolbar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 2px 8px; cursor: pointer; }
-	.broken { color: var(--vscode-errorForeground); }
-	.toolbar { display: flex; gap: 6px; margin: 8px 0; }
-	.banner { border: 1px solid var(--vscode-editorWarning-foreground); padding: 6px; margin: 6px 0; }
-	.empty { opacity: 0.7; }
+	.banner { position: sticky; z-index: 2; top: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+	.banner button { background: var(--ri-accent); color: var(--vscode-button-foreground, white); padding: 6px 10px; }
+	.empty { color: var(--ri-muted); text-align: center; padding: 26px 12px; }
+	@media (max-width: 520px) {
+		body { padding: 12px 9px 24px; }
+		.row { grid-template-columns: minmax(80px, 34%) minmax(0, 1fr) auto; gap: 6px; padding: 7px 4px; }
+		.property-tools { flex-wrap: wrap; }
+		#property-search { flex-basis: 100%; }
+		.external-row { grid-template-columns: auto minmax(0, 1fr); }
+		.external-row .type-badge { display: none; }
+	}
 </style>
 </head>
 <body>

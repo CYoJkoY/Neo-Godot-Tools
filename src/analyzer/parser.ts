@@ -24,11 +24,26 @@ export function parseGDScript(source: string): GDScriptParseResult {
 
 class Parser {
 	private readonly tokens: GDScriptToken[];
+	/** Line boundaries let range construction stay O(log lines), not O(source size). */
+	private readonly lineStarts: number[] = [0];
+	private readonly lineEnds: number[] = [];
 	private index = 0;
 	private readonly diagnostics: GDScriptDiagnostic[] = [];
 
 	constructor(private readonly source: string) {
 		this.tokens = lexGDScript(source);
+		for (let offset = 0; offset < source.length; offset++) {
+			const code = source.charCodeAt(offset);
+			if (code === 13) {
+				if (source.charCodeAt(offset + 1) === 10) offset++;
+				this.lineEnds.push(offset);
+				this.lineStarts.push(offset + 1);
+			} else if (code === 10) {
+				this.lineEnds.push(offset);
+				this.lineStarts.push(offset + 1);
+			}
+		}
+		this.lineEnds.push(source.length);
 	}
 
 	parse(): GDScriptParseResult {
@@ -103,7 +118,12 @@ class Parser {
 		if (!name) return undefined;
 		const parameters = this.parseParameterList();
 		this.skipToLineEnd();
-		return { kind: "signal", name: name.value, parameters, range: this.range(start.start, this.lineEndOffset(start.line)) };
+		return {
+			kind: "signal",
+			name: name.value,
+			parameters,
+			range: this.range(start.start, this.lineEndOffset(start.line)),
+		};
 	}
 
 	private parseEnum(): GDScriptEnum | undefined {
@@ -147,7 +167,13 @@ class Parser {
 			this.advance();
 			value = this.readLineExpression();
 		} else this.skipToLineEnd();
-		return { kind: "constant", name: name.value, type, value, range: this.range(start.start, this.lineEndOffset(start.line)) };
+		return {
+			kind: "constant",
+			name: name.value,
+			type,
+			value,
+			range: this.range(start.start, this.lineEndOffset(start.line)),
+		};
 	}
 
 	private parseVariable(): GDScriptVariable | undefined {
@@ -165,7 +191,13 @@ class Parser {
 			this.advance();
 			value = this.readLineExpression();
 		} else this.skipToLineEnd();
-		return { kind: "variable", name: name.value, type, value, range: this.range(start.start, this.lineEndOffset(start.line)) };
+		return {
+			kind: "variable",
+			name: name.value,
+			type,
+			value,
+			range: this.range(start.start, this.lineEndOffset(start.line)),
+		};
 	}
 
 	private parseFunction(isStatic: boolean): GDScriptFunction | undefined {
@@ -217,7 +249,9 @@ class Parser {
 			if (declaration) declarations.push(declaration);
 			else this.skipLine();
 		}
-		const end = declarations.length ? declarations[declarations.length - 1].range.end.offset : this.lineEndOffset(start.line);
+		const end = declarations.length
+			? declarations[declarations.length - 1].range.end.offset
+			: this.lineEndOffset(start.line);
 		return { kind: "class", name: name.value, extendsName, declarations, range: this.range(start.start, end) };
 	}
 
@@ -303,7 +337,12 @@ class Parser {
 		let cursor = this.index;
 		while (cursor < this.tokens.length && this.tokens[cursor].line === headerLine) cursor++;
 		while (cursor < this.tokens.length && this.tokens[cursor].kind === "newline") cursor++;
-		if (cursor >= this.tokens.length || this.tokens[cursor].kind === "eof" || this.tokens[cursor].indent <= parentIndent) return undefined;
+		if (
+			cursor >= this.tokens.length ||
+			this.tokens[cursor].kind === "eof" ||
+			this.tokens[cursor].indent <= parentIndent
+		)
+			return undefined;
 		const bodyStart = this.tokens[cursor].start;
 		let bodyEnd = bodyStart;
 		let previousLine = this.tokens[cursor].line;
@@ -419,20 +458,22 @@ class Parser {
 	}
 
 	private lineEndOffset(line: number) {
-		const token = this.tokens.find((candidate) => candidate.line === line);
-		const cursor = this.source.indexOf("\n", token?.start ?? 0);
-		return cursor < 0 ? this.source.length : cursor;
+		return this.lineEnds[Math.max(0, Math.min(line, this.lineEnds.length - 1))] ?? this.source.length;
 	}
 
 	private positionAt(offset: number): SourcePosition {
 		const bounded = Math.max(0, Math.min(offset, this.source.length));
-		const before = this.source.slice(0, bounded);
-		const lineBreak = before.lastIndexOf("\n");
-		return {
-			offset: bounded,
-			line: (before.match(/\n/g) ?? []).length,
-			character: bounded - (lineBreak + 1),
-		};
+		// Find the final line start <= offset. Avoid slicing/scanning the source for
+		// every AST range; files with many declarations otherwise become quadratic.
+		let low = 0;
+		let high = this.lineStarts.length;
+		while (low < high) {
+			const middle = (low + high) >>> 1;
+			if (this.lineStarts[middle] <= bounded) low = middle + 1;
+			else high = middle;
+		}
+		const line = Math.max(0, low - 1);
+		return { offset: bounded, line, character: bounded - this.lineStarts[line] };
 	}
 
 	private range(start: number, end: number): SourceRange {

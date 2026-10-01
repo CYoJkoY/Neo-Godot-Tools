@@ -1,6 +1,5 @@
 import { TextEdit } from "vscode";
 import type { TextDocument, TextLine } from "vscode";
-import * as fs from "node:fs";
 import * as vsctm from "vscode-textmate";
 import * as oniguruma from "vscode-oniguruma";
 import { keywords, symbols } from "./symbols";
@@ -8,37 +7,42 @@ import { get_configuration, get_extension_uri, createLogger, is_debug_mode } fro
 import { readFile } from "node:fs/promises";
 
 const log = createLogger("formatter.tm");
-
 const grammarPath = get_extension_uri("syntaxes/GDScript.tmLanguage.json").fsPath;
 const wasmPath = get_extension_uri("resources/onig.wasm").fsPath;
-const wasmBin = fs.readFileSync(wasmPath).buffer;
+let grammar: vsctm.IGrammar | null = null;
+let grammarPromise: Promise<vsctm.IGrammar | null> | undefined;
 
-// Create a registry that can create a grammar from a scope name.
-const registry = new vsctm.Registry({
-	onigLib: oniguruma.loadWASM(wasmBin as unknown as oniguruma.IOptions).then(() => {
-		return {
-			createOnigScanner(patterns) {
-				return new oniguruma.OnigScanner(patterns);
-			},
-			createOnigString(s) {
-				return new oniguruma.OnigString(s);
-			},
-		};
-	}),
-	loadGrammar: async (scopeName) => {
-		if (scopeName === "source.gdscript") {
-			const data = await readFile(grammarPath);
-			return vsctm.parseRawGrammar(data.toString(), grammarPath);
-		}
-		// console.log(`Unknown scope name: ${scopeName}`);
-		return undefined;
-	},
-});
+/** Delay loading/compiling TextMate's WASM grammar until formatting is requested. */
+function ensureGrammar(): Promise<vsctm.IGrammar | null> {
+	if (!grammarPromise) {
+		grammarPromise = (async () => {
+			const wasm = await readFile(wasmPath);
+			const wasmBytes = wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength);
+			await oniguruma.loadWASM(wasmBytes as unknown as oniguruma.IOptions);
+			const registry = new vsctm.Registry({
+				onigLib: Promise.resolve({
+					createOnigScanner: (patterns) => new oniguruma.OnigScanner(patterns),
+					createOnigString: (value) => new oniguruma.OnigString(value),
+				}),
+				loadGrammar: async (scopeName) => {
+					if (scopeName !== "source.gdscript") return undefined;
+					const data = await readFile(grammarPath);
+					return vsctm.parseRawGrammar(data.toString(), grammarPath);
+				},
+			});
+			grammar = await registry.loadGrammar("source.gdscript");
+			return grammar;
+		})().catch((error) => {
+			log.error("Failed to load the GDScript formatter grammar", error);
+			grammarPromise = undefined;
+			return null;
+		});
+	}
+	return grammarPromise ?? Promise.resolve(null);
+}
 
 interface Token {
-	// startIndex: number;
-	// endIndex: number;
-	scopes: string[];
+	scopes: string;
 	original: string;
 	value: string;
 	type?: string;
@@ -75,7 +79,7 @@ function parse_token(token: Token) {
 	if (token.scopes.includes("meta.function.parameters.gdscript")) {
 		token.param = true;
 	}
-	if (token.scopes[0].includes("constant.numeric")) {
+	if (token.scopes.includes("constant.numeric")) {
 		token.type = "literal";
 		return;
 	}
@@ -132,7 +136,10 @@ function parse_token(token: Token) {
 		token.type = "keyword";
 		return;
 	}
-	if (token.scopes.includes("constant.language.gdscript") || token.scopes.includes("constant.language.literal.gdscript")) {
+	if (
+		token.scopes.includes("constant.language.gdscript") ||
+		token.scopes.includes("constant.language.literal.gdscript")
+	) {
 		token.type = "constant";
 		return;
 	}
@@ -167,7 +174,7 @@ function between(tokens: Token[], current: number, options: FormatterOptions) {
 	}
 	if (next === ".") return "";
 
-	if (nextToken.param && !nextToken.inLambdaBody && !(prevToken?.inLambdaBody)) {
+	if (nextToken.param && !nextToken.inLambdaBody && !prevToken?.inLambdaBody) {
 		if (options.denseFunctionParameters) {
 			if (prev === "-" || prev === "+") {
 				if (tokens[current - 2]?.value === "=") return "";
@@ -258,12 +265,6 @@ function between(tokens: Token[], current: number, options: FormatterOptions) {
 	return "";
 }
 
-let grammar: vsctm.IGrammar | null = null;
-
-registry.loadGrammar("source.gdscript").then((g) => {
-	grammar = g;
-});
-
 function is_comment(line: TextLine): boolean {
 	return line.text[line.firstNonWhitespaceCharacterIndex] === "#";
 }
@@ -273,14 +274,19 @@ function is_merge_conflict_marker(line: TextLine): boolean {
 	return trimmed.startsWith("<<<<<<<") || trimmed.startsWith("=======") || trimmed.startsWith(">>>>>>>");
 }
 
+export async function format_document_async(document: TextDocument, options?: FormatterOptions): Promise<TextEdit[]> {
+	await ensureGrammar();
+	return format_document(document, options);
+}
+
+/** Synchronous entry point retained for callers that have already loaded the grammar. */
 export function format_document(document: TextDocument, _options?: FormatterOptions): TextEdit[] {
-	// quit early if grammar is not loaded
-	if (!grammar) {
-		return [];
-	}
+	const activeGrammar = grammar;
+	if (!activeGrammar) return [];
 	const edits: TextEdit[] = [];
 
 	const options = _options ?? get_formatter_options();
+	const debug = is_debug_mode();
 
 	let lastToken = "";
 	let lineTokens: vsctm.ITokenizeLineResult | undefined = undefined;
@@ -332,22 +338,23 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		}
 
 		let nextLine = "";
-		lineTokens = grammar.tokenizeLine(line.text, lineTokens?.ruleStack ?? vsctm.INITIAL);
+		lineTokens = activeGrammar.tokenizeLine(line.text, lineTokens?.ruleStack ?? vsctm.INITIAL);
 
 		// TODO: detect whitespace type and automatically convert
 		const leadingWhitespace = line.text.slice(0, line.firstNonWhitespaceCharacterIndex);
 		nextLine += leadingWhitespace;
+		let firstToken = 0;
 		const first = lineTokens.tokens[0];
-		if (line.text.slice(first.startIndex, first.endIndex).trim() === "") {
-			lineTokens.tokens.shift();
-		}
+		if (first && line.text.slice(first.startIndex, first.endIndex).trim() === "") firstToken = 1;
 
 		const tokens: Token[] = [];
-		for (const t of lineTokens.tokens) {
+		for (let tokenIndex = firstToken; tokenIndex < lineTokens.tokens.length; tokenIndex++) {
+			const t = lineTokens.tokens[tokenIndex];
+			const original = line.text.slice(t.startIndex, t.endIndex);
 			const token: Token = {
-				scopes: [t.scopes.join(" "), ...t.scopes],
-				original: line.text.slice(t.startIndex, t.endIndex),
-				value: line.text.slice(t.startIndex, t.endIndex).trim(),
+				scopes: t.scopes.join(" "),
+				original,
+				value: original.trim(),
 			};
 			parse_token(token);
 			// skip whitespace tokens
@@ -382,7 +389,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			}
 		}
 		for (let i = 0; i < tokens.length; i++) {
-			if (is_debug_mode()) log.debug(i, tokens[i].value, tokens[i]);
+			if (debug) log.debug(i, tokens[i].value, tokens[i]);
 
 			if (i === 0 && tokens[i].string) {
 				// leading whitespace is already accounted for
@@ -397,7 +404,9 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			}
 		}
 
-		edits.push(TextEdit.replace(line.range, nextLine));
+		// Returning edits for unchanged lines costs allocations and slows VS Code's
+		// edit application on large scripts. Keep only actual replacements.
+		if (nextLine !== line.text) edits.push(TextEdit.replace(line.range, nextLine));
 	}
 
 	return edits;

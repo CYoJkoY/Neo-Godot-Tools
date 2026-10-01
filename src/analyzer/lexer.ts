@@ -1,11 +1,4 @@
-export type GDScriptTokenKind =
-	| "identifier"
-	| "number"
-	| "string"
-	| "operator"
-	| "punctuation"
-	| "newline"
-	| "eof";
+export type GDScriptTokenKind = "identifier" | "number" | "string" | "operator" | "punctuation" | "newline" | "eof";
 
 export interface GDScriptToken {
 	kind: GDScriptTokenKind;
@@ -17,8 +10,38 @@ export interface GDScriptToken {
 	indent: number;
 }
 
-const identifierStart = /[A-Za-z_]/;
-const identifierPart = /[A-Za-z0-9_]/;
+function isIdentifierStart(code: number): boolean {
+	return code === 95 || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isIdentifierPart(code: number): boolean {
+	return isIdentifierStart(code) || (code >= 48 && code <= 57);
+}
+
+function isNumberContinuation(code: number): boolean {
+	return isIdentifierPart(code) || code === 46;
+}
+
+const MULTI_CHAR_OPERATORS = new Set([
+	"->",
+	":=",
+	"==",
+	"!=",
+	"<=",
+	">=",
+	"&&",
+	"||",
+	"**",
+	"+=",
+	"-=",
+	"*=",
+	"/=",
+	"%=",
+	"<<",
+	">>",
+	"...",
+]);
+const PUNCTUATION = "()[]{}:,.=+-*/%<>!&|?@";
 
 export function lexGDScript(source: string): GDScriptToken[] {
 	const tokens: GDScriptToken[] = [];
@@ -81,10 +104,11 @@ export function lexGDScript(source: string): GDScriptToken[] {
 		const tokenCharacter = character;
 		const start = offset;
 
-		if (identifierStart.test(char)) {
+		const charCode = source.charCodeAt(offset);
+		if (isIdentifierStart(charCode)) {
 			offset += 1;
 			character += 1;
-			while (offset < source.length && identifierPart.test(source[offset])) {
+			while (offset < source.length && isIdentifierPart(source.charCodeAt(offset))) {
 				offset += 1;
 				character += 1;
 			}
@@ -92,10 +116,10 @@ export function lexGDScript(source: string): GDScriptToken[] {
 			continue;
 		}
 
-		if (/\d/.test(char)) {
+		if (charCode >= 48 && charCode <= 57) {
 			offset += 1;
 			character += 1;
-			while (offset < source.length && /[A-Za-z0-9._]/.test(source[offset])) {
+			while (offset < source.length && isNumberContinuation(source.charCodeAt(offset))) {
 				offset += 1;
 				character += 1;
 			}
@@ -129,11 +153,7 @@ export function lexGDScript(source: string): GDScriptToken[] {
 
 		const two = source.slice(offset, offset + 2);
 		const three = source.slice(offset, offset + 3);
-		const operator = ["->", ":=", "==", "!=", "<=", ">=", "&&", "||", "**", "+=", "-=", "*=", "/=", "%=", "<<", ">>"].includes(two)
-			? two
-			: ["..."].includes(three)
-				? three
-				: undefined;
+		const operator = MULTI_CHAR_OPERATORS.has(three) ? three : MULTI_CHAR_OPERATORS.has(two) ? two : undefined;
 
 		if (operator) {
 			offset += operator.length;
@@ -142,7 +162,7 @@ export function lexGDScript(source: string): GDScriptToken[] {
 			continue;
 		}
 
-		if ("()[]{}:,.=+-*/%<>!&|?@".includes(char)) {
+		if (PUNCTUATION.includes(char)) {
 			offset += 1;
 			character += 1;
 			push("punctuation", start, char, tokenLine, tokenCharacter);

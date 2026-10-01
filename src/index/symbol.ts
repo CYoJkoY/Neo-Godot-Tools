@@ -1,4 +1,10 @@
-import { GDScriptDeclaration, GDScriptDiagnostic, GDScriptFunction, GDScriptScript, SourceRange } from "../analyzer/index.js";
+import {
+	GDScriptDeclaration,
+	GDScriptDiagnostic,
+	GDScriptFunction,
+	GDScriptScript,
+	SourceRange,
+} from "../analyzer/index.js";
 
 export interface IndexedParameter {
 	name: string;
@@ -49,11 +55,15 @@ export interface IndexedFile {
  * the declaration, so they are skipped while walking upwards.
  */
 export function extractDocumentation(source: string, line: number): string | undefined {
+	return extractDocumentationFromLines(source.split(/\r?\n/), line);
+}
+
+function extractDocumentationFromLines(lines: readonly string[], line: number): string | undefined {
 	if (line <= 0) return undefined;
-	const lines = source.split(/\r?\n/);
 	const parts: string[] = [];
 	for (let candidate = line - 1; candidate >= 0; candidate--) {
 		const text = lines[candidate];
+		if (text === undefined) continue;
 		if (/^\s*@/.test(text)) continue;
 		const match = text.match(/^\s*##(.*)$/);
 		if (!match) break;
@@ -64,7 +74,13 @@ export function extractDocumentation(source: string, line: number): string | und
 	return documentation.length ? documentation : undefined;
 }
 
-export function declarationToSymbol(declaration: GDScriptDeclaration, uri: string, containerName?: string, source?: string): IndexedSymbol | undefined {
+export function declarationToSymbol(
+	declaration: GDScriptDeclaration,
+	uri: string,
+	containerName?: string,
+	source?: string,
+	sourceLines?: readonly string[],
+): IndexedSymbol | undefined {
 	if (!declaration.name || declaration.kind === "extends") return undefined;
 	const symbol: IndexedSymbol = {
 		name: declaration.name,
@@ -84,7 +100,9 @@ export function declarationToSymbol(declaration: GDScriptDeclaration, uri: strin
 	}
 	if (declaration.kind === "constant" || declaration.kind === "variable") symbol.type = declaration.type;
 	if (source) {
-		const documentation = extractDocumentation(source, declaration.range.start.line);
+		const documentation = sourceLines
+			? extractDocumentationFromLines(sourceLines, declaration.range.start.line)
+			: extractDocumentation(source, declaration.range.start.line);
 		if (documentation) symbol.documentation = documentation;
 	}
 	return symbol;
@@ -92,15 +110,20 @@ export function declarationToSymbol(declaration: GDScriptDeclaration, uri: strin
 
 export function collectSymbols(ast: GDScriptScript, uri: string, source?: string): IndexedSymbol[] {
 	const symbols: IndexedSymbol[] = [];
+	// Split once per file. Splitting in declarationToSymbol made symbol collection
+	// quadratic for scripts with many methods and documentation comments.
+	const sourceLines = source?.split(/\r?\n/);
 	const visit = (declarations: GDScriptDeclaration[], containerName?: string) => {
 		for (const declaration of declarations) {
 			if (declaration.kind === "enum") {
 				// Named enums are types whose members are only reachable through the
 				// enum name; members of unnamed enums act as plain script constants.
-				const symbol = declarationToSymbol(declaration, uri, containerName, source);
+				const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines);
 				if (symbol) symbols.push(symbol);
 				for (const member of declaration.members) {
-					const documentation = source ? extractDocumentation(source, member.range.start.line) : undefined;
+					const documentation = sourceLines
+						? extractDocumentationFromLines(sourceLines, member.range.start.line)
+						: undefined;
 					symbols.push({
 						name: member.name,
 						kind: "enum_member",
@@ -113,7 +136,7 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 				}
 				continue;
 			}
-			const symbol = declarationToSymbol(declaration, uri, containerName, source);
+			const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines);
 			if (symbol) symbols.push(symbol);
 			if (declaration.kind === "class") visit(declaration.declarations, declaration.name);
 		}

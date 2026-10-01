@@ -13,23 +13,35 @@ export type PerformanceSnapshot = Record<string, PerformanceSample>;
 
 const MAX_RECENT_SAMPLES = 512;
 
+interface RecentSamples {
+	values: number[];
+	next: number;
+	count: number;
+}
+
+/**
+ * Low-overhead runtime measurements. Percentiles are deliberately computed
+ * when a snapshot is requested, not on every parse/update: sorting a 512-item
+ * history for every indexed file made the profiler itself a startup bottleneck.
+ */
 export class PerformanceProfiler {
-	private readonly samples = new Map<string, PerformanceSample>();
-	private readonly recent = new Map<string, number[]>();
+	private readonly samples = new Map<string, Omit<PerformanceSample, "p50Ms" | "p95Ms" | "p99Ms">>();
+	private readonly recent = new Map<string, RecentSamples>();
 
 	record(name: string, durationMs: number): void {
-		const previous = this.samples.get(name) ?? { count: 0, totalMs: 0, maxMs: 0, p50Ms: 0, p95Ms: 0, p99Ms: 0 };
-		const values = this.recent.get(name) ?? [];
-		values.push(durationMs);
-		if (values.length > MAX_RECENT_SAMPLES) values.shift();
-		this.recent.set(name, values);
+		const previous = this.samples.get(name) ?? { count: 0, totalMs: 0, maxMs: 0 };
+		let recent = this.recent.get(name);
+		if (!recent) {
+			recent = { values: new Array<number>(MAX_RECENT_SAMPLES), next: 0, count: 0 };
+			this.recent.set(name, recent);
+		}
+		recent.values[recent.next] = durationMs;
+		recent.next = (recent.next + 1) % MAX_RECENT_SAMPLES;
+		recent.count = Math.min(MAX_RECENT_SAMPLES, recent.count + 1);
 		this.samples.set(name, {
 			count: previous.count + 1,
 			totalMs: previous.totalMs + durationMs,
 			maxMs: Math.max(previous.maxMs, durationMs),
-			p50Ms: this.percentile(values, 0.5),
-			p95Ms: this.percentile(values, 0.95),
-			p99Ms: this.percentile(values, 0.99),
 		});
 	}
 
@@ -52,7 +64,18 @@ export class PerformanceProfiler {
 	}
 
 	getSnapshot(): PerformanceSnapshot {
-		return Object.fromEntries([...this.samples.entries()].map(([name, sample]) => [name, { ...sample }]));
+		const snapshot: PerformanceSnapshot = {};
+		for (const [name, sample] of this.samples) {
+			const recent = this.recent.get(name);
+			const values = recent ? recent.values.slice(0, recent.count).sort((a, b) => a - b) : [];
+			snapshot[name] = {
+				...sample,
+				p50Ms: this.percentile(values, 0.5),
+				p95Ms: this.percentile(values, 0.95),
+				p99Ms: this.percentile(values, 0.99),
+			};
+		}
+		return snapshot;
 	}
 
 	reset(): void {
@@ -62,9 +85,8 @@ export class PerformanceProfiler {
 
 	private percentile(values: readonly number[], percentile: number): number {
 		if (!values.length) return 0;
-		const sorted = [...values].sort((a, b) => a - b);
-		const index = Math.min(sorted.length - 1, Math.ceil(percentile * sorted.length) - 1);
-		return sorted[index];
+		const index = Math.min(values.length - 1, Math.ceil(percentile * values.length) - 1);
+		return values[index];
 	}
 }
 
