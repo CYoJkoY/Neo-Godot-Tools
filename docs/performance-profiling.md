@@ -39,12 +39,22 @@ Semantic cache reuse
 
 The cache layer tracks the external semantic state a query depends on. Further cache layers should not be added until measurements show a remaining cacheable bottleneck.
 
+## Recent latency improvements
+
+- Parser source ranges use a precomputed line map and binary search instead of slicing/counting the entire source for every AST node.
+- The lexer uses character-code checks and shared operator lookup tables on its hot path.
+- Symbol collection splits source lines once per file; the previous per-declaration split made scripts with many documented members do repeated whole-file work.
+- Source fingerprints use two fast 32-bit hash lanes instead of allocating a `BigInt` per character.
+- Workspace startup reads scripts in bounded parallel batches and yields after each batch, while excluding `.godot` generated files.
+- Profiler percentile sorting now happens on explicit snapshots rather than every parse sample, keeping instrumentation from amplifying startup CPU cost.
+- TextMate/WASM formatter grammar loading is lazy, and formatting returns edits only for changed lines.
+
 ## Reproducible parser benchmark
 
-Run the analyzer benchmark with the repository's existing `ts-node` dependency:
+Run the analyzer benchmark against the compiled parser/index (the NodeNext `.js` imports are resolved by the build):
 
 ```text
-ts-node tools/profile_language.ts
+npm run profile:language
 ```
 
 The benchmark warms the parser, processes a synthetic multi-file GDScript corpus, and reports p50, p95, max latency, and files/second as JSON.
@@ -52,7 +62,7 @@ The benchmark warms the parser, processes a synthetic multi-file GDScript corpus
 Scale the workload without changing source code:
 
 ```text
-PROFILE_FILES=1000 PROFILE_ITERATIONS=10 ts-node tools/profile_language.ts
+PROFILE_FILES=1000 PROFILE_ITERATIONS=10 npm run profile:language
 ```
 
 On Windows PowerShell:
@@ -60,7 +70,7 @@ On Windows PowerShell:
 ```text
 $env:PROFILE_FILES = "1000"
 $env:PROFILE_ITERATIONS = "10"
-ts-node tools/profile_language.ts
+npm run profile:language
 ```
 
 ## Required project-scale benchmark

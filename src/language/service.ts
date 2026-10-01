@@ -347,11 +347,35 @@ export class LanguageService implements vscode.Disposable {
 
 	private async rebuildWorkspaceIndex(): Promise<void> {
 		const generation = ++this.scanGeneration;
-		const files = await vscode.workspace.findFiles("**/*.gd", "**/{.git,node_modules}/**");
-		for (const uri of files) {
+		// Ignore Godot's generated import/cache directory as well as dependency and
+		// VCS trees; none of these scripts should delay the first project index.
+		const files = await vscode.workspace.findFiles("**/*.gd", "**/{.git,node_modules,.godot}/**");
+		const openDocuments = new Map(
+			vscode.workspace.textDocuments
+				.filter((document) => document.languageId === "gdscript" && document.uri.scheme === "file")
+				.map((document) => [document.uri.toString(), document] as const),
+		);
+		const batchSize = 16;
+		for (let start = 0; start < files.length; start += batchSize) {
 			if (generation !== this.scanGeneration) return;
-			await this.updateUri(uri);
-			await new Promise<void>((resolve) => setImmediate(resolve));
+			const batch = files.slice(start, start + batchSize);
+			// File I/O is the avoidable startup wait: read a small bounded batch in
+			// parallel, then do CPU indexing in order and yield between batches.
+			const contents = await Promise.all(batch.map(async (uri) => {
+				const openDocument = openDocuments.get(uri.toString());
+				if (openDocument) return { uri, source: openDocument.getText(), version: openDocument.version };
+				try {
+					const bytes = await vscode.workspace.fs.readFile(uri);
+					return { uri, source: Buffer.from(bytes).toString("utf8"), version: 0 };
+				} catch {
+					return undefined;
+				}
+			}));
+			if (generation !== this.scanGeneration) return;
+			for (const entry of contents) {
+				if (entry) this.updateText(entry.uri.toString(), entry.source, entry.version);
+			}
+			if (start + batchSize < files.length) await new Promise<void>((resolve) => setImmediate(resolve));
 		}
 	}
 

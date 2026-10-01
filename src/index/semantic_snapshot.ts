@@ -38,12 +38,14 @@ export function createApiFingerprint(ast: GDScriptScript, _source: string, symbo
 }
 
 export function createSourceFingerprint(source: string): string {
-	let hash = 14695981039346656037n;
-	const prime = 1099511628211n;
-	const mask = 0xffffffffffffffffn;
+	// Two independent 32-bit FNV-style lanes avoid allocating a BigInt for every
+	// UTF-16 code unit. Fingerprints are a cache hint, not a security boundary.
+	let first = 0x811c9dc5;
+	let second = 0x9e3779b9;
 	for (let index = 0; index < source.length; index++) {
-		hash ^= BigInt(source.charCodeAt(index));
-		hash = (hash * prime) & mask;
+		const code = source.charCodeAt(index);
+		first = Math.imul(first ^ code, 0x01000193);
+		second = Math.imul(second ^ code, 0x85ebca6b);
 	}
-	return hash.toString(16).padStart(16, "0");
+	return `${(first >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}`;
 }

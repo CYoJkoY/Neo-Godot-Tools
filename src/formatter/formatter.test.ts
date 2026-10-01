@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { format_document, type FormatterOptions } from "./textmate";
+import { format_document_async, type FormatterOptions } from "./textmate";
 
 import { expect } from "chai";
 
@@ -146,7 +146,7 @@ suite("GDScript Formatter Tests", () => {
 				const editor = await set_content(test.in);
 				const document = editor.document;
 
-				const edits = format_document(document, test.config);
+				const edits = await format_document_async(document, test.config);
 
 				// Apply the formatting edits
 				const workspaceEdit = new vscode.WorkspaceEdit();
@@ -159,5 +159,4 @@ suite("GDScript Formatter Tests", () => {
 			}
 		});
 	}
-
 });

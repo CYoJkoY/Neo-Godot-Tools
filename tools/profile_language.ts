@@ -1,7 +1,9 @@
 #!/usr/bin/env ts-node
 import { performance } from "node:perf_hooks";
-import { parseGDScript } from "../src/analyzer/parser";
-import { collectSymbols } from "../src/index/symbol";
+// Build first: the source tree uses NodeNext `.js` specifiers, while this
+// ts-node script can load the emitted modules directly.
+import { parseGDScript } from "../out/analyzer/parser.js";
+import { collectSymbols } from "../out/index/symbol.js";
 
 function buildSource(index: number): string {
 	return `class_name Profile${index}\nextends Node\n\nsignal changed(value: int)\nconst MAX_VALUE: int = 100\nvar health: int = MAX_VALUE\nvar label: String = "profile-${index}"\n\nfunc update_value(value: int, amount: int = 1) -> int:\n\tvar next_value: int = value + amount\n\tif next_value > MAX_VALUE:\n\t\tnext_value = MAX_VALUE\n\treturn next_value\n\nfunc reset() -> void:\n\thealth = MAX_VALUE\n\tchanged.emit(health)\n`;

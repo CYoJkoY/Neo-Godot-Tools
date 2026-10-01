@@ -58,6 +58,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private readonly diagnostics = vscode.languages.createDiagnosticCollection("neoGodotTools.resourceInspector");
 	private readonly editors = new Map<string, Set<vscode.WebviewPanel>>();
 	private readonly syncedVersions = new Map<string, number>();
+	private readonly nativePropertiesCache = new Map<string, Promise<LspPropertyInfo[] | undefined>>();
 	private view?: vscode.WebviewView;
 	private panelUri?: vscode.Uri;
 
@@ -192,7 +193,14 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				return;
 			}
 			case "addSubResource": {
-				await this.applyEdits(uri, [{ kind: "addSubResource", type: String(message.subType ?? "Resource") }]);
+				const requestedType = String(message.subType ?? "").trim();
+				const type = requestedType || (await vscode.window.showInputBox({ prompt: "Godot resource type", value: "Resource" }))?.trim();
+				if (!type) return;
+				if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(type)) {
+					void vscode.window.showWarningMessage("Enter a valid Godot resource type name.");
+					return;
+				}
+				await this.applyEdits(uri, [{ kind: "addSubResource", type }]);
 				return;
 			}
 			case "duplicateSubResource": {
@@ -200,11 +208,31 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				return;
 			}
 			case "deleteSubResource": {
-				await this.applyEdits(uri, [{ kind: "deleteSubResource", id: String(message.id ?? "") }]);
+				const id = String(message.id ?? "");
+				const confirmation = await vscode.window.showWarningMessage(`Delete '${id}' and replace its references with null?`, { modal: true }, "Delete");
+				if (confirmation === "Delete") await this.applyEdits(uri, [{ kind: "deleteSubResource", id }]);
 				return;
 			}
 			case "renameSubResource": {
-				await this.applyEdits(uri, [{ kind: "renameSubResource", id: String(message.id ?? ""), newId: String(message.newId ?? "") }]);
+				const id = String(message.id ?? "");
+				const inputId = String(message.newId ?? "").trim();
+				const newId = inputId || (await vscode.window.showInputBox({ prompt: "New sub-resource ID", value: id }))?.trim() || "";
+				if (!/^[A-Za-z0-9_]+$/.test(newId)) {
+					void vscode.window.showWarningMessage("Sub-resource IDs may contain only letters, numbers, and underscores.");
+					return;
+				}
+				const document = await vscode.workspace.openTextDocument(uri);
+				const parsed = parseResourceDocument(document.getText());
+				if (!parsed.subResources.some((resource) => resource.id === id)) return;
+				if (newId !== id && parsed.subResources.some((resource) => resource.id === newId)) {
+					void vscode.window.showWarningMessage(`A sub-resource named '${newId}' already exists.`);
+					return;
+				}
+				await this.applyEdits(uri, [{ kind: "renameSubResource", id, newId }]);
+				return;
+			}
+			case "addExternalResource": {
+				await this.addExternalResource(uri);
 				return;
 			}
 			case "pickResource": {
@@ -239,6 +267,28 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			return;
 		}
 		await vscode.commands.executeCommand("vscode.open", target);
+	}
+
+	/** Adds an external resource without assigning it to a property yet. */
+	private async addExternalResource(uri: vscode.Uri): Promise<void> {
+		const picked = await vscode.window.showOpenDialog({
+			canSelectMany: false,
+			filters: { "Godot resources": ["tres", "res", "tscn", "gd", "png", "svg", "jpg", "webp"] },
+		});
+		if (!picked?.length) return;
+		const document = await vscode.workspace.openTextDocument(uri);
+		const text = document.getText();
+		const resourcePath = toResPath(uri, picked[0]);
+		if (parseResourceDocument(text).extResources.some((resource) => resource.path === resourcePath)) {
+			void vscode.window.showInformationMessage("This external resource is already included.");
+			return;
+		}
+		const result = applyResourceEdits(text, [{
+			kind: "addExtResource",
+			type: extResourceType(picked[0]),
+			path: resourcePath,
+		}]);
+		await this.replaceText(document, result.text);
 	}
 
 	/** Opens a `.tres` as an `ExtResource` for the selected property. */
@@ -299,9 +349,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	private async sendModel(document: vscode.TextDocument, webview: vscode.Webview, updateDiagnostics = true): Promise<void> {
 		if (document.languageId !== "gdresource" && !document.uri.path.endsWith(".tres")) return;
+		const version = document.version;
 		const model = await this.buildModel(document);
+		// Async script/LSP metadata must not let an older parse overwrite a newer edit.
+		if (document.version !== version) return;
 		if (updateDiagnostics) this.publishDiagnostics(document, model);
-		this.syncedVersions.set(document.uri.toString(), document.version);
+		this.syncedVersions.set(document.uri.toString(), version);
 		void webview.postMessage({ type: "model", model });
 	}
 
@@ -390,7 +443,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			// The file changed while the panel had pending edits: let the user decide.
 			for (const webview of webviews) void webview.postMessage({ type: "externalChange", text: event.document.getText() });
 		}
-		for (const webview of webviews) await this.sendModel(event.document, webview);
+		await Promise.all(webviews.map((webview) => this.sendModel(event.document, webview)));
 	}
 
 	// ------------------------------------------------------------------- misc
@@ -411,11 +464,15 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	/** Asks the connected Godot language server for native properties. */
-	private async lspProperties(resourceType: string): Promise<LspPropertyInfo[] | undefined> {
+	private lspProperties(resourceType: string): Promise<LspPropertyInfo[] | undefined> {
+		const cached = this.nativePropertiesCache.get(resourceType);
+		if (cached) return cached;
 		const client = (globalThis as { globals?: { lsp?: { client?: { sendRequest?: (...args: unknown[]) => Promise<unknown> } } } }).globals?.lsp?.client;
-		if (!client?.sendRequest) return undefined;
+		if (!client?.sendRequest) return Promise.resolve(undefined);
+		const sendRequest = client.sendRequest.bind(client);
+		const request = (async () => {
 		try {
-			const symbol = await client.sendRequest("textDocument/nativeSymbol", { native_class: resourceType, symbol_name: resourceType }) as {
+			const symbol = await sendRequest("textDocument/nativeSymbol", { native_class: resourceType, symbol_name: resourceType }) as {
 				children?: Array<{ name?: string; detail?: string; kind?: number }>;
 			} | undefined;
 			const children = symbol?.children ?? [];
@@ -432,6 +489,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		} catch {
 			return undefined;
 		}
+		})();
+		this.nativePropertiesCache.set(resourceType, request);
+		return request;
 	}
 
 	private async html(webview: vscode.Webview): Promise<string> {
