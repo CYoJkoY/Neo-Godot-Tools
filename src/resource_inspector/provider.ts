@@ -19,12 +19,13 @@ import {
 	ResourceEdit,
 	parseResourceDocument,
 } from "./document.js";
-import { collectPropertyMetadata, LspPropertyInfo, parseScriptBaseClass, PropertyMetadata, widgetForProperty } from "./metadata.js";
+import { collectPropertyMetadata, LspPropertyInfo, PropertyMetadata, widgetForProperty } from "./metadata.js";
 import { validateResourceDocument } from "./diagnostics.js";
 import { formatVariant, parseVariant } from "./values.js";
 
 export const RESOURCE_INSPECTOR_VIEW_TYPE = "neoGodotTools.resourceInspector";
 export const RESOURCE_INSPECTOR_VIEW_ID = "neoGodotTools.resourceInspector";
+const RESOURCE_INSPECTOR_DIAGNOSTICS_SETTING = "neoGodotTools.resource.inspector.diagnostics";
 
 interface PropertyModel {
 	name: string;
@@ -71,6 +72,11 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}),
 			vscode.workspace.onDidChangeTextDocument((event) => void this.onDocumentChanged(event)),
 			vscode.workspace.onDidOpenTextDocument((document) => void this.onDocumentOpened(document)),
+			vscode.workspace.onDidChangeConfiguration((event) => {
+				if (!event.affectsConfiguration(RESOURCE_INSPECTOR_DIAGNOSTICS_SETTING)) return;
+				// Turning validation off must also take back what it reported.
+				if (!diagnosticsEnabled()) this.diagnostics.clear();
+			}),
 			this.diagnostics,
 		);
 	}
@@ -305,9 +311,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const lspProperties = await this.lspProperties(parsed.resourceType);
 		const metadata = collectPropertyMetadata({ document: parsed, scriptSource, lspProperties });
 		const known = new Map(metadata.map((property) => [property.name, property]));
-		const baseClass = parseScriptBaseClass(scriptSource);
-		const complete = (lspProperties?.length ?? 0) > 0 || baseClass === undefined || baseClass === "Resource" || baseClass === "Object";
-		const diagnostics = validateResourceDocument(parsed, metadata, { complete });
+		// Only the engine knows every property a native resource type accepts. A
+		// script-attached resource inherits from an arbitrary class that cannot be
+		// enumerated here, so its property list is never authoritative either.
+		const hasScript = parsed.properties.some((property) => property.name === SCRIPT_PROPERTY);
+		const complete = !hasScript && (lspProperties?.length ?? 0) > 0;
+		const diagnostics = diagnosticsEnabled() ? validateResourceDocument(parsed, metadata, { complete }) : [];
 
 		return {
 			uri: document.uri.toString(),
@@ -351,6 +360,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private publishDiagnostics(document: vscode.TextDocument, model: ResourceModel): void {
+		if (!diagnosticsEnabled()) {
+			// The inspector is an editor, not a linter: leave the Problems list of
+			// valid resources alone and take back anything reported earlier.
+			this.diagnostics.delete(document.uri);
+			return;
+		}
 		this.diagnostics.set(document.uri, model.diagnostics.map((diagnostic) => {
 			const line = Math.max(0, Math.min(diagnostic.line, document.lineCount - 1));
 			const range = document.lineAt(line).range;
@@ -437,6 +452,18 @@ function isResourceFile(uri: vscode.Uri): boolean {
 export function getOpenIn(): "editor" | "panel" {
 	const value = vscode.workspace.getConfiguration("neoGodotTools").get<string>("resource.inspector.openIn");
 	return value === "panel" ? "panel" : "editor";
+}
+
+/**
+ * Configuration `neoGodotTools.resource.inspector.diagnostics`.
+ *
+ * Validation is opt-in: without the engine's property list it cannot tell a
+ * genuine mistake from a property it simply does not know about, and an
+ * inspector that decorates valid `.tres` files with errors is worse than one
+ * that stays quiet. Godot's own inspector does not lint resources either.
+ */
+export function diagnosticsEnabled(): boolean {
+	return vscode.workspace.getConfiguration("neoGodotTools").get<boolean>("resource.inspector.diagnostics") === true;
 }
 
 /** Maps a `res://` path onto a file uri relative to the resource's project. */

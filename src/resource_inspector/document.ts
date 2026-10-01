@@ -89,10 +89,16 @@ function assignmentEndLine(lines: string[], start: number): number {
 	return lines.length - 1;
 }
 
+/**
+ * Property names are plain identifiers, except for theme-style keys
+ * (`Button/colors/font_color`) which also contain `/` and `.`.
+ */
+const PROPERTY_RE = /^([A-Za-z_][A-Za-z0-9_/.]*)\s*=\s*(.*)$/;
+
 function parseProperties(lines: string[], start: number, end: number): PropertyEntry[] {
 	const properties: PropertyEntry[] = [];
 	for (let line = start; line < end; line++) {
-		const match = lines[line].match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+		const match = lines[line].match(PROPERTY_RE);
 		if (!match) continue;
 		const endLine = assignmentEndLine(lines, line);
 		const valueText = lines.slice(line, endLine + 1).map((text, index) => (index === 0 ? text.slice(text.indexOf("=") + 1) : text)).join("\n").trim();

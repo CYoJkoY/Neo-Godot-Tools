@@ -4,16 +4,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import * as vscode from "vscode";
-import { formatPropertyValue, getOpenIn, resolveResourceUri, ResourceInspectorProvider } from "./provider.js";
+import { diagnosticsEnabled, formatPropertyValue, getOpenIn, resolveResourceUri, ResourceInspectorProvider } from "./provider.js";
 
 const configuration = (vscode as unknown as { __configuration: Record<string, unknown> }).__configuration;
 
-function withConfiguration(value: unknown, run: () => Promise<void>): Promise<void> {
-	const previous = configuration["neoGodotTools.resource.inspector.openIn"];
-	configuration["neoGodotTools.resource.inspector.openIn"] = value;
+function withSetting(key: string, value: unknown, run: () => Promise<void>): Promise<void> {
+	const previous = configuration[key];
+	configuration[key] = value;
 	return run().finally(() => {
-		configuration["neoGodotTools.resource.inspector.openIn"] = previous;
+		configuration[key] = previous;
 	});
+}
+
+function withConfiguration(value: unknown, run: () => Promise<void>): Promise<void> {
+	return withSetting("neoGodotTools.resource.inspector.openIn", value, run);
 }
 
 describe("resource inspector provider", () => {
@@ -45,6 +49,18 @@ describe("resource inspector provider", () => {
 		assert.equal(getOpenIn(), "editor");
 		await withConfiguration("panel", async () => assert.equal(getOpenIn(), "panel"));
 		await withConfiguration("something-else", async () => assert.equal(getOpenIn(), "editor"));
+	});
+
+	it("keeps resource diagnostics off unless they are enabled", async () => {
+		// The inspector edits resources; flagging them is opt-in because partial
+		// metadata cannot tell a mistake from a property it does not know.
+		assert.equal(diagnosticsEnabled(), false);
+		await withSetting("neoGodotTools.resource.inspector.diagnostics", true, async () => {
+			assert.equal(diagnosticsEnabled(), true);
+		});
+		await withSetting("neoGodotTools.resource.inspector.diagnostics", false, async () => {
+			assert.equal(diagnosticsEnabled(), false);
+		});
 	});
 
 	it("resolves res:// paths through the nearest project.godot", () => {

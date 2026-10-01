@@ -94,6 +94,11 @@
           "enumDescriptions": ["Open .tres files in a dedicated Resource Inspector editor tab", "Show the Resource Inspector in the side panel"],
           "default": "editor",
           "description": "Where the Resource Inspector opens when using the Open Resource Inspector command."
+        },
+        "neoGodotTools.resource.inspector.diagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Report resource problems (dangling ExtResource/SubResource ids, unparsable values, type mismatches against the attached script) as diagnostics in .tres files. Disabled by default: without the Godot language server's full property list the inspector cannot tell a real mistake from a property it does not know about, and Godot's own inspector does not flag resources either."
         }
       }
     },

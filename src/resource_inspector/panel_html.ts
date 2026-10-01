@@ -8,44 +8,15 @@
 
 import type * as vscode from "vscode";
 
-export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-	void webview;
-	void extensionUri;
-	return /* html */ `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-	:root { color-scheme: light dark; }
-	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); padding: 8px; }
-	h2 { font-size: 1.05em; margin: 4px 0 8px; }
-	h3 { font-size: 0.95em; margin: 12px 0 4px; text-transform: uppercase; opacity: 0.7; }
-	.row { display: grid; grid-template-columns: minmax(120px, 32%) 1fr auto; gap: 6px; align-items: center; padding: 2px 0; }
-	.row > label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.row input, .row select, .row textarea { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); padding: 2px 4px; }
-	.banner { position: sticky; top: 0; display: flex; gap: 6px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); padding: 6px; margin-bottom: 6px; }
-	.res { grid-template-columns: auto 1fr auto auto; }
-	.revert { background: none; border: none; cursor: pointer; color: var(--vscode-descriptionForeground); }
-	details > summary { cursor: pointer; }
-	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 4px; }
-	.entry { display: grid; grid-template-columns: 1fr auto auto auto; gap: 4px; align-items: center; margin: 2px 0; }
-	.entry .kv { display: grid; grid-template-columns: 1fr 1fr auto; gap: 4px; }
-	.diagnostics { margin: 6px 0; }
-	.diagnostics .error { color: var(--vscode-errorForeground); }
-	.diagnostics .warning { color: var(--vscode-editorWarning-foreground); }
-	.res { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; }
-	.res button, .toolbar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 2px 8px; cursor: pointer; }
-	.broken { color: var(--vscode-errorForeground); }
-	.toolbar { display: flex; gap: 6px; margin: 8px 0; }
-	.banner { border: 1px solid var(--vscode-editorWarning-foreground); padding: 6px; margin: 6px 0; }
-	.empty { opacity: 0.7; }
-</style>
-</head>
-<body>
-<div id="banner"></div>
-<div id="app"><p class="empty">Loading resource…</p></div>
-<script>
+/**
+ * The webview's script.
+ *
+ * It is kept in a `String.raw` template literal on purpose: inside the HTML
+ * template literal below, a backslash written for a regular expression (`\s`)
+ * would be consumed by the outer string and reach the browser as `s`, which
+ * turns the whole script into a syntax error and leaves the panel blank.
+ */
+const WEBVIEW_SCRIPT = String.raw`
 const vscode = acquireVsCodeApi();
 const app = document.getElementById("app");
 
@@ -69,7 +40,16 @@ function numberInput(value, options, commit) {
 	if (options && options.min !== undefined) input.min = String(options.min);
 	if (options && options.max !== undefined) input.max = String(options.max);
 	if (options && options.step !== undefined) input.step = String(options.step);
-	input.addEventListener("change", () => commit(input.value));
+	input.addEventListener("change", () => {
+		// Never write back an empty or half-typed field: that would put NaN
+		// (or nothing at all) into the resource file.
+		const next = Number(input.value);
+		if (input.value.trim() === "" || !Number.isFinite(next)) {
+			input.value = String(value);
+			return;
+		}
+		commit(input.value.trim());
+	});
 	return input;
 }
 
@@ -97,7 +77,7 @@ function propertyRow(property, model, commit, revert) {
 		control.checked = property.raw.trim() === "true";
 		control.addEventListener("change", () => set(control.checked ? "true" : "false"));
 	} else if (widget.kind === "number") {
-		control = numberInput(Number(property.raw), widget, (value) => set(value));
+		control = numberInput(Number(property.raw), widget, (value) => set(widget.integer ? String(Math.round(Number(value))) : value));
 	} else if (widget.kind === "enum") {
 		control = element("select");
 		const options = widget.options || [];
@@ -123,6 +103,7 @@ function propertyRow(property, model, commit, revert) {
 		control = element("div", { class: "group" }, [picker, alpha]);
 	} else if (widget.kind === "vector") {
 		const numbers = (property.raw.match(/-?[0-9.]+/g) || []).map(Number);
+		// Keep the constructor the file uses (Vector2i, Quat, Rect3, ...).
 		const constructor = property.raw.split("(")[0].trim() || "Vector2";
 		const count = widget.components || numbers.length;
 		const components = numbers.slice();
@@ -131,7 +112,12 @@ function propertyRow(property, model, commit, revert) {
 		for (let index = 0; index < count; index++) {
 			const input = element("input", { type: "number", value: String(components[index]) });
 			input.addEventListener("change", () => {
-				components[index] = Number(input.value);
+				const next = Number(input.value);
+				if (input.value.trim() === "" || !Number.isFinite(next)) {
+					input.value = String(components[index]);
+					return;
+				}
+				components[index] = next;
 				set(constructor + "(" + components.join(", ") + ")");
 			});
 			fields.push(input);
@@ -177,14 +163,82 @@ function propertyRow(property, model, commit, revert) {
 	return row;
 }
 
+/** Splits on commas that are outside quotes and brackets. */
+function splitTopLevel(text) {
+	const parts = [];
+	let depth = 0;
+	let quote = undefined;
+	let start = 0;
+	for (let index = 0; index < text.length; index++) {
+		const char = text[index];
+		if (quote) {
+			if (char === "\\") index++;
+			else if (char === quote) quote = undefined;
+			continue;
+		}
+		if (char === '"' || char === "'") { quote = char; continue; }
+		if (char === "(" || char === "[" || char === "{") depth++;
+		else if (char === ")" || char === "]" || char === "}") depth--;
+		else if (char === "," && depth === 0) {
+			parts.push(text.slice(start, index).trim());
+			start = index + 1;
+		}
+	}
+	const tail = text.slice(start).trim();
+	if (tail) parts.push(tail);
+	return parts.filter((part) => part !== "");
+}
+
+/**
+ * Describes the container a list value is written in, so it can be written back
+ * in the same shape: [1, 2], Array[Vector2]([...]) or PackedStringArray(...).
+ */
+function listForm(raw) {
+	const text = raw.trim();
+	const match = text.match(/^([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?)\(([\s\S]*)\)$/);
+	if (match) {
+		let body = match[2].trim();
+		const wrapped = body.startsWith("[") && body.endsWith("]");
+		if (wrapped) body = body.slice(1, -1);
+		return { name: match[1], body, wrapped };
+	}
+	if (text.startsWith("[") && text.endsWith("]")) return { name: "", body: text.slice(1, -1), wrapped: true };
+	return { name: "", body: text, wrapped: false };
+}
+
 function parseList(raw) {
-	const inner = raw.replace(/^[A-Za-z_]*\[?/, "").replace(/\]?\(\[?/, "[").replace(/\]\)$/, "]");
-	const match = inner.match(/^\s*\[([\s\S]*)\]\s*$/);
-	if (!match) return [];
-	return match[1].split(/,(?![^()\[\]{}]*[\)\]\}])/).map((part) => part.trim()).filter(Boolean);
+	return splitTopLevel(listForm(raw).body);
+}
+
+function serializeList(form, items) {
+	const body = items.join(", ");
+	if (!form.name) return "[" + body + "]";
+	// Typed arrays keep their inner brackets; packed arrays take a flat list.
+	const inner = form.wrapped || form.name === "Array" ? "[" + body + "]" : body;
+	return form.name + "(" + inner + ")";
+}
+
+/** A placeholder that is valid Godot syntax for the container's element type. */
+function defaultListEntry(form) {
+	const typed = form.name.match(/^Array\[([^\]]*)\]$/);
+	if (typed) {
+		switch (typed[1]) {
+			case "String": return '""';
+			case "Vector2": return "Vector2(0, 0)";
+			case "Vector2i": return "Vector2i(0, 0)";
+			case "Vector3": return "Vector3(0, 0, 0)";
+			case "Vector3i": return "Vector3i(0, 0, 0)";
+			case "Color": return "Color(0, 0, 0, 1)";
+			default: return "null";
+		}
+	}
+	if (/StringArray$/.test(form.name)) return '""';
+	if (/Array$/.test(form.name)) return "0";
+	return "null";
 }
 
 function arrayEditor(property, set) {
+	const form = listForm(property.raw);
 	const items = parseList(property.raw);
 	const container = element("div", {});
 	const render = () => {
@@ -192,16 +246,17 @@ function arrayEditor(property, set) {
 		items.forEach((item, index) => {
 			const input = element("input", { type: "text", value: item });
 			input.addEventListener("change", () => { items[index] = input.value; commit(); });
-			const up = element("button", { text: "↑", onclick: () => { if (index > 0) { items.splice(index - 1, 0, items.splice(index, 1)[0]); commit(); } } });
-			const down = element("button", { text: "↓", onclick: () => { if (index < items.length - 1) { items.splice(index + 1, 0, items.splice(index, 1)[0]); commit(); } } });
-			const remove = element("button", { text: "✕", onclick: () => { items.splice(index, 1); commit(); } });
+			const up = element("button", { text: "\u2191", onclick: () => { if (index > 0) { items.splice(index - 1, 0, items.splice(index, 1)[0]); commit(); } } });
+			const down = element("button", { text: "\u2193", onclick: () => { if (index < items.length - 1) { items.splice(index + 1, 0, items.splice(index, 1)[0]); commit(); } } });
+			const remove = element("button", { text: "\u2715", onclick: () => { items.splice(index, 1); commit(); } });
 			container.appendChild(element("div", { class: "entry" }, [input, up, down, remove]));
 		});
-		container.appendChild(element("button", { text: "Add entry", onclick: () => { items.push("null"); commit(); } }));
+		container.appendChild(element("button", { text: "Add entry", onclick: () => { items.push(defaultListEntry(form)); commit(); } }));
 	};
 	function commit() {
-		const prefix = property.raw.replace(/\(.*$/s, "");
-		set(prefix + "(" + (property.raw.includes("[") && !property.raw.includes("(") ? "[" + items.join(", ") + "]" : (prefix.endsWith("Array") ? items.join(", ") : "[" + items.join(", ") + "]")) + ")");
+		// Write the value back in the container it came from, so editing an array
+		// never rewrites [1, 2] into something Godot can no longer load.
+		set(serializeList(form, items));
 		render();
 	}
 	render();
@@ -209,9 +264,13 @@ function arrayEditor(property, set) {
 }
 
 function dictionaryEditor(property, set) {
-	const match = property.raw.match(/^\s*\{([\s\S]*)\}\s*$/);
-	const entries = match && match[1].trim()
-		? match[1].split(/,(?![^()\[\]{}]*[\)\]\}])/).map((part) => {
+	const text = property.raw.trim();
+	// Dictionary[K, V]({...}) is typed; keep the prefix when writing back.
+	const typed = text.match(/^(Dictionary\[[^\]]*\])\(([\s\S]*)\)$/);
+	const plain = text.match(/^\s*\{([\s\S]*)\}\s*$/);
+	const body = typed ? typed[2].trim() : (plain ? plain[1].trim() : "");
+	const entries = body
+		? splitTopLevel(body.replace(/^\{/, "").replace(/\}$/, "")).map((part) => {
 			const separator = part.indexOf(":");
 			return { key: part.slice(0, separator).trim(), value: part.slice(separator + 1).trim() };
 		})
@@ -224,13 +283,14 @@ function dictionaryEditor(property, set) {
 			const value = element("input", { type: "text", value: entry.value });
 			key.addEventListener("change", () => { entry.key = key.value; commit(); });
 			value.addEventListener("change", () => { entry.value = value.value; commit(); });
-			const remove = element("button", { text: "✕", onclick: () => { entries.splice(index, 1); commit(); } });
+			const remove = element("button", { text: "\u2715", onclick: () => { entries.splice(index, 1); commit(); } });
 			container.appendChild(element("div", { class: "entry kv" }, [key, value, remove]));
 		});
 		container.appendChild(element("button", { text: "Add pair", onclick: () => { entries.push({ key: '"key"', value: "null" }); commit(); } }));
 	};
 	function commit() {
-		set("{" + entries.map((entry) => entry.key + ": " + entry.value).join(", ") + "}");
+		const literal = "{" + entries.map((entry) => entry.key + ": " + entry.value).join(", ") + "}";
+		set(typed ? typed[1] + "(" + literal + ")" : literal);
 		render();
 	}
 	render();
@@ -308,7 +368,47 @@ window.addEventListener("message", (event) => {
 	else if (message.type === "externalChange") showExternalChangeBanner();
 });
 
-post("ready", {});
+post("ready", {});`;
+
+export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+	void webview;
+	void extensionUri;
+	return /* html */ `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+	:root { color-scheme: light dark; }
+	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); padding: 8px; }
+	h2 { font-size: 1.05em; margin: 4px 0 8px; }
+	h3 { font-size: 0.95em; margin: 12px 0 4px; text-transform: uppercase; opacity: 0.7; }
+	.row { display: grid; grid-template-columns: minmax(120px, 32%) 1fr auto; gap: 6px; align-items: center; padding: 2px 0; }
+	.row > label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.row input, .row select, .row textarea { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); padding: 2px 4px; }
+	.banner { position: sticky; top: 0; display: flex; gap: 6px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); padding: 6px; margin-bottom: 6px; }
+	.res { grid-template-columns: auto 1fr auto auto; }
+	.revert { background: none; border: none; cursor: pointer; color: var(--vscode-descriptionForeground); }
+	details > summary { cursor: pointer; }
+	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 4px; }
+	.entry { display: grid; grid-template-columns: 1fr auto auto auto; gap: 4px; align-items: center; margin: 2px 0; }
+	.entry .kv { display: grid; grid-template-columns: 1fr 1fr auto; gap: 4px; }
+	.diagnostics { margin: 6px 0; }
+	.diagnostics .error { color: var(--vscode-errorForeground); }
+	.diagnostics .warning { color: var(--vscode-editorWarning-foreground); }
+	.res { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; }
+	.res button, .toolbar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 2px 8px; cursor: pointer; }
+	.broken { color: var(--vscode-errorForeground); }
+	.toolbar { display: flex; gap: 6px; margin: 8px 0; }
+	.banner { border: 1px solid var(--vscode-editorWarning-foreground); padding: 6px; margin: 6px 0; }
+	.empty { opacity: 0.7; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<div id="app"><p class="empty">Loading resource…</p></div>
+<script>
+${WEBVIEW_SCRIPT}
 </script>
 </body>
 </html>`;

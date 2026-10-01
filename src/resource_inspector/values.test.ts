@@ -61,15 +61,27 @@ describe("resource inspector variant values", () => {
 
 		const array = parseVariant('["a", "b"]').value;
 		assert.equal(array.kind, "Array");
-		assert.deepEqual(array.items?.map((item) => item.text), ["a", "b"]);
+		assert.deepEqual(
+			array.items?.map((item) => item.text),
+			["a", "b"],
+		);
 
-		const typed = parseVariant('Array[Vector2]([Vector2(1, 2), Vector2(3, 4)])').value;
+		const typed = parseVariant("Array[Vector2]([Vector2(1, 2), Vector2(3, 4)])").value;
 		assert.equal(typed.arrayType, "Vector2");
-		assert.deepEqual(typed.items?.map((item) => item.components), [[1, 2], [3, 4]]);
+		assert.deepEqual(
+			typed.items?.map((item) => item.components),
+			[
+				[1, 2],
+				[3, 4],
+			],
+		);
 
 		const packed = parseVariant("PackedFloat32Array(0.5, 1.5)").value;
 		assert.equal(packed.kind, "PackedFloat32Array");
-		assert.deepEqual(packed.items?.map((item) => item.number), [0.5, 1.5]);
+		assert.deepEqual(
+			packed.items?.map((item) => item.number),
+			[0.5, 1.5],
+		);
 	});
 
 	it("parses dictionaries", () => {
@@ -81,11 +93,72 @@ describe("resource inspector variant values", () => {
 		assert.equal(dictionary.entries?.[1].value.kind, "StringName");
 	});
 
+	it("accepts the literals Godot's own parser accepts", () => {
+		// Godot 3 leaves resource ids unquoted and spells StringNames/arrays/types
+		// differently; a .tres file using any of them must not be flagged.
+		const legacy = parseVariant("ExtResource( 1 )").value;
+		assert.equal(legacy.kind, "ExtResource");
+		assert.equal(legacy.referenceId, "1");
+		assert.equal(formatVariant(legacy), "ExtResource( 1 )");
+
+		const sub = parseVariant("SubResource( 2 )").value;
+		assert.equal(sub.kind, "SubResource");
+		assert.equal(formatVariant(sub), "SubResource( 2 )");
+
+		const stringName = parseVariant('StringName("hero")').value;
+		assert.equal(stringName.kind, "StringName");
+		assert.equal(stringName.text, "hero");
+		assert.equal(formatVariant(stringName), 'StringName("hero")');
+
+		const pool = parseVariant("PoolColorArray(1, 0, 0, 1)").value;
+		assert.equal(pool.kind, "PackedColorArray");
+		assert.equal(formatVariant(pool), "PoolColorArray(1, 0, 0, 1)");
+
+		const transform = parseVariant("Transform(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)").value;
+		assert.equal(transform.kind, "Transform3D");
+		assert.equal(formatVariant(transform), "Transform(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)");
+
+		assert.equal(parseVariant("Quat(0, 0, 0, 1)").value.kind, "Quaternion");
+		assert.equal(parseVariant("Rect3(0, 0, 0, 1, 1, 1)").value.kind, "AABB");
+		assert.equal(parseVariant("Matrix3(1, 0, 0, 0, 1, 0, 0, 0, 1)").value.kind, "Basis");
+		assert.equal(parseVariant("Matrix32(1, 0, 0, 1, 0, 0)").value.kind, "Transform2D");
+		assert.equal(parseVariant("PoolRealArray(0.5)").value.kind, "PackedFloat32Array");
+		assert.equal(parseVariant('PoolStringArray("a")').value.kind, "PackedStringArray");
+		assert.equal(parseVariant("PoolVector2Array(0, 0)").value.kind, "PackedVector2Array");
+		assert.equal(parseVariant("PoolByteArray(1)").value.kind, "PackedByteArray");
+	});
+
+	it("accepts typed dictionaries, hex colours and special floats", () => {
+		const typed = parseVariant('Dictionary[String, int]({"a": 1})').value;
+		assert.equal(typed.kind, "Dictionary");
+		assert.deepEqual(typed.dictionaryTypes, ["String", "int"]);
+		assert.equal(formatVariant(typed), 'Dictionary[String, int]({"a": 1})');
+
+		const hex = parseVariant("#ff8800").value;
+		assert.equal(hex.kind, "Color");
+		assert.deepEqual(hex.components, [1, 136 / 255, 0, 1]);
+
+		assert.equal(parseVariant("inf").value.kind, "float");
+		assert.equal(parseVariant("nil").value.kind, "Variant");
+		assert.equal(parseVariant("nan").value.number, Number.NaN);
+		assert.equal(parseVariant("Color(0.2, 0.4, 0.6)").value.components?.length, 4);
+		assert.equal(parseVariant('Color("red")').value.text, "red");
+	});
+
+	it("keeps constructors it cannot edit verbatim", () => {
+		for (const raw of ["RID()", 'Signal("pressed")', "Callable()", 'PackedByteArray("AAA=")']) {
+			const parsed = parseVariant(raw);
+			assert.equal(parsed.error, undefined, `unexpected error for ${raw}`);
+			assert.equal(formatVariant(parsed.value), raw, `round-trip failed for ${raw}`);
+		}
+	});
+
 	it("reports errors for malformed values", () => {
 		assert.ok(parseVariant("").error);
 		assert.ok(parseVariant("Vector2(1, 2, 3)").error);
 		assert.ok(parseVariant("&not-a-string").error);
 		assert.ok(parseVariant("SomethingElse(1)").error);
+		assert.ok(parseVariant("StringName(1)").error);
 		assert.ok(parseVariant("not a value").error);
 	});
 
@@ -99,19 +172,56 @@ describe("resource inspector variant values", () => {
 		assert.equal(formatVariant(parseVariant('ExtResource("2_x")').value), 'ExtResource("2_x")');
 		assert.equal(formatVariant(parseVariant("Vector3(1, 2, 3)").value), "Vector3(1, 2, 3)");
 		assert.equal(formatVariant(parseVariant('["a", 2]').value), '["a", 2]');
-		assert.equal(formatVariant(parseVariant('Array[int]([1, 2])').value), "Array[int]([1, 2])");
+		assert.equal(formatVariant(parseVariant("Array[int]([1, 2])").value), "Array[int]([1, 2])");
 		assert.equal(formatVariant(parseVariant('{"a": 1}').value), '{"a": 1}');
-		assert.equal(formatVariant(parseVariant("PackedStringArray(\"a\", \"b\")").value), 'PackedStringArray("a", "b")');
+		assert.equal(formatVariant(parseVariant('PackedStringArray("a", "b")').value), 'PackedStringArray("a", "b")');
 	});
 
 	it("round-trips values without changing their text", () => {
 		const samples = [
-			"true", "-12", "0.5", "3.0", '"text"', '&"Name"', 'NodePath("A/B")',
-			'ExtResource("1_abc")', 'SubResource("Sub_2")', "Vector2(1, 2)", "Vector2i(0, -1)",
-			"Vector3(0.5, 0.25, 1)", "Rect2(0, 0, 4, 4)", "Color(1, 0.5, 0.25, 1)",
-			"Transform2D(0, 0, 1, 1, 0, 0)", "AABB(0, 0, 0, 1, 1, 1)", "Basis(1, 0, 0, 0, 1, 0, 0, 0, 1)",
-			"Quaternion(0, 0, 0, 1)", "Plane(0, 1, 0, 0)", '["a", "b"]', '{"k": 1}',
-			"PackedFloat32Array(0.5, 1.5)", 'PackedStringArray("x")', 'Array[Vector2]([Vector2(1, 2)])',
+			"true",
+			"-12",
+			"0.5",
+			"3.0",
+			'"text"',
+			'&"Name"',
+			'NodePath("A/B")',
+			'ExtResource("1_abc")',
+			'SubResource("Sub_2")',
+			"Vector2(1, 2)",
+			"Vector2i(0, -1)",
+			"Vector3(0.5, 0.25, 1)",
+			"Rect2(0, 0, 4, 4)",
+			"Color(1, 0.5, 0.25, 1)",
+			"Transform2D(0, 0, 1, 1, 0, 0)",
+			"AABB(0, 0, 0, 1, 1, 1)",
+			"Basis(1, 0, 0, 0, 1, 0, 0, 0, 1)",
+			"Quaternion(0, 0, 0, 1)",
+			"Plane(0, 1, 0, 0)",
+			'["a", "b"]',
+			'{"k": 1}',
+			"PackedFloat32Array(0.5, 1.5)",
+			'PackedStringArray("x")',
+			"Array[Vector2]([Vector2(1, 2)])",
+			// Godot 3 spellings must survive an edit untouched.
+			"ExtResource( 1 )",
+			"SubResource( 2 )",
+			'StringName("hero")',
+			"PoolColorArray(1, 0, 0, 1)",
+			"PoolVector2Array(0, 0, 16, 0)",
+			'PoolStringArray("a", "b")',
+			"PoolIntArray(1, 2)",
+			"Transform(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)",
+			"Matrix3(1, 0, 0, 0, 1, 0, 0, 0, 1)",
+			"Rect3(0, 0, 0, 1, 1, 1)",
+			"Quat(0, 0, 0, 1)",
+			"Matrix32(1, 0, 0, 1, 0, 0)",
+			'Dictionary[String, int]({"a": 1})',
+			"#ff8800",
+			"null",
+			"nil",
+			"inf",
+			"nan",
 		];
 		for (const sample of samples) {
 			const parsed = parseVariant(sample);
@@ -145,5 +255,11 @@ describe("resource inspector variant values", () => {
 		assert.ok(valueMatchesType(parseVariant("null").value, "Texture2D"));
 		assert.ok(!valueMatchesType(parseVariant("4").value, "Vector2"));
 		assert.ok(valueMatchesType(parseVariant("anything(1)").value, "Variant"));
+		// A value that could not be classified must not be reported as a mismatch.
+		assert.ok(valueMatchesType(parseVariant("RID()").value, "Node2D"));
+		assert.ok(valueMatchesType(parseVariant("PoolColorArray(1, 0, 0, 1)").value, "PackedColorArray"));
+		assert.ok(valueMatchesType(parseVariant("Transform(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)").value, "Transform3D"));
+		assert.ok(valueMatchesType(parseVariant('StringName("x")').value, "StringName"));
+		assert.ok(valueMatchesType(parseVariant("nil").value, "Texture2D"));
 	});
 });
