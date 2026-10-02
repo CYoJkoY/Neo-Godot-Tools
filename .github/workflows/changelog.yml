@@ -6,14 +6,11 @@ on:
       - "v*"
   delete:
   workflow_dispatch:
-  # Also recovers tags pushed at old commits that predate this workflow.
   schedule:
     - cron: "21 3 * * *"
 
 permissions:
   contents: write
-  pull-requests: write
-  actions: write
 
 concurrency:
   group: changelog-sync
@@ -30,7 +27,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
-      - name: Synchronize live tags, including deletions and retags
+      - name: Synchronize live tags
         run: git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
 
       - name: Setup Node.js
@@ -47,33 +44,14 @@ jobs:
       - name: Rebuild changelog
         run: npm run changelog
 
-      # Prefer a reviewable pull request. Repositories with
-      # "Allow GitHub Actions to create and approve pull requests" disabled make
-      # every Actions-created PR fail with a policy error, which used to leave
-      # the generated changelog unpublished and the workflow red; the script
-      # falls back to committing it directly to the default branch.
-      - name: Publish changelog update
-        id: changelog_pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          CHANGELOG_DIRECT_PUSH: ${{ vars.CHANGELOG_DIRECT_PUSH }}
-        run: bash tools/publish_changelog.sh
-
-      - name: Run CI for the bot pull request
-        if: ${{ steps.changelog_pr.outputs.pull-request-operation == 'created' || steps.changelog_pr.outputs.pull-request-operation == 'updated' }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run ci.yml --ref automation/changelog
-
-      - name: Summarize the publish path
-        if: always()
-        env:
-          OPERATION: ${{ steps.changelog_pr.outputs.pull-request-operation }}
+      - name: Commit and push changelog
         run: |
-          case "${OPERATION:-none}" in
-            created|updated) echo "Changelog published through a pull request." ;;
-            direct) echo "Changelog committed directly to the default branch (pull requests are not permitted for Actions)." ;;
-            *) echo "Changelog already up to date; nothing was published." ;;
-          esac
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "Changelog is already up to date."
+          else
+            git commit -m "docs(changelog): update changelog [skip ci]"
+            git push origin ${{ github.event.repository.default_branch }}
+          fi
