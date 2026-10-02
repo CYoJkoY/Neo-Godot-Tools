@@ -62,6 +62,11 @@
       { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.copyResourcePath", "title": "Copy Resource Path" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openScene", "title": "Open Scene", "icon": { "light": "resources/InstanceOptions.svg", "dark": "resources/InstanceOptions.svg" } },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openScript", "title": "Open Script", "icon": { "light": "resources/godot_icons/light/Script.svg", "dark": "resources/godot_icons/dark/Script.svg" } },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.refresh", "title": "Refresh Resource Inspector", "icon": { "light": "resources/godot_icons/light/Reload.svg", "dark": "resources/godot_icons/dark/Reload.svg" } },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.openCurrentResource", "title": "Open the Resource Inspector's current resource", "icon": { "light": "resources/godot_icons/light/Object.svg", "dark": "resources/godot_icons/dark/Object.svg" } },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.openScript", "title": "Open the script of the Resource Inspector's current resource", "icon": { "light": "resources/godot_icons/light/Script.svg", "dark": "resources/godot_icons/dark/Script.svg" } },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.lock", "title": "Lock Resource Inspector", "icon": { "light": "resources/godot_icons/light/Unlock.svg", "dark": "resources/godot_icons/dark/Unlock.svg" } },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.unlock", "title": "Unlock Resource Inspector", "icon": { "light": "resources/godot_icons/light/Lock.svg", "dark": "resources/godot_icons/dark/Lock.svg" } },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.switchSceneScript", "title": "Switch Scene/Script" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.copyResourcePath", "title": "Copy Resource Path" }
     ],
@@ -155,13 +160,12 @@
       { "id": "neoGodotTools.nodeInspector", "name": "Inspector", "icon": "resources/godot_icon.svg" }
     ], "neoGodotTools": [
       { "id": "neoGodotTools.scenePreview", "name": "Scene Preview", "icon": "resources/godot_icon.svg" },
-      { "id": "neoGodotTools.resourceInspector", "name": "Resource Inspector", "icon": "resources/godot_icon.svg" }
+      { "id": "neoGodotTools.resourceInspector", "name": "Resource Inspector", "type": "webview", "icon": "resources/godot_icon.svg" }
     ] },
     "viewsWelcome": [
       { "view": "neoGodotTools.activeSceneTree", "contents": "Scene Tree data has not been requested" },
       { "view": "neoGodotTools.nodeInspector", "contents": "Node has not been inspected" },
-      { "view": "neoGodotTools.scenePreview", "contents": "Open a Scene to see a preview of its structure" },
-      { "view": "neoGodotTools.resourceInspector", "contents": "Open a .tres resource to edit it in the Resource Inspector" }
+      { "view": "neoGodotTools.scenePreview", "contents": "Open a Scene to see a preview of its structure" }
     ],
     "menus": {
       "commandPalette": [
@@ -172,6 +176,11 @@
         { "command": "neoGodotTools.scenePreview.copyResourcePath", "when": "false" },
         { "command": "neoGodotTools.scenePreview.openScript", "when": "false" },
         { "command": "neoGodotTools.scenePreview.openScene", "when": "false" },
+        { "command": "neoGodotTools.resourceInspector.refresh", "when": "false" },
+        { "command": "neoGodotTools.resourceInspector.openCurrentResource", "when": "false" },
+        { "command": "neoGodotTools.resourceInspector.openScript", "when": "false" },
+        { "command": "neoGodotTools.resourceInspector.lock", "when": "false" },
+        { "command": "neoGodotTools.resourceInspector.unlock", "when": "false" },
         { "command": "neoGodotTools.debugger.editValue", "when": "false" },
         { "command": "neoGodotTools.debugger.inspectNode", "when": "false" },
         { "command": "neoGodotTools.debugger.refreshSceneTree", "when": "false" },
@@ -184,7 +193,12 @@
         { "command": "neoGodotTools.scenePreview.unlock", "when": "view == neoGodotTools.scenePreview && neoGodotTools.context.scenePreview.locked", "group": "navigation@1" },
         { "command": "neoGodotTools.scenePreview.refresh", "when": "view == neoGodotTools.scenePreview", "group": "navigation@2" },
         { "command": "neoGodotTools.scenePreview.openMainScript", "when": "view == neoGodotTools.scenePreview", "group": "navigation@3" },
-        { "command": "neoGodotTools.scenePreview.openCurrentScene", "when": "view == neoGodotTools.scenePreview", "group": "navigation@4" }
+        { "command": "neoGodotTools.scenePreview.openCurrentScene", "when": "view == neoGodotTools.scenePreview", "group": "navigation@4" },
+        { "command": "neoGodotTools.resourceInspector.lock", "when": "view == neoGodotTools.resourceInspector && !neoGodotTools.context.resourceInspector.locked", "group": "navigation@1" },
+        { "command": "neoGodotTools.resourceInspector.unlock", "when": "view == neoGodotTools.resourceInspector && neoGodotTools.context.resourceInspector.locked", "group": "navigation@1" },
+        { "command": "neoGodotTools.resourceInspector.refresh", "when": "view == neoGodotTools.resourceInspector", "group": "navigation@2" },
+        { "command": "neoGodotTools.resourceInspector.openScript", "when": "view == neoGodotTools.resourceInspector", "group": "navigation@3" },
+        { "command": "neoGodotTools.resourceInspector.openCurrentResource", "when": "view == neoGodotTools.resourceInspector", "group": "navigation@4" }
       ],
       "view/item/context": [
         { "command": "neoGodotTools.debugger.inspectNode", "when": "view == neoGodotTools.activeSceneTree", "group": "inline" },
@@ -215,6 +229,7 @@
       ],
       "editor/title/context": [
         { "command": "neoGodotTools.copyResourcePath", "group": "1_godot" },
+        { "command": "neoGodotTools.openResourceInspector", "group": "1_godot", "when": "resourceExtname == .tres" },
         { "command": "neoGodotTools.debugger.pinFile", "group": "1_godot", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && !(resourcePath in neoGodotTools.context.pinnedScene)" },
         { "command": "neoGodotTools.debugger.unpinFile", "group": "1_godot", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && (resourcePath in neoGodotTools.context.pinnedScene)" }
       ],

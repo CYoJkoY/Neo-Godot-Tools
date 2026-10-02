@@ -59,12 +59,18 @@ export const globals: Extension = {};
 
 export function activate(context: vscode.ExtensionContext) {
 	attemptSettingsUpdate(context);
+	(globalThis as { globals?: Extension }).globals = globals;
 	globals.context = context;
 	globals.lsp = new ClientConnectionManager(context);
 	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback(), new RenameFallback());
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context);
-	globals.resourceInspector = new ResourceInspectorProvider(context);
+	globals.resourceInspector = new ResourceInspectorProvider(context, {
+		lspClient: () => globals.lsp?.client,
+	});
+	globals.lsp.onStatusChanged(() => {
+		void globals.resourceInspector?.refresh();
+	});
 	globals.linkProvider = new GDDocumentLinkProvider(context);
 	globals.dropsProvider = new GDDocumentDropEditProvider(context);
 	globals.hoverProvider = new GDHoverProvider(context, globals.languageService, new HoverFallback());

@@ -63,18 +63,56 @@ function componentNumber(components, index, commit) {
 	return input;
 }
 
+function normalizeTextValue(rawInput, type, widgetKind) {
+	const trimmed = String(rawInput).trim();
+	if (widgetKind === "nodepath" || type === "NodePath") {
+		if (!trimmed || trimmed === "null") return 'NodePath("")';
+		if (/^NodePath\([\s\S]*\)$/.test(trimmed)) return trimmed;
+		const unquoted = (trimmed.startsWith('"') && trimmed.endsWith('"')) ? trimmed.slice(1, -1) : trimmed;
+		return 'NodePath("' + unquoted.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '")';
+	}
+	if (type === "String") {
+		if (trimmed === "null") return '""';
+		if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+			return rawInput;
+		}
+		return '"' + String(rawInput).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+	}
+	if (type === "StringName") {
+		if (!trimmed || trimmed === "null") return '&""';
+		if (trimmed.startsWith('&"') || trimmed.startsWith('@"') || /^StringName\(/.test(trimmed)) return trimmed;
+		const unquoted = (trimmed.startsWith('"') && trimmed.endsWith('"')) ? trimmed.slice(1, -1) : trimmed;
+		return '&"' + unquoted.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+	}
+	return rawInput;
+}
+
+const openSubResources = new Set();
+const closedSubResources = new Set();
+const openVectors = new Set();
+
 function propertyRow(property, model, commit, revert) {
-	const defaultValue = property.metadata && property.metadata.defaultValue;
-	const modified = defaultValue !== undefined && property.raw.trim() !== String(defaultValue).trim();
-	const row = element("div", { class: "row property-row" + (modified ? " modified" : "") });
-	row.setAttribute("data-search", (property.name + " " + (property.metadata && property.metadata.type || "")).toLowerCase());
+	const metaSource = property.metadata && property.metadata.source;
+	const defaultValue = property.metadata && metaSource !== "file" ? property.metadata.defaultValue : undefined;
+	const modified =
+		(defaultValue !== undefined && property.raw.trim() !== String(defaultValue).trim()) ||
+		Boolean(property.definedInFile && metaSource === "file");
+	const row = element("div", {
+		class: "row property-row" + (modified ? " modified" : "") + (property.definedInFile === false ? " default-prop" : ""),
+	});
+	row.setAttribute(
+		"data-search",
+		(property.name + " " + (property.metadata && property.metadata.type || "") + " " + (property.metadata && property.metadata.category || "")).toLowerCase(),
+	);
+	const displayLabel = property.metadata ? property.metadata.name : property.name;
 	const heading = element("div", { class: "property-heading" }, [
-		element("label", { text: property.metadata ? property.metadata.name : property.name, title: property.metadata ? property.metadata.type : "" }),
+		element("label", { text: displayLabel, title: (property.metadata && property.metadata.type ? property.metadata.type + " · " : "") + property.name }),
 		element("span", { class: "type-badge", text: property.metadata && property.metadata.type || "Variant" }),
 	]);
 	row.appendChild(heading);
 
 	const widget = property.widget || { kind: "text" };
+	const metaType = property.metadata && property.metadata.type;
 	const set = (value) => commit(property.name, value, property.target);
 	let control;
 
@@ -87,10 +125,20 @@ function propertyRow(property, model, commit, revert) {
 	} else if (widget.kind === "enum") {
 		control = element("select");
 		const options = widget.options || [];
-		options.forEach((option, index) => control.appendChild(element("option", { value: String(index), text: option })));
+		options.forEach((option, index) => {
+			const parts = String(option).split(":");
+			const label = parts[0].trim();
+			const val = metaType === "String" ? '"' + label + '"' : (parts[1] !== undefined ? parts[1].trim() : String(index));
+			control.appendChild(element("option", { value: val, text: label }));
+		});
 		const raw = property.raw.trim();
-		const current = options.indexOf(raw);
-		control.value = String(current === -1 && !Number.isNaN(Number(raw)) ? Number(raw) : Math.max(0, current));
+		const unquoted = raw.replace(/^["']|["']$/g, "");
+		const byLabel = options.findIndex((opt) => String(opt).split(":")[0].trim() === unquoted);
+		if (metaType === "String") {
+			control.value = byLabel !== -1 ? '"' + String(options[byLabel]).split(":")[0].trim() + '"' : raw;
+		} else {
+			control.value = String(byLabel === -1 && !Number.isNaN(Number(raw)) ? Number(raw) : Math.max(0, byLabel));
+		}
 		control.addEventListener("change", () => set(control.value));
 	} else if (widget.kind === "color") {
 		const match = property.raw.match(/-?[0-9.]+/g) || [];
@@ -99,18 +147,18 @@ function propertyRow(property, model, commit, revert) {
 		const hex = "#" + components.slice(0, 3).map((value) => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0")).join("");
 		const picker = element("input", { type: "color", value: hex });
 		const alpha = numberInput(components[3], { min: 0, max: 1, step: 0.01 }, (value) => {
-			const parts = picker.value.slice(1).match(/../g).map((part) => parseInt(part, 16) / 255);
+			const parts = picker.value.slice(1).match(/../g).map((part) => Number((parseInt(part, 16) / 255).toFixed(4)));
 			set("Color(" + parts.join(", ") + ", " + value + ")");
 		});
 		picker.addEventListener("change", () => {
-			const parts = picker.value.slice(1).match(/../g).map((part) => parseInt(part, 16) / 255);
+			const parts = picker.value.slice(1).match(/../g).map((part) => Number((parseInt(part, 16) / 255).toFixed(4)));
 			set("Color(" + parts.join(", ") + ", " + alpha.value + ")");
 		});
 		control = element("div", { class: "group" }, [picker, alpha]);
 	} else if (widget.kind === "vector") {
 		const numbers = (property.raw.match(/-?[0-9.]+/g) || []).map(Number);
 		// Keep the constructor the file uses (Vector2i, Quat, Rect3, ...).
-		const constructor = property.raw.split("(")[0].trim() || "Vector2";
+		const constructor = property.raw.split("(")[0].trim() || (metaType || "Vector2");
 		const count = widget.components || numbers.length;
 		const components = numbers.slice();
 		while (components.length < count) components.push(0);
@@ -128,43 +176,69 @@ function propertyRow(property, model, commit, revert) {
 			});
 			fields.push(input);
 		}
-		control = element("details", {}, [
+		const vectorKey = (property.target || "") + ":" + property.name;
+		control = element("details", openVectors.has(vectorKey) ? { open: "open" } : {}, [
 			element("summary", { text: property.raw }),
 			element("div", { class: "group" }, fields),
 		]);
+		control.addEventListener("toggle", () => {
+			if (control.open) openVectors.add(vectorKey);
+			else openVectors.delete(vectorKey);
+		});
 	} else if (widget.kind === "array") {
 		control = arrayEditor(property, set);
 	} else if (widget.kind === "dictionary") {
 		control = dictionaryEditor(property, set);
 	} else if (widget.kind === "resource") {
 		const references = [];
-		for (const resource of (model && model.extResources) || []) references.push({ value: 'ExtResource("' + resource.id + '")', label: resource.path || resource.id });
-		for (const sub of (model && model.subResources) || []) references.push({ value: 'SubResource("' + sub.id + '")', label: sub.type + " · " + sub.id });
+		for (const resource of (model && model.extResources) || []) references.push({ value: 'ExtResource("' + resource.id + '")', id: resource.id, kind: "Ext", label: resource.path || resource.id });
+		for (const sub of (model && model.subResources) || []) references.push({ value: 'SubResource("' + sub.id + '")', id: sub.id, kind: "Sub", label: sub.type + " · " + sub.id });
 		// A property of a concrete resource type can be filled by creating a
 		// sub-resource on the spot (Godot's "New <Type>" button).
 		const type = property.metadata && property.metadata.type;
 		const compatible = type && type !== "Resource" && type !== "Variant" ? type : undefined;
 		const picker = element("select", {});
 		picker.appendChild(element("option", { value: "", text: "—" }));
+		picker.appendChild(element("option", { value: "null", text: "Clear (null)" }));
 		for (const reference of references) picker.appendChild(element("option", { value: reference.value, text: reference.label }));
+		const rawTrimmed = property.raw.trim();
+		const refMatch = rawTrimmed.match(/^(Ext|Sub)Resource\(\s*(?:"([^"]*)"|(\d+))\s*\)$/);
+		if (refMatch) {
+			const refKind = refMatch[1];
+			const refId = refMatch[2] !== undefined ? refMatch[2] : refMatch[3];
+			const found = references.find((ref) => ref.kind === refKind && ref.id === refId);
+			if (found) picker.value = found.value;
+		}
 		picker.addEventListener("change", () => { if (picker.value) set(picker.value); });
 		control = element("div", { class: "res" }, [
 			element("input", { type: "text", value: property.raw, onchange: (event) => set(event.target.value) }),
 			picker,
 			element("button", { text: "Browse…", onclick: () => post("pickResource", { name: property.name, target: property.target }) }),
 		]);
-		if (compatible && compatible !== "Resource") {
+		if (compatible && compatible !== "Resource" && compatible !== "Script") {
 			control.appendChild(element("button", { text: "New " + compatible, title: "Create a " + compatible + " and assign it", onclick: () => post("createSubResource", { name: property.name, target: property.target, subType: compatible }) }));
 		}
 	} else if (widget.kind === "textarea") {
-		control = element("textarea", { rows: "3", value: property.raw, onchange: (event) => set(event.target.value) });
+		control = element("textarea", {
+			rows: "4",
+			value: property.raw,
+			onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)),
+		});
 	} else {
-		control = element("input", { type: "text", value: property.raw, onchange: (event) => set(event.target.value) });
+		control = element("input", {
+			type: "text",
+			value: property.raw,
+			onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)),
+		});
 	}
 	row.appendChild(control);
 
-	const revertButton = element("button", { class: "revert", text: "⟲", title: "Revert to default" });
-	revertButton.addEventListener("click", () => revert(property.name, property.metadata && property.metadata.defaultValue, property.target));
+	const revertButton = element("button", {
+		class: "revert",
+		text: "⟲",
+		title: defaultValue !== undefined ? "Revert to default (" + defaultValue + ")" : "Remove override",
+	});
+	revertButton.addEventListener("click", () => revert(property.name, defaultValue, property.target));
 	row.appendChild(revertButton);
 	return row;
 }
@@ -307,6 +381,7 @@ let currentSearch = "";
 let modifiedOnly = false;
 
 function applyPropertyFilters() {
+	if (!app || typeof app.querySelectorAll !== "function") return;
 	const rows = Array.from(app.querySelectorAll(".property-row"));
 	const query = currentSearch.trim().toLowerCase();
 	let visible = 0;
@@ -316,7 +391,7 @@ function applyPropertyFilters() {
 		row.hidden = !matchesText || !matchesModified;
 		if (!row.hidden) {
 			visible++;
-			const parentResource = row.closest("details");
+			const parentResource = row.closest && row.closest("details");
 			if (parentResource && (query || modifiedOnly)) parentResource.open = true;
 		}
 	}
@@ -324,21 +399,72 @@ function applyPropertyFilters() {
 	if (count) count.textContent = visible + " shown";
 }
 
-function render(model) {
+function renderEmpty(resources) {
+	app.textContent = "";
+	const container = element("div", { class: "empty-state" }, [
+		element("div", { class: "eyebrow", text: "RESOURCE INSPECTOR" }),
+		element("p", { class: "empty", text: "Open a .tres file in the editor to inspect it automatically, or choose one below." }),
+		element("div", { class: "toolbar empty-toolbar" }, [
+			element("button", { class: "filled", text: "Browse .tres file…", onclick: () => post("browseResourceFile", {}) }),
+			element("button", { class: "tonal", text: "↻  Refresh", onclick: () => post("reload", {}) }),
+		]),
+	]);
+
+	if (resources && resources.length) {
+		const listSection = element("section", { class: "resource-section" });
+		listSection.appendChild(element("div", { class: "section-heading" }, [
+			element("h3", { text: "Workspace Resources" }),
+			element("span", { class: "count", text: resources.length + " .tres" }),
+		]));
+		for (const item of resources) {
+			const link = element("button", {
+				class: "resource-link",
+				text: "↗  " + (item.resourcePath || item.label),
+				title: item.resourcePath || item.label,
+				onclick: () => post("openResource", { uri: item.uri }),
+			});
+			listSection.appendChild(element("div", { class: "external-row workspace-resource-row" }, [
+				element("code", { class: "resource-id", text: item.label }),
+				link,
+			]));
+		}
+		container.appendChild(listSection);
+	}
+	app.appendChild(container);
+}
+
+function render(model, resources) {
+	const searchWasFocused = typeof document.activeElement === "object" && document.activeElement && document.activeElement.id === "property-search";
 	app.textContent = "";
 	if (!model) {
-		app.appendChild(element("p", { class: "empty", text: "Open a .tres file to edit it in the Resource Inspector." }));
+		renderEmpty(resources);
 		return;
 	}
-	app.appendChild(element("header", { class: "resource-header" }, [
-		element("div", { class: "eyebrow", text: "GODOT RESOURCE" }),
+	const headerChildren = [
+		element("div", { class: "eyebrow", text: "GODOT RESOURCE" + (model.format ? " · FORMAT " + model.format : "") }),
 		element("h2", { text: model.resourceType + (model.scriptClass ? " · " + model.scriptClass : "") }),
-	]));
-	const header = element("div", { class: "toolbar" }, [
+	];
+	if (model.resourcePath || model.fileName) {
+		headerChildren.push(element("div", { class: "resource-path", text: model.resourcePath || model.fileName }));
+	}
+	app.appendChild(element("header", { class: "resource-header" }, headerChildren));
+
+	const toolbarButtons = [
 		element("button", { class: "filled", text: "Open raw text", onclick: () => post("openText", {}) }),
+	];
+	if (model.scriptPath) {
+		toolbarButtons.push(element("button", { class: "tonal", text: "Script", title: model.scriptPath, onclick: () => post("openScript", {}) }));
+	}
+	toolbarButtons.push(
+		element("button", {
+			class: "tonal" + (model.locked ? " active" : ""),
+			text: model.locked ? "🔒 Locked" : "🔓 Auto",
+			title: model.locked ? "Unlock to follow the active .tres editor" : "Lock inspector to this .tres resource",
+			onclick: () => post("toggleLock", {}),
+		}),
 		element("button", { class: "tonal", text: "↻  Reload", onclick: () => post("reload", {}) }),
-	]);
-	app.appendChild(header);
+	);
+	app.appendChild(element("div", { class: "toolbar" }, toolbarButtons));
 
 	if (model.diagnostics && model.diagnostics.length) {
 		const list = element("ul", { class: "diagnostics" });
@@ -366,42 +492,73 @@ function render(model) {
 	const commit = (name, value, target) => post("setProperty", { name: name, value: value, target: target });
 	const revert = (name, defaultValue, target) => post("revertProperty", { name: name, defaultValue: defaultValue, target: target });
 	const propertyContainer = element("section", { class: "property-list" });
-	for (const property of model.properties) propertyContainer.appendChild(propertyRow(property, model, commit, revert));
+	let lastCategory = undefined;
+	for (const property of model.properties) {
+		const category = property.metadata && (property.metadata.group || property.metadata.category);
+		if (category && category !== lastCategory) {
+			lastCategory = category;
+			propertyContainer.appendChild(element("div", { class: "category-heading", text: category }));
+		}
+		propertyContainer.appendChild(propertyRow(property, model, commit, revert));
+	}
 	app.appendChild(propertyContainer);
+	app.appendChild(element("button", { class: "tonal add-resource", text: "+  Add property", onclick: () => post("addProperty", {}) }));
 
 	const subSection = element("section", { class: "resource-section" });
-	subSection.appendChild(element("div", { class: "section-heading" }, [element("h3", { text: "Sub-resources" })]));
+	subSection.appendChild(element("div", { class: "section-heading" }, [
+		element("h3", { text: "Sub-resources" }),
+		element("span", { class: "count", text: model.subResources.length + " total" }),
+	]));
+	const defaultSubOpen = model.subResources.length <= 2;
 	for (const sub of model.subResources) {
 		const body = element("div", { class: "subresource-body" });
 		for (const property of sub.properties) body.appendChild(propertyRow(Object.assign({}, property, { target: sub.id }), model, commit, revert));
 		const actions = element("div", { class: "subresource-actions" }, [
+			element("button", { class: "text-button", text: "+ Property", onclick: () => post("addProperty", { target: sub.id }) }),
 			element("button", { class: "text-button", text: "Duplicate", onclick: () => post("duplicateSubResource", { id: sub.id }) }),
 			element("button", { class: "text-button", text: "Rename", onclick: () => post("renameSubResource", { id: sub.id }) }),
 			element("button", { class: "text-button danger", text: "Delete", onclick: () => post("deleteSubResource", { id: sub.id }) }),
 		]);
-		subSection.appendChild(element("details", { class: "resource-card" }, [
+		const isOpen = openSubResources.has(sub.id) || (defaultSubOpen && !closedSubResources.has(sub.id));
+		const card = element("details", Object.assign({ class: "resource-card" }, isOpen ? { open: "open" } : {}), [
 			element("summary", {}, [element("span", { class: "resource-type", text: sub.type }), element("code", { text: sub.id })]),
 			body,
 			actions,
-		]));
+		]);
+		card.addEventListener("toggle", () => {
+			if (card.open) {
+				openSubResources.add(sub.id);
+				closedSubResources.delete(sub.id);
+			} else {
+				openSubResources.delete(sub.id);
+				closedSubResources.add(sub.id);
+			}
+		});
+		subSection.appendChild(card);
 	}
 	const addSub = element("button", { class: "tonal add-resource", text: "+  Add sub-resource", onclick: () => post("addSubResource", {}) });
 	subSection.appendChild(addSub);
 	app.appendChild(subSection);
 
 	const extSection = element("section", { class: "resource-section" });
-	extSection.appendChild(element("div", { class: "section-heading" }, [element("h3", { text: "External resources" })]));
+	extSection.appendChild(element("div", { class: "section-heading" }, [
+		element("h3", { text: "External resources" }),
+		element("span", { class: "count", text: model.extResources.length + " total" }),
+	]));
 	for (const resource of model.extResources) {
 		const link = element("button", { text: (resource.broken ? "⚠  " : "↗  ") + (resource.path || resource.id), class: "resource-link" + (resource.broken ? " broken" : ""), onclick: () => post("openExtResource", { id: resource.id }) });
+		const removeBtn = element("button", { class: "revert", text: "\u2715", title: "Remove external resource", onclick: () => post("deleteExtResource", { id: resource.id }) });
 		extSection.appendChild(element("div", { class: "external-row" }, [
 			element("code", { class: "resource-id", text: resource.id }),
 			element("span", { class: "type-badge", text: resource.type }),
 			link,
+			removeBtn,
 		]));
 	}
 	extSection.appendChild(element("button", { class: "tonal add-resource", text: "+  Add external resource", onclick: () => post("addExternalResource", {}) }));
 	app.appendChild(extSection);
 	applyPropertyFilters();
+	if (searchWasFocused && typeof search.focus === "function") search.focus();
 }
 
 window.addEventListener("keydown", (event) => {
@@ -426,7 +583,7 @@ function showExternalChangeBanner() {
 window.addEventListener("message", (event) => {
 	const message = event.data;
 	if (message.type === "model") render(message.model);
-	else if (message.type === "empty") render(undefined);
+	else if (message.type === "empty") render(undefined, message.resources);
 	else if (message.type === "externalChange") showExternalChangeBanner();
 });
 
@@ -464,9 +621,11 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	}
 	.resource-header { padding: 4px 2px 8px; }
 	.eyebrow { color: var(--ri-muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+	.resource-path { color: var(--ri-muted); font: 11px var(--vscode-editor-font-family, monospace); margin-top: 2px; overflow-wrap: anywhere; }
 	h2 { font-size: 20px; line-height: 1.3; font-weight: 600; margin: 4px 0 0; overflow-wrap: anywhere; }
 	h3 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .01em; }
-	.toolbar { display: flex; gap: 8px; margin: 8px 0 20px; }
+	.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 20px; }
+	.empty-toolbar { justify-content: center; margin-top: 12px; }
 	.toolbar button, .tonal, .filter-button, .text-button, .add-resource {
 		min-height: 32px; border: 0; border-radius: 999px; padding: 6px 13px;
 		cursor: pointer; transition: background-color .14s ease, transform .14s ease;
@@ -475,8 +634,9 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.toolbar .filled { background: var(--ri-accent); color: var(--vscode-button-foreground, white); font-weight: 600; }
 	.tonal, .filter-button { background: color-mix(in srgb, var(--ri-accent) 14%, var(--ri-surface)); color: var(--vscode-foreground); }
 	.filter-button { white-space: nowrap; }
-	.filter-button.active { background: color-mix(in srgb, var(--ri-accent) 25%, var(--ri-surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ri-accent) 45%, transparent); }
+	.filter-button.active, .tonal.active { background: color-mix(in srgb, var(--ri-accent) 25%, var(--ri-surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ri-accent) 45%, transparent); }
 	.section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 20px 2px 8px; }
+	.category-heading { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ri-muted); padding: 8px 4px 2px; border-bottom: 1px solid var(--ri-border); margin-top: 4px; }
 	.count { color: var(--ri-muted); font-size: 11px; }
 	.property-tools { display: flex; gap: 8px; margin: 0 0 10px; }
 	#property-search { flex: 1; min-width: 0; height: 34px; border-radius: 999px; padding: 0 13px; }
@@ -497,8 +657,8 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.row input, .row select, .row textarea { min-height: 30px; }
 	.row input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--ri-accent); }
 	.row input[type="color"] { padding: 3px; min-height: 34px; }
-	.row textarea { resize: vertical; }
-	.revert { width: 27px; height: 27px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: var(--ri-muted); font-size: 18px; }
+	.row textarea { resize: vertical; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+	.revert { width: 27px; height: 27px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: var(--ri-muted); font-size: 16px; }
 	.revert:hover { background: var(--ri-card); color: var(--vscode-foreground); }
 	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(55px, 1fr)); gap: 6px; align-items: center; }
 	.res { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
@@ -515,11 +675,12 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.resource-type { font-weight: 600; }
 	code { font: 11px var(--vscode-editor-font-family, monospace); color: var(--ri-muted); }
 	.subresource-body { border-top: 1px solid var(--ri-border); padding: 6px 0; }
-	.subresource-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 4px 0 8px; }
+	.subresource-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 4px 0 8px; }
 	.text-button { background: transparent; color: var(--vscode-textLink-foreground, var(--ri-accent)); }
 	.text-button.danger { color: var(--vscode-errorForeground); }
 	.add-resource { width: 100%; margin-top: 7px; border: 1px dashed var(--ri-border); background: transparent; text-align: center; }
-	.external-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--ri-border); }
+	.external-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--ri-border); }
+	.workspace-resource-row { grid-template-columns: auto minmax(0, 1fr); }
 	.resource-id { color: var(--vscode-foreground); }
 	.resource-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: transparent; color: var(--vscode-textLink-foreground, var(--ri-accent)); padding: 4px; }
 	.broken { color: var(--vscode-errorForeground); }
@@ -528,13 +689,15 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.diagnostics .warning { color: var(--vscode-editorWarning-foreground); }
 	.banner { position: sticky; z-index: 2; top: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); border-radius: 12px; padding: 10px; margin-bottom: 10px; }
 	.banner button { background: var(--ri-accent); color: var(--vscode-button-foreground, white); padding: 6px 10px; }
-	.empty { color: var(--ri-muted); text-align: center; padding: 26px 12px; }
+	.empty-state { text-align: center; padding: 12px 4px; }
+	.empty-state .resource-section { text-align: left; }
+	.empty { color: var(--ri-muted); text-align: center; padding: 12px 12px; margin: 0; }
 	@media (max-width: 520px) {
 		body { padding: 12px 9px 24px; }
 		.row { grid-template-columns: minmax(80px, 34%) minmax(0, 1fr) auto; gap: 6px; padding: 7px 4px; }
 		.property-tools { flex-wrap: wrap; }
 		#property-search { flex-basis: 100%; }
-		.external-row { grid-template-columns: auto minmax(0, 1fr); }
+		.external-row { grid-template-columns: auto minmax(0, 1fr) auto; }
 		.external-row .type-badge { display: none; }
 	}
 </style>
