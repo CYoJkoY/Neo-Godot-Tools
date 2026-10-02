@@ -1,5 +1,86 @@
 # Changelog
 
+## Unreleased
+
+- Continue external-resource IDs after the largest existing numeric prefix, including Godot 3 IDs; preserve reference syntax and update `load_steps` when adding/removing resources.
+- Replace overlapping resource fields with a single selector, compatible Script/Shader choices and responsive controls for narrow inspector panels. Keep keyboard focus/selection across model updates and only offer New for known concrete resource classes.
+- Add synchronized range sliders and numeric inputs with bounds, steps, `or_greater`/`or_less`, exponential ranges, suffixes and multi-select flags. Fix vector component editing for constructor digits and scientific notation.
+- Preview image references and image-path strings with thumbnails, hover/keyboard previews, dimensions and an Open action; report missing/unsupported images without exposing files outside the project/workspace.
+- Compare actual literal defaults rather than file values or type placeholders; retain script/built-in defaults with LSP connected, and remove overrides when the real default is unknown.
+- Backfill tag-based release history and automate changelog synchronization through a reviewable PR after tag creation/deletion, with full-range release notes included in GitHub releases and VSIX packages.
+
+<!-- generated-release-notes:start -->
+
+### 2.12.3 — 2026-10-02
+
+Changes since [v2.12.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.2...v2.12.3).
+
+#### Fixed
+
+- **resource-inspector:** enable sidebar webview and auto-detect .tres resources ([#97](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/97))
+
+### 2.12.2 — 2026-10-02
+
+Changes since [v2.12.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.1...v2.12.2).
+
+#### Changed
+
+- Improve parser performance and resource inspector ([#96](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/96))
+- Update package.json ([9bf9e7d](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/9bf9e7ddc4308dd3b8c0a4c7f41f77bd1fbea6c0))
+
+### 2.12.1 — 2026-10-01
+
+Changes since [v2.12.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.0...v2.12.1).
+
+#### Fixed
+
+- **resource-inspector:** make the .tres sidebar work and stay quiet b… ([#95](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/95))
+
+### 2.12.0 — 2026-10-01
+
+Changes since [v2.8.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.8.1...v2.12.0).
+
+#### Fixed
+
+- Fix configuration casing, improve detached editor support, and update version ([#88](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/88))
+- Fix editor lifecycle, improve detached launch, and update settings ([#90](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/90))
+- Fix all open issues: hover docstrings, enum completion, completion ordering, doc anchors, scene icons, Resource Inspector ([#94](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/94))
+
+#### Maintenance
+
+- **vscode:** Add Git Graph RS configuration. ([dc6b6f8](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/dc6b6f8692b420bf96447a725d5ced31f25d59e7))
+
+### 2.8.2.dev03 — 2026-09-16 (development)
+
+Changes since [v2.8.2.dev02](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.8.2.dev02...v2.8.2.dev03).
+
+#### Fixed
+
+- **editor, docs, scene:** Correct editor lifecycle and preview/document navigation defects ([4370b09](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/4370b096888e068bb04c70f5ec7c7388531a5ece))
+
+### 2.8.2.dev02 — 2026-09-16 (development)
+
+Changes since [v2.8.2.dev01](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.8.2.dev01...v2.8.2.dev02).
+
+#### Fixed
+
+- **editor:** Keep the detached Godot editor running on Windows ([df64c10](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/df64c1049583d134d9fd1aed157ebd7487f7b1e5))
+- **godot:** Correct native symbol normalization, icon fallback, and editor termination ([1dc9835](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/1dc98358ec64ee03c203d442f3247a422e3e46c7))
+
+#### Documentation
+
+- **changelog:** Add 2.8.1 release notes. ([c800234](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/c8002342f92eab4ee0f9fd10876132fe94d59066))
+
+### 2.8.2.dev01 — 2026-09-16 (development)
+
+Changes since [v2.8.1.dev05](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.8.1.dev05...v2.8.2.dev01).
+
+#### Added
+
+- **editor:** Add detached Godot editor launch option ([cae44f1](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/cae44f10d8a5dd26eda5407167404ec23bb961d8))
+
+<!-- generated-release-notes:end -->
+
 ### 2.8.1
 
 - [**Scene Preview and Definition Navigation Overhaul**](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/59)

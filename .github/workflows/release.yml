@@ -58,13 +58,23 @@ jobs:
             exit 1
           fi
 
+      - name: Generate changelog and release notes from live tags
+        run: |
+          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")" ]; then
+            echo "The release tag moved after checkout; refusing to publish a mismatched VSIX."
+            exit 1
+          fi
+          npm run changelog -- --ref "$GITHUB_REF_NAME" --tag "$GITHUB_REF_NAME" --notes-file out/release-notes.md
+
       - name: Package stable VSIX
         run: npx @vscode/vsce@latest package --out "${{ steps.release.outputs.asset }}"
 
       - name: Validate VSIX
         run: |
           test -s "${{ steps.release.outputs.asset }}"
-          npx @vscode/vsce@latest ls --tree "${{ steps.release.outputs.asset }}"
+          unzip -t "${{ steps.release.outputs.asset }}"
+          npx @vscode/vsce@latest ls --tree
 
       - name: Upload stable VSIX artifact
         uses: actions/upload-artifact@v4
@@ -79,9 +89,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET: ${{ steps.release.outputs.asset }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "${ASSET}" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")" ]; then
+            echo "The release tag was deleted or moved while packaging; refusing to publish."
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${ASSET}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --prerelease=false --notes-file out/release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" "${ASSET}" \
+              --verify-tag --title "$GITHUB_REF_NAME" --notes-file out/release-notes.md
+          fi
 
   development-release:
     name: Development pre-release
@@ -128,13 +147,23 @@ jobs:
             exit 1
           fi
 
+      - name: Generate changelog and release notes from live tags
+        run: |
+          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")" ]; then
+            echo "The release tag moved after checkout; refusing to publish a mismatched VSIX."
+            exit 1
+          fi
+          npm run changelog -- --ref "$GITHUB_REF_NAME" --tag "$GITHUB_REF_NAME" --notes-file out/release-notes.md
+
       - name: Package development VSIX
         run: npx @vscode/vsce@latest package --pre-release --out "${{ steps.release.outputs.asset }}"
 
       - name: Validate VSIX
         run: |
           test -s "${{ steps.release.outputs.asset }}"
-          npx @vscode/vsce@latest ls --tree "${{ steps.release.outputs.asset }}"
+          unzip -t "${{ steps.release.outputs.asset }}"
+          npx @vscode/vsce@latest ls --tree
 
       - name: Upload development VSIX artifact
         uses: actions/upload-artifact@v4
@@ -149,7 +178,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET: ${{ steps.release.outputs.asset }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "${ASSET}" \
-            --title "$GITHUB_REF_NAME" \
-            --prerelease \
-            --generate-notes
+          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")" ]; then
+            echo "The release tag was deleted or moved while packaging; refusing to publish."
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${ASSET}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --prerelease --notes-file out/release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" "${ASSET}" \
+              --verify-tag --title "$GITHUB_REF_NAME" --prerelease --notes-file out/release-notes.md
+          fi

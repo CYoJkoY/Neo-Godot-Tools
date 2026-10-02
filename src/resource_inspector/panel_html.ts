@@ -6,6 +6,7 @@
  * the single source of truth.
  */
 
+import { randomBytes } from "node:crypto";
 import type * as vscode from "vscode";
 
 /**
@@ -35,32 +36,133 @@ function element(tag, props, children) {
 	return el;
 }
 
+/** Normalize on commit, never while typing or on initial render. */
+function normalizeNumericValue(raw, options) {
+	if (String(raw).trim() === "") return undefined;
+	let value = Number(raw);
+	if (!Number.isFinite(value)) return undefined;
+	const spec = options || {};
+	const min = spec.allowLesser ? undefined : spec.integer && spec.min !== undefined ? Math.ceil(spec.min) : spec.min;
+	const max = spec.allowGreater ? undefined : spec.integer && spec.max !== undefined ? Math.floor(spec.max) : spec.max;
+	if (min !== undefined) value = Math.max(min, value);
+	if (max !== undefined) value = Math.min(max, value);
+	const step = spec.integer ? Math.max(1, Math.round(spec.step || 1)) : spec.step;
+	if (step && Number.isFinite(step) && step > 0) {
+		const origin = spec.min === undefined ? 0 : spec.integer ? Math.ceil(spec.min) : spec.min;
+		value = Number((origin + Math.round((value - origin) / step) * step).toPrecision(15));
+	}
+	if (spec.integer) value = Math.round(value);
+	if (min !== undefined) value = Math.max(min, value);
+	if (max !== undefined) value = Math.min(max, value);
+	return value;
+}
+
 function numberInput(value, options, commit) {
-	const input = element("input", { type: "number", value: value });
-	if (options && options.min !== undefined) input.min = String(options.min);
-	if (options && options.max !== undefined) input.max = String(options.max);
-	if (options && options.step !== undefined) input.step = String(options.step);
+	const spec = options || {};
+	let lastValue = String(value);
+	const input = element("input", { type: "number", value: lastValue, step: spec.integer ? Math.max(1, Math.round(spec.step || 1)) : spec.step || "any" });
+	if (spec.min !== undefined && !spec.allowLesser) input.min = String(spec.integer ? Math.ceil(spec.min) : spec.min);
+	if (spec.max !== undefined && !spec.allowGreater) input.max = String(spec.integer ? Math.floor(spec.max) : spec.max);
 	input.addEventListener("change", () => {
-		// Never write back an empty or half-typed field: that would put NaN
-		// (or nothing at all) into the resource file.
-		const next = Number(input.value);
-		if (input.value.trim() === "" || !Number.isFinite(next)) {
-			input.value = String(value);
-			return;
-		}
-		commit(input.value.trim());
+		const next = normalizeNumericValue(input.value, spec);
+		if (next === undefined) { input.value = lastValue; return; }
+		input.value = lastValue = String(next);
+		commit(lastValue);
 	});
 	return input;
 }
 
-function componentNumber(components, index, commit) {
-	const input = element("input", { type: "number", value: components[index] });
-	input.addEventListener("change", () => {
-		const next = components.slice();
-		next[index] = Number(input.value);
-		commit(next);
-	});
-	return input;
+function numericEditor(property, set) {
+	const widget = property.widget;
+	let slider;
+	const logarithmic = widget.exponential && widget.min > 0 && widget.max > widget.min;
+	const toSlider = (value) => logarithmic ? Math.log(Math.max(widget.min, Number(value)) / widget.min) / Math.log(widget.max / widget.min) : Number(value);
+	const fromSlider = (value) => logarithmic ? widget.min * Math.pow(widget.max / widget.min, Number(value)) : Number(value);
+	const input = numberInput(property.raw, widget, (value) => { if (slider) slider.value = String(toSlider(value)); set(value); });
+	input.setAttribute("aria-label", property.name);
+	const container = element("div", { class: "numeric-control" }, [input]);
+	if (widget.min !== undefined && widget.max !== undefined && widget.min < widget.max && !widget.hideSlider) {
+		slider = element("input", { type: "range", min: logarithmic ? 0 : widget.min, max: logarithmic ? 1 : widget.max,
+			step: logarithmic ? 0.001 : widget.integer ? Math.max(1, Math.round(widget.step || 1)) : widget.step || "any",
+			value: toSlider(property.raw), "aria-label": property.name + " slider" });
+		slider.addEventListener("input", () => { input.value = String(normalizeNumericValue(fromSlider(slider.value), widget)); });
+		slider.addEventListener("change", () => {
+			const value = normalizeNumericValue(fromSlider(slider.value), widget);
+			if (value !== undefined) { input.value = String(value); slider.value = String(toSlider(value)); set(String(value)); }
+		});
+		container.appendChild(slider);
+	}
+	const hints = [];
+	if (widget.min !== undefined || widget.max !== undefined) hints.push((widget.min === undefined || widget.allowLesser ? "−∞" : widget.min) + " … " + (widget.max === undefined || widget.allowGreater ? "∞" : widget.max));
+	if (widget.step !== undefined) hints.push("step " + widget.step);
+	if (widget.suffix) hints.push(widget.suffix);
+	if (hints.length) container.appendChild(element("span", { class: "range-hint", text: hints.join(" · ") }));
+	return container;
+}
+
+function numericComponents(property) {
+	if (property.components) return property.components.slice();
+	// Do not mistake the 2 in Vector2 or an exponent for a component.
+	const raw = property.raw;
+	const body = raw.includes("(") ? raw.slice(raw.indexOf("(") + 1, raw.lastIndexOf(")")) : raw;
+	return (body.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) || []).map(Number);
+}
+
+let imageTooltip;
+let positionImagePreview;
+function hideImagePreview() { if (imageTooltip) imageTooltip.hidden = true; }
+
+function showImagePreview(preview, anchor) {
+	if (!imageTooltip) {
+		imageTooltip = element("div", { id: "image-preview", class: "image-preview", role: "tooltip" });
+		document.body.appendChild(imageTooltip);
+	}
+	imageTooltip.textContent = "";
+	imageTooltip.hidden = false;
+	const caption = element("div", { class: "preview-caption", text: preview.path });
+	const status = element("div", { class: "preview-status", text: preview.message || "" });
+	const place = () => {
+		if (!anchor.getBoundingClientRect || !imageTooltip.getBoundingClientRect) return;
+		const rect = anchor.getBoundingClientRect();
+		if (rect.bottom < 0 || rect.top > window.innerHeight) { hideImagePreview(); return; }
+		const size = imageTooltip.getBoundingClientRect();
+		const left = Math.max(8, Math.min(rect.left, window.innerWidth - size.width - 8));
+		const below = rect.bottom + 8;
+		const top = below + size.height <= window.innerHeight - 8 ? below : Math.max(8, rect.top - size.height - 8);
+		imageTooltip.style.left = left + "px";
+		imageTooltip.style.top = top + "px";
+	};
+	if (preview.uri) {
+		const image = element("img", { src: preview.uri, alt: preview.path });
+		image.addEventListener("load", () => { status.textContent = image.naturalWidth + " × " + image.naturalHeight; place(); });
+		image.addEventListener("error", () => { image.hidden = true; status.textContent = "Unable to load image preview."; place(); });
+		imageTooltip.appendChild(image);
+	}
+	imageTooltip.appendChild(caption);
+	imageTooltip.appendChild(status);
+	positionImagePreview = place;
+	place();
+}
+
+function bindImagePreview(anchor, preview) {
+	if (!preview) return;
+	anchor.title = preview.path + (preview.message ? " · " + preview.message : "");
+	anchor.addEventListener("mouseenter", () => showImagePreview(preview, anchor));
+	anchor.addEventListener("mouseleave", hideImagePreview);
+	anchor.addEventListener("focusin", () => showImagePreview(preview, anchor));
+	anchor.addEventListener("focusout", hideImagePreview);
+}
+
+function imageThumbnail(preview, open) {
+	if (!preview) return undefined;
+	const button = element("button", { class: "image-thumbnail", title: "Open image: " + preview.path, "aria-label": "Open image: " + preview.path, onclick: open });
+	if (preview.uri) {
+		const image = element("img", { src: preview.uri, loading: "lazy", alt: "" });
+		image.addEventListener("error", () => { image.hidden = true; button.textContent = "▧"; });
+		button.appendChild(image);
+	} else button.textContent = "▧";
+	bindImagePreview(button, preview);
+	return button;
 }
 
 function normalizeTextValue(rawInput, type, widgetKind) {
@@ -92,23 +194,17 @@ const closedSubResources = new Set();
 const openVectors = new Set();
 
 function propertyRow(property, model, commit, revert) {
-	const metaSource = property.metadata && property.metadata.source;
-	const defaultValue = property.metadata && metaSource !== "file" ? property.metadata.defaultValue : undefined;
-	const modified =
-		(defaultValue !== undefined && property.raw.trim() !== String(defaultValue).trim()) ||
-		Boolean(property.definedInFile && metaSource === "file");
-	const row = element("div", {
-		class: "row property-row" + (modified ? " modified" : "") + (property.definedInFile === false ? " default-prop" : ""),
-	});
-	row.setAttribute(
-		"data-search",
-		(property.name + " " + (property.metadata && property.metadata.type || "") + " " + (property.metadata && property.metadata.category || "")).toLowerCase(),
-	);
-	const displayLabel = property.metadata ? property.metadata.name : property.name;
+	const defaultValue = property.metadata && property.metadata.source !== "file" ? property.metadata.defaultValue : undefined;
+	// The extension compares parsed literals; the webview must not guess defaults.
+	const modified = property.modified === undefined ? Boolean(property.definedInFile) : property.modified;
+	const row = element("div", { class: "row property-row" + (modified ? " modified" : "") });
+	row.setAttribute("data-search", (property.name + " " + (property.metadata && property.metadata.type || "") + " " + (property.metadata && property.metadata.category || "")).toLowerCase());
+	const displayLabel = property.metadata && property.metadata.name || property.name;
 	const heading = element("div", { class: "property-heading" }, [
 		element("label", { text: displayLabel, title: (property.metadata && property.metadata.type ? property.metadata.type + " · " : "") + property.name }),
 		element("span", { class: "type-badge", text: property.metadata && property.metadata.type || "Variant" }),
 	]);
+	if (defaultValue === undefined) heading.title = property.definedInFile === false ? "Default unavailable; this is an editing placeholder, not the engine default." : "Default unknown. Reverting removes this override so Godot uses its default.";
 	row.appendChild(heading);
 
 	const widget = property.widget || { kind: "text" };
@@ -117,129 +213,135 @@ function propertyRow(property, model, commit, revert) {
 	let control;
 
 	if (widget.kind === "checkbox") {
-		control = element("input", { type: "checkbox" });
+		control = element("input", { type: "checkbox", "aria-label": property.name });
 		control.checked = property.raw.trim() === "true";
 		control.addEventListener("change", () => set(control.checked ? "true" : "false"));
 	} else if (widget.kind === "number") {
-		control = numberInput(Number(property.raw), widget, (value) => set(widget.integer ? String(Math.round(Number(value))) : value));
+		control = numericEditor(property, set);
 	} else if (widget.kind === "enum") {
-		control = element("select");
-		const options = widget.options || [];
-		options.forEach((option, index) => {
+		control = element("select", { "aria-label": property.name });
+		let nextValue = 0;
+		for (const option of widget.options || []) {
 			const parts = String(option).split(":");
 			const label = parts[0].trim();
-			const val = metaType === "String" ? '"' + label + '"' : (parts[1] !== undefined ? parts[1].trim() : String(index));
-			control.appendChild(element("option", { value: val, text: label }));
-		});
-		const raw = property.raw.trim();
-		const unquoted = raw.replace(/^["']|["']$/g, "");
-		const byLabel = options.findIndex((opt) => String(opt).split(":")[0].trim() === unquoted);
-		if (metaType === "String") {
-			control.value = byLabel !== -1 ? '"' + String(options[byLabel]).split(":")[0].trim() + '"' : raw;
-		} else {
-			control.value = String(byLabel === -1 && !Number.isNaN(Number(raw)) ? Number(raw) : Math.max(0, byLabel));
+			const numeric = parts[1] !== undefined && Number.isFinite(Number(parts[1])) ? Number(parts[1]) : nextValue;
+			const value = metaType === "String" ? JSON.stringify(label) : String(numeric);
+			control.appendChild(element("option", { value: value, text: label }));
+			nextValue = numeric + 1;
 		}
+		const raw = property.raw.trim();
+		if (!Array.from(control.children).some((option) => option.value === raw)) control.appendChild(element("option", { value: raw, text: "Current: " + raw }));
+		control.value = raw;
 		control.addEventListener("change", () => set(control.value));
+	} else if (widget.kind === "flags") {
+		control = element("div", { class: "flags-control" });
+		let flags;
+		try { flags = BigInt(property.raw.trim()); } catch { flags = 0n; }
+		(widget.options || []).forEach((option, index) => {
+			const parts = String(option).split(":");
+			let mask = 1n << BigInt(index);
+			if (parts[1] !== undefined) { try { mask = BigInt(parts[1].trim()); } catch { /* keep the implicit mask */ } }
+			const checkbox = element("input", { type: "checkbox" });
+			checkbox.checked = mask === 0n ? flags === 0n : (flags & mask) === mask;
+			checkbox.addEventListener("change", () => { flags = mask === 0n ? 0n : checkbox.checked ? flags | mask : flags & ~mask; set(String(flags)); });
+			control.appendChild(element("label", {}, [checkbox, element("span", { text: parts[0].trim() })]));
+		});
 	} else if (widget.kind === "color") {
-		const match = property.raw.match(/-?[0-9.]+/g) || [];
-		const components = match.map(Number);
+		const components = numericComponents(property);
 		while (components.length < 4) components.push(components.length === 3 ? 1 : 0);
 		const hex = "#" + components.slice(0, 3).map((value) => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0")).join("");
-		const picker = element("input", { type: "color", value: hex });
+		const picker = element("input", { type: "color", value: hex, "aria-label": property.name + " color" });
 		const alpha = numberInput(components[3], { min: 0, max: 1, step: 0.01 }, (value) => {
 			const parts = picker.value.slice(1).match(/../g).map((part) => Number((parseInt(part, 16) / 255).toFixed(4)));
 			set("Color(" + parts.join(", ") + ", " + value + ")");
 		});
+		alpha.setAttribute("aria-label", property.name + " alpha");
 		picker.addEventListener("change", () => {
 			const parts = picker.value.slice(1).match(/../g).map((part) => Number((parseInt(part, 16) / 255).toFixed(4)));
 			set("Color(" + parts.join(", ") + ", " + alpha.value + ")");
 		});
 		control = element("div", { class: "group" }, [picker, alpha]);
 	} else if (widget.kind === "vector") {
-		const numbers = (property.raw.match(/-?[0-9.]+/g) || []).map(Number);
-		// Keep the constructor the file uses (Vector2i, Quat, Rect3, ...).
-		const constructor = property.raw.split("(")[0].trim() || (metaType || "Vector2");
+		const numbers = numericComponents(property);
+		const constructor = property.constructorName || property.raw.split("(")[0].trim() || metaType || "Vector2";
 		const count = widget.components || numbers.length;
 		const components = numbers.slice();
 		while (components.length < count) components.push(0);
+		const labels = /^Rect2/.test(constructor) ? ["x", "y", "w", "h"] : ["x", "y", "z", "w"];
 		const fields = [];
 		for (let index = 0; index < count; index++) {
-			const input = element("input", { type: "number", value: String(components[index]) });
-			input.addEventListener("change", () => {
-				const next = Number(input.value);
-				if (input.value.trim() === "" || !Number.isFinite(next)) {
-					input.value = String(components[index]);
-					return;
-				}
-				components[index] = next;
+			const label = count <= 4 ? labels[index] : String(index + 1);
+			const input = numberInput(components[index], widget, (value) => {
+				components[index] = Number(value);
 				set(constructor + "(" + components.join(", ") + ")");
 			});
-			fields.push(input);
+			input.setAttribute("aria-label", property.name + " " + label);
+			fields.push(element("label", { class: "component-field" }, [element("span", { text: label }), input]));
 		}
 		const vectorKey = (property.target || "") + ":" + property.name;
 		control = element("details", openVectors.has(vectorKey) ? { open: "open" } : {}, [
-			element("summary", { text: property.raw }),
-			element("div", { class: "group" }, fields),
+			element("summary", { text: property.raw }), element("div", { class: "group" }, fields),
 		]);
-		control.addEventListener("toggle", () => {
-			if (control.open) openVectors.add(vectorKey);
-			else openVectors.delete(vectorKey);
-		});
+		control.addEventListener("toggle", () => { if (control.open) openVectors.add(vectorKey); else openVectors.delete(vectorKey); });
 	} else if (widget.kind === "array") {
 		control = arrayEditor(property, set);
 	} else if (widget.kind === "dictionary") {
 		control = dictionaryEditor(property, set);
 	} else if (widget.kind === "resource") {
 		const references = [];
-		for (const resource of (model && model.extResources) || []) references.push({ value: 'ExtResource("' + resource.id + '")', id: resource.id, kind: "Ext", label: resource.path || resource.id });
-		for (const sub of (model && model.subResources) || []) references.push({ value: 'SubResource("' + sub.id + '")', id: sub.id, kind: "Sub", label: sub.type + " · " + sub.id });
-		// A property of a concrete resource type can be filled by creating a
-		// sub-resource on the spot (Godot's "New <Type>" button).
+		const referenceValue = (kind, id) => model && model.format === "2" && /^\d+$/.test(id) ? kind + "Resource( " + id + " )" : kind + "Resource(" + JSON.stringify(id) + ")";
 		const type = property.metadata && property.metadata.type;
 		const compatible = type && type !== "Resource" && type !== "Variant" ? type : undefined;
-		const picker = element("select", {});
-		picker.appendChild(element("option", { value: "", text: "—" }));
-		picker.appendChild(element("option", { value: "null", text: "Clear (null)" }));
+		// Script and Shader slots must not offer unrelated textures/materials.
+		const accepts = (actual) => (type !== "Script" && type !== "Shader") || actual === type;
+		for (const resource of (model && model.extResources) || []) if (accepts(resource.type)) references.push({ value: referenceValue("Ext", resource.id), id: resource.id, kind: "Ext", label: (resource.path || resource.id) + " · " + resource.type });
+		for (const sub of (model && model.subResources) || []) if (accepts(sub.type)) references.push({ value: referenceValue("Sub", sub.id), id: sub.id, kind: "Sub", label: sub.type + " · " + sub.id });
+		const picker = element("select", { class: "res-picker", "aria-label": property.name });
+		picker.appendChild(element("option", { value: "null", text: "None (null)" }));
 		for (const reference of references) picker.appendChild(element("option", { value: reference.value, text: reference.label }));
 		const rawTrimmed = property.raw.trim();
 		const refMatch = rawTrimmed.match(/^(Ext|Sub)Resource\(\s*(?:"([^"]*)"|(\d+))\s*\)$/);
-		if (refMatch) {
-			const refKind = refMatch[1];
-			const refId = refMatch[2] !== undefined ? refMatch[2] : refMatch[3];
-			const found = references.find((ref) => ref.kind === refKind && ref.id === refId);
-			if (found) picker.value = found.value;
-		}
-		picker.addEventListener("change", () => { if (picker.value) set(picker.value); });
-		control = element("div", { class: "res" }, [
-			element("input", { type: "text", value: property.raw, onchange: (event) => set(event.target.value) }),
-			picker,
-			element("button", { text: "Browse…", onclick: () => post("pickResource", { name: property.name, target: property.target }) }),
+		const current = refMatch && references.find((ref) => ref.kind === refMatch[1] && ref.id === (refMatch[2] !== undefined ? refMatch[2] : refMatch[3]));
+		const selected = current ? current.value : rawTrimmed === "nil" ? "null" : rawTrimmed;
+		if (!Array.from(picker.children).some((option) => option.value === selected)) picker.appendChild(element("option", { value: selected, text: "Current: " + rawTrimmed }));
+		picker.value = selected;
+		picker.title = current ? current.label : rawTrimmed;
+		picker.addEventListener("change", () => set(picker.value));
+		const preview = property.imagePreview;
+		const openImage = () => post("openImage", { name: property.name, target: property.target });
+		const main = element("div", { class: "res-main" }, [
+			imageThumbnail(preview, openImage), picker,
+			element("button", { class: "tonal", text: "Browse…", onclick: () => post("pickResource", { name: property.name, target: property.target }) }),
 		]);
-		if (compatible && compatible !== "Resource" && compatible !== "Script") {
-			control.appendChild(element("button", { text: "New " + compatible, title: "Create a " + compatible + " and assign it", onclick: () => post("createSubResource", { name: property.name, target: property.target, subType: compatible }) }));
-		}
+		bindImagePreview(main, preview);
+		control = element("div", { class: "res" }, [main]);
+		const actions = [];
+		if (current && current.kind === "Ext") actions.push(element("button", { class: "text-button", text: "↗ Open", title: current.label, onclick: () => post("openExtResource", { id: current.id }) }));
+		if (widget.creatable && compatible && compatible !== "Script") actions.push(element("button", { class: "text-button", text: "New " + compatible, title: "Create a " + compatible + " and assign it", onclick: () => post("createSubResource", { name: property.name, target: property.target, subType: compatible }) }));
+		if (actions.length) control.appendChild(element("div", { class: "res-actions" }, actions));
 	} else if (widget.kind === "textarea") {
-		control = element("textarea", {
-			rows: "4",
-			value: property.raw,
-			onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)),
-		});
+		control = element("textarea", { rows: "4", value: property.raw, "aria-label": property.name, onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)) });
 	} else {
-		control = element("input", {
-			type: "text",
-			value: property.raw,
-			onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)),
-		});
+		control = element("input", { type: "text", value: property.raw, "aria-label": property.name, onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)) });
 	}
+	if (property.imagePreview && widget.kind !== "resource") {
+		const input = control;
+		control = element("div", { class: "image-value" }, [input, imageThumbnail(property.imagePreview, () => post("openImage", { name: property.name, target: property.target }))]);
+		bindImagePreview(control, property.imagePreview);
+	}
+	control.className = (control.className || "") + " property-control";
 	row.appendChild(control);
 
-	const revertButton = element("button", {
-		class: "revert",
-		text: "⟲",
-		title: defaultValue !== undefined ? "Revert to default (" + defaultValue + ")" : "Remove override",
-	});
+	const revertButton = element("button", { class: "revert", text: "⟲", title: defaultValue !== undefined ? "Revert to default (" + defaultValue + ")" : "Remove override" });
+	revertButton.disabled = property.definedInFile === false;
 	revertButton.addEventListener("click", () => revert(property.name, defaultValue, property.target));
 	row.appendChild(revertButton);
+	if (row.querySelectorAll) Array.from(row.querySelectorAll("input, select, textarea, button")).forEach((field, index) => {
+		// Preview thumbnails can appear/disappear before a picker. Identify the
+		// actual field, rather than transferring focus to its old child index.
+		const key = field.getAttribute("aria-label") || (field.classList.contains("revert") ? "revert" : field.textContent + ":" + index);
+		field.setAttribute("data-focus-id", (property.target || "") + ":" + property.name + ":" + field.tagName + ":" + key);
+	});
 	return row;
 }
 
@@ -379,6 +481,7 @@ function dictionaryEditor(property, set) {
 
 let currentSearch = "";
 let modifiedOnly = false;
+let renderedResourceUri;
 
 function applyPropertyFilters() {
 	if (!app || typeof app.querySelectorAll !== "function") return;
@@ -434,9 +537,16 @@ function renderEmpty(resources) {
 }
 
 function render(model, resources) {
-	const searchWasFocused = typeof document.activeElement === "object" && document.activeElement && document.activeElement.id === "property-search";
+	const active = document.activeElement;
+	const searchWasFocused = active && active.id === "property-search";
+	const filterWasFocused = active && active.id === "modified-filter";
+	const focusId = model && model.uri === renderedResourceUri && active && active.getAttribute && active.getAttribute("data-focus-id");
+	const selectionStart = active && active.selectionStart;
+	const selectionEnd = active && active.selectionEnd;
+	hideImagePreview();
 	app.textContent = "";
 	if (!model) {
+		renderedResourceUri = undefined;
 		renderEmpty(resources);
 		return;
 	}
@@ -482,7 +592,7 @@ function render(model, resources) {
 	const tools = element("div", { class: "property-tools" });
 	const search = element("input", { id: "property-search", type: "search", placeholder: "Search properties…", value: currentSearch, "aria-label": "Search properties" });
 	search.addEventListener("input", () => { currentSearch = search.value; applyPropertyFilters(); });
-	const modifiedButton = element("button", { class: "filter-button" + (modifiedOnly ? " active" : ""), text: "●  Modified" });
+	const modifiedButton = element("button", { id: "modified-filter", class: "filter-button" + (modifiedOnly ? " active" : ""), text: "●  Modified" });
 	modifiedButton.setAttribute("aria-pressed", String(modifiedOnly));
 	modifiedButton.addEventListener("click", () => { modifiedOnly = !modifiedOnly; render(model); });
 	tools.appendChild(search);
@@ -521,7 +631,7 @@ function render(model, resources) {
 		]);
 		const isOpen = openSubResources.has(sub.id) || (defaultSubOpen && !closedSubResources.has(sub.id));
 		const card = element("details", Object.assign({ class: "resource-card" }, isOpen ? { open: "open" } : {}), [
-			element("summary", {}, [element("span", { class: "resource-type", text: sub.type }), element("code", { text: sub.id })]),
+			element("summary", {}, [element("span", { class: "resource-type", text: sub.type, title: sub.type }), element("code", { text: sub.id, title: sub.id })]),
 			body,
 			actions,
 		]);
@@ -546,19 +656,31 @@ function render(model, resources) {
 		element("span", { class: "count", text: model.extResources.length + " total" }),
 	]));
 	for (const resource of model.extResources) {
-		const link = element("button", { text: (resource.broken ? "⚠  " : "↗  ") + (resource.path || resource.id), class: "resource-link" + (resource.broken ? " broken" : ""), onclick: () => post("openExtResource", { id: resource.id }) });
+		const open = () => post("openExtResource", { id: resource.id });
+		const link = element("button", { text: (resource.broken ? "⚠  " : "↗  ") + (resource.path || resource.id), title: resource.path || resource.id, class: "resource-link" + (resource.broken ? " broken" : ""), onclick: open });
+		bindImagePreview(link, resource.imagePreview);
+		const pathCell = element("div", { class: "resource-link-cell" }, [imageThumbnail(resource.imagePreview, open), link]);
 		const removeBtn = element("button", { class: "revert", text: "\u2715", title: "Remove external resource", onclick: () => post("deleteExtResource", { id: resource.id }) });
 		extSection.appendChild(element("div", { class: "external-row" }, [
 			element("code", { class: "resource-id", text: resource.id }),
 			element("span", { class: "type-badge", text: resource.type }),
-			link,
+			pathCell,
 			removeBtn,
 		]));
 	}
 	extSection.appendChild(element("button", { class: "tonal add-resource", text: "+  Add external resource", onclick: () => post("addExternalResource", {}) }));
 	app.appendChild(extSection);
 	applyPropertyFilters();
-	if (searchWasFocused && typeof search.focus === "function") search.focus();
+	renderedResourceUri = model.uri;
+	if (searchWasFocused && typeof search.focus === "function") search.focus({ preventScroll: true });
+	else if (filterWasFocused && typeof modifiedButton.focus === "function") modifiedButton.focus({ preventScroll: true });
+	else if (focusId && app.querySelectorAll) {
+		const field = Array.from(app.querySelectorAll("[data-focus-id]")).find((candidate) => candidate.getAttribute("data-focus-id") === focusId);
+		if (field && !field.disabled) {
+			field.focus({ preventScroll: true });
+			if (selectionStart !== undefined && selectionStart !== null && typeof field.setSelectionRange === "function") field.setSelectionRange(selectionStart, selectionEnd);
+		}
+	}
 }
 
 window.addEventListener("keydown", (event) => {
@@ -587,16 +709,23 @@ window.addEventListener("message", (event) => {
 	else if (message.type === "externalChange") showExternalChangeBanner();
 });
 
+// Scrolling to a focused/hovered field can emit a scroll event after mouseenter.
+// Reposition, rather than immediately hiding a preview the user just requested.
+const repositionImagePreview = () => { if (imageTooltip && !imageTooltip.hidden && positionImagePreview) positionImagePreview(); };
+window.addEventListener("resize", repositionImagePreview);
+window.addEventListener("scroll", repositionImagePreview, true);
 post("ready", {});`;
 
 export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-	void webview;
 	void extensionUri;
+	const nonce = randomBytes(16).toString("hex");
+	const imageSource = webview.cspSource ?? "'none'";
 	return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${imageSource}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
 	:root {
 		color-scheme: light dark;
@@ -648,12 +777,14 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	input:hover, select:hover, textarea:hover { border-color: color-mix(in srgb, var(--ri-accent) 45%, var(--ri-border)); }
 	.property-list { display: grid; gap: 5px; }
 	.property-row[hidden] { display: none; }
-	.row { display: grid; grid-template-columns: minmax(110px, 30%) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 7px; border-radius: 10px; border: 1px solid transparent; }
+	.row { display: grid; grid-template-areas: "heading control revert"; grid-template-columns: minmax(110px, 30%) minmax(0, 1fr) 27px; gap: 8px; align-items: center; padding: 8px 7px; border-radius: 10px; border: 1px solid transparent; }
 	.row:hover { background: var(--ri-card); border-color: var(--ri-border); }
 	.row.modified { border-left: 2px solid var(--ri-accent); padding-left: 6px; }
-	.property-heading { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+	.property-heading { grid-area: heading; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 	.property-heading label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 	.type-badge { width: fit-content; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ri-muted); font: 10px/1.4 var(--vscode-editor-font-family, monospace); }
+	.property-control { grid-area: control; min-width: 0; }
+	.row > .revert { grid-area: revert; align-self: start; }
 	.row input, .row select, .row textarea { min-height: 30px; }
 	.row input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--ri-accent); }
 	.row input[type="color"] { padding: 3px; min-height: 34px; }
@@ -661,7 +792,26 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.revert { width: 27px; height: 27px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: var(--ri-muted); font-size: 16px; }
 	.revert:hover { background: var(--ri-card); color: var(--vscode-foreground); }
 	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(55px, 1fr)); gap: 6px; align-items: center; }
-	.res { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+	.res { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
+	.res-main, .image-value, .resource-link-cell { display: flex; gap: 6px; align-items: center; min-width: 0; }
+	.res-picker, .image-value > input, .resource-link-cell > .resource-link { flex: 1; min-width: 0; width: 0; }
+	.res-main > .tonal { flex-shrink: 0; padding: 5px 9px; white-space: nowrap; }
+	.res-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+	.res-actions > button { min-height: 25px; padding: 3px 8px; }
+	.numeric-control { display: grid; gap: 4px; }
+	.range-hint { color: var(--ri-muted); font-size: 10px; overflow-wrap: anywhere; }
+	.row input[type="range"] { min-height: 18px; height: 18px; padding: 0; border: 0; accent-color: var(--ri-accent); }
+	.component-field { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px; color: var(--ri-muted); font-size: 11px; }
+	.flags-control { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+	.flags-control > label { display: flex; align-items: center; gap: 5px; }
+	button:disabled { opacity: .4; cursor: default; }
+	.image-thumbnail { flex: 0 0 32px; width: 32px; height: 32px; padding: 0; overflow: hidden; background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 8px 8px; }
+	.image-thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
+	.image-preview { position: fixed; z-index: 20; pointer-events: none; width: min(280px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: hidden; padding: 10px; border: 1px solid var(--ri-border); border-radius: 10px; background: var(--vscode-editorHoverWidget-background, var(--ri-surface)); box-shadow: 0 4px 18px #0005; }
+	.image-preview[hidden], .image-preview img[hidden] { display: none; }
+	.image-preview img { display: block; width: 100%; max-height: min(220px, 50vh); object-fit: contain; background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 12px 12px; }
+	.preview-caption { margin-top: 6px; font-size: 11px; overflow-wrap: anywhere; }
+	.preview-status { color: var(--ri-muted); font-size: 10px; }
 	.entry { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center; margin: 5px 0; }
 	.entry.kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 	.entry button, .res button, .toolbar button, .text-button { font-size: 11px; }
@@ -672,7 +822,9 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.resource-card > summary::-webkit-details-marker { display: none; }
 	.resource-card > summary::before { content: "▸"; color: var(--ri-muted); transition: transform .15s; }
 	.resource-card[open] > summary::before { transform: rotate(90deg); }
-	.resource-type { font-weight: 600; }
+	.resource-type { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.resource-card > summary .resource-type { flex: 1; }
+	.resource-card > summary code { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	code { font: 11px var(--vscode-editor-font-family, monospace); color: var(--ri-muted); }
 	.subresource-body { border-top: 1px solid var(--ri-border); padding: 6px 0; }
 	.subresource-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 4px 0 8px; }
@@ -694,7 +846,7 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.empty { color: var(--ri-muted); text-align: center; padding: 12px 12px; margin: 0; }
 	@media (max-width: 520px) {
 		body { padding: 12px 9px 24px; }
-		.row { grid-template-columns: minmax(80px, 34%) minmax(0, 1fr) auto; gap: 6px; padding: 7px 4px; }
+		.row { grid-template-areas: "heading revert" "control control"; grid-template-columns: minmax(0, 1fr) 27px; gap: 6px; padding: 7px 4px; }
 		.property-tools { flex-wrap: wrap; }
 		#property-search { flex-basis: 100%; }
 		.external-row { grid-template-columns: auto minmax(0, 1fr) auto; }
@@ -705,7 +857,7 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 <body>
 <div id="banner"></div>
 <div id="app"><p class="empty">Loading resource…</p></div>
-<script>
+<script nonce="${nonce}">
 ${WEBVIEW_SCRIPT}
 </script>
 </body>

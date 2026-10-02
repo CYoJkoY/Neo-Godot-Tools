@@ -17,7 +17,10 @@ export interface PropertyMetadata {
 	type: string;
 	hint?: string;
 	hintString?: string;
+	/** A known literal default, never the current file value or an expression. */
 	defaultValue?: string;
+	/** A script initializer that cannot be evaluated safely without Godot. */
+	defaultExpression?: string;
 	category?: string;
 	group?: string;
 	source: PropertyMetadataSource;
@@ -29,6 +32,7 @@ export type WidgetKind =
 	| "text"
 	| "textarea"
 	| "enum"
+	| "flags"
 	| "color"
 	| "vector"
 	| "resource"
@@ -42,9 +46,16 @@ export interface WidgetSpec {
 	components?: number;
 	/** Whole numbers only (`int` properties). */
 	integer?: boolean;
+	/** Whether this is a known concrete native class, not e.g. Texture2D/Script. */
+	creatable?: boolean;
 	min?: number;
 	max?: number;
 	step?: number;
+	allowGreater?: boolean;
+	allowLesser?: boolean;
+	exponential?: boolean;
+	hideSlider?: boolean;
+	suffix?: string;
 	/** Enum/flags options decoded from `hint_string`. */
 	options?: string[];
 	elementType?: string;
@@ -65,7 +76,7 @@ export const BUILTIN_RESOURCE_PROPERTIES: PropertyMetadata[] = [
 const BUILTIN_CLASS_SCHEMAS: Record<string, Array<Omit<PropertyMetadata, "source">>> = {
 	ShaderMaterial: [
 		{ name: "shader", type: "Shader", defaultValue: "null" },
-		{ name: "render_priority", type: "int", defaultValue: "0" },
+		{ name: "render_priority", type: "int", hint: "range", hintString: "-128, 127, 1", defaultValue: "0" },
 	],
 	Shader: [
 		{ name: "code", type: "String", hint: "multiline", defaultValue: '""' },
@@ -263,7 +274,7 @@ export function defaultValueForType(type: string): string {
 		case "Rect2i": return "Rect2i(0, 0, 0, 0)";
 		case "Quaternion":
 		case "Quat": return "Quaternion(0, 0, 0, 1)";
-		case "Plane": return "Plane(0, 1, 0, 0)";
+		case "Plane": return "Plane(0, 0, 0, 0)";
 		case "AABB":
 		case "Rect3": return "AABB(0, 0, 0, 0, 0, 0)";
 		case "Basis":
@@ -545,6 +556,20 @@ export function parseScriptExports(source: string): PropertyMetadata[] {
 			}
 			default: break;
 		}
+		// A declaration without an initializer has a known type default. A
+		// constant, preload() or other expression does not: never write GDScript
+		// expressions into a .tres file when reverting an override.
+		if (defaultValue === undefined) {
+			const type = normalizeTypeName(metadata.type);
+			// An unresolved name might be an enum, not a nullable resource class.
+			// Its type placeholder is not evidence of the actual script default.
+			const knownType = NON_RESOURCE_TYPES.has(type) || Object.hasOwn(BUILTIN_CLASS_SCHEMAS, type) || KNOWN_NULL_TYPES.has(type);
+			metadata.defaultValue = knownType ? defaultValueForType(metadata.type) : undefined;
+		}
+		else if (parseVariant(defaultValue).error) {
+			metadata.defaultExpression = defaultValue;
+			metadata.defaultValue = undefined;
+		}
 		result.push(metadata);
 	}
 	return result;
@@ -662,7 +687,6 @@ export function propertyMetadataFromDocument(document: ResourceDocument): Proper
 	return document.properties.map((property) => ({
 		name: property.name,
 		type: valueTypeName(property.value, document),
-		defaultValue: property.valueText,
 		source: "file" as const,
 	}));
 }
@@ -685,6 +709,7 @@ export interface LspPropertyInfo {
 	type?: string;
 	hint?: string;
 	hint_string?: string;
+	default_value?: string;
 }
 
 /**
@@ -698,46 +723,81 @@ export function collectPropertyMetadata(options: {
 	lspProperties?: readonly LspPropertyInfo[];
 }): PropertyMetadata[] {
 	const merged = new Map<string, PropertyMetadata>();
-	for (const property of BUILTIN_RESOURCE_PROPERTIES) merged.set(property.name, property);
-	for (const property of builtinClassProperties(options.document.resourceType)) {
-		merged.set(property.name, property);
+	for (const property of [...BUILTIN_RESOURCE_PROPERTIES, ...builtinClassProperties(options.document.resourceType)]) {
+		merged.set(property.name, { ...property });
 	}
 	for (const property of options.lspProperties ?? []) {
+		const fallback = merged.get(property.name);
 		merged.set(property.name, {
+			...fallback,
 			name: property.name,
-			type: property.type ?? "Variant",
-			hint: property.hint,
-			hintString: property.hint_string,
+			type: property.type && property.type !== "Variant" ? property.type : fallback?.type ?? "Variant",
+			hint: property.hint ?? fallback?.hint,
+			hintString: property.hint_string ?? fallback?.hintString,
+			defaultValue: property.default_value ?? fallback?.defaultValue,
 			source: "lsp",
 		});
 	}
-	if (options.scriptSource) {
-		for (const property of parseScriptExports(options.scriptSource)) {
-			if (!merged.has(property.name) || merged.get(property.name)?.source !== "lsp") merged.set(property.name, property);
-		}
-	}
-	if (options.shaderSource) {
-		const usesLegacyPrefix =
-			options.document.format === "2" ||
-			options.document.properties.some((property) => property.name.startsWith("shader_param/"));
-		const prefix = usesLegacyPrefix ? "shader_param/" : "shader_parameter/";
-		for (const property of parseShaderUniforms(options.shaderSource, prefix)) {
-			if (!merged.has(property.name)) merged.set(property.name, property);
-		}
+	const scriptProperties = parseScriptExports(options.scriptSource ?? "");
+	const usesLegacyPrefix = options.document.format === "2" || options.document.properties.some((property) => property.name.startsWith("shader_param/"));
+	const shaderProperties = parseShaderUniforms(options.shaderSource, usesLegacyPrefix ? "shader_param/" : "shader_parameter/");
+	for (const property of [...scriptProperties, ...shaderProperties]) {
+		const existing = merged.get(property.name);
+		// LSP supplies authoritative types, but nativeSymbol often supplies no
+		// hints or defaults. Keep the actual script/schema default underneath it.
+		merged.set(property.name, existing?.source === "lsp" ? {
+			...property,
+			type: existing.type !== "Variant" ? existing.type : property.type,
+			hint: existing.hint ?? property.hint,
+			hintString: existing.hintString ?? property.hintString,
+			source: "lsp",
+		} : property);
 	}
 	for (const property of propertyMetadataFromDocument(options.document)) {
 		const existing = merged.get(property.name);
 		if (!existing) merged.set(property.name, property);
-		else if (existing.defaultValue === undefined && existing.source !== "script") existing.defaultValue = property.defaultValue;
+		else if (existing.type === "Variant") merged.set(property.name, { ...existing, type: property.type });
+		// The file tells us the current value, NOT the default. Unknown native
+		// defaults must remain unknown, even when a property is serialized.
 	}
 	return [...merged.values()];
 }
 
-/** Decodes `@export_range(min, max, step)` style hint strings. */
-export function parseRangeHint(hintString: string | undefined): { min?: number; max?: number; step?: number } {
-	const args = splitArguments(hintString).map((argument) => stripQuotes(argument));
-	const numbers = args.filter((argument) => argument !== "" && !Number.isNaN(Number(argument))).map(Number);
-	return { min: numbers[0], max: numbers[1], step: numbers[2] };
+/** Only literal defaults can be compared or safely written to a .tres file. */
+export function knownDefaultValue(metadata: PropertyMetadata | undefined): string | undefined {
+	if (!metadata || metadata.source === "file" || metadata.defaultValue === undefined) return undefined;
+	return parseVariant(metadata.defaultValue).error ? undefined : metadata.defaultValue;
+}
+
+export interface RangeHint {
+	min?: number;
+	max?: number;
+	step?: number;
+	allowGreater?: boolean;
+	allowLesser?: boolean;
+	exponential?: boolean;
+	hideSlider?: boolean;
+	suffix?: string;
+}
+
+/** Decodes positional bounds/step and Godot's optional range flags. */
+export function parseRangeHint(hintString: string | undefined): RangeHint {
+	const args = splitArguments(hintString).map(stripQuotes);
+	const numberAt = (index: number) => args[index]?.trim() && Number.isFinite(Number(args[index])) ? Number(args[index]) : undefined;
+	const result: RangeHint = { min: numberAt(0), max: numberAt(1), step: numberAt(2) };
+	if (result.step !== undefined && result.step <= 0) result.step = undefined;
+	if (result.min !== undefined && result.max !== undefined && result.min > result.max) {
+		result.min = undefined;
+		result.max = undefined;
+	}
+	for (const flag of args.slice(2)) {
+		if (flag === "or_greater") result.allowGreater = true;
+		else if (flag === "or_less") result.allowLesser = true;
+		else if (flag === "exp") result.exponential = true;
+		else if (flag === "hide_slider") result.hideSlider = true;
+		else if (flag.startsWith("suffix:")) result.suffix = flag.slice("suffix:".length);
+	}
+	return result;
 }
 
 export function enumOptions(hintString: string | undefined): string[] | undefined {
@@ -752,16 +812,16 @@ export function widgetForProperty(metadata: PropertyMetadata | undefined, value:
 	const hint = metadata?.hint;
 	if (hint === "enum" || hint === "flags") {
 		const options = enumOptions(metadata?.hintString) ?? [];
-		return { kind: "enum", options, elementType: "int" };
+		return { kind: hint === "flags" ? "flags" : "enum", options, elementType: type === "String" ? "String" : "int" };
 	}
 	if (type === "bool" || value.kind === "bool") return { kind: "checkbox" };
 	if (type === "NodePath" || value.kind === "NodePath") return { kind: "nodepath" };
 	if (type === "Color" || value.kind === "Color") return { kind: "color" };
 	const components = componentCount(type) ?? value.components?.length;
-	if (components && components > 1) return { kind: "vector", components };
+	if (components && components > 1) return { kind: "vector", components, ...(/^(?:Vector[234]i|Rect2i)$/.test(type) ? { integer: true, step: 1 } : {}) };
 	if (type === "int" || type === "float" || value.kind === "int" || value.kind === "float") {
-		const range = parseRangeHint(metadata?.hintString);
-		const widget: WidgetSpec = { kind: "number", step: range.step ?? (type === "int" ? 1 : undefined), min: range.min, max: range.max };
+		const range = parseRangeHint(hint === "range" ? metadata?.hintString : undefined);
+		const widget: WidgetSpec = { kind: "number", ...range, step: range.step ?? (type === "int" ? 1 : undefined) };
 		// Integer properties must not end up with `3.7` written into the file.
 		if (type === "int") widget.integer = true;
 		return widget;
@@ -773,13 +833,17 @@ export function widgetForProperty(metadata: PropertyMetadata | undefined, value:
 	}
 	if (type === "Dictionary" || value.kind === "Dictionary") return { kind: "dictionary" };
 	if (value.kind === "ExtResource" || value.kind === "SubResource" || isResourceMetadata(type)) {
-		return { kind: "resource" };
+		return { kind: "resource", creatable: type === "Resource" || Object.hasOwn(BUILTIN_CLASS_SCHEMAS, type) };
 	}
 	if (hint === "multiline" || (value.kind === "String" && (value.raw.includes("\n") || value.text?.includes("\n")))) {
 		return { kind: "textarea" };
 	}
 	return { kind: "text" };
 }
+
+const KNOWN_NULL_TYPES = new Set([
+	"Object", "Resource", "Script", "Texture", "Texture2D", "Texture3D", "Material", "Mesh", "Font", "PackedScene", "Node", "StyleBox", "Noise",
+]);
 
 /** Built-in types that are edited with a dedicated widget instead of a resource picker. */
 const NON_RESOURCE_TYPES = new Set([

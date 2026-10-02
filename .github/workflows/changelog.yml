@@ -1,0 +1,73 @@
+name: Sync changelog from release tags
+
+on:
+  push:
+    tags:
+      - "v*"
+  delete:
+  workflow_dispatch:
+  # Also recovers tags pushed at old commits that predate this workflow.
+  schedule:
+    - cron: "21 3 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: changelog-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: ${{ github.event_name != 'delete' || (github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Synchronize live tags, including deletions and retags
+        run: git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Test tag range generation
+        run: npm run test:release
+
+      - name: Rebuild changelog
+        run: npm run changelog
+
+      - name: Open or update changelog pull request
+        id: changelog_pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ github.token }}
+          branch: automation/changelog
+          base: ${{ github.event.repository.default_branch }}
+          add-paths: CHANGELOG.md
+          commit-message: "docs(changelog): refresh tag-based release notes"
+          title: "docs(changelog): synchronize live release tags"
+          body: |
+            Rebuilds only the generated release-note block from the current Git tags.
+            Manual history and Unreleased notes are preserved.
+
+            Deleted or moved tags are recomputed; stable releases include all
+            commits since the previous reachable stable tag. No direct writes
+            are made to the protected default branch.
+          delete-branch: true
+
+      - name: Run CI for the bot pull request
+        if: ${{ steps.changelog_pr.outputs.pull-request-operation == 'created' || steps.changelog_pr.outputs.pull-request-operation == 'updated' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref automation/changelog

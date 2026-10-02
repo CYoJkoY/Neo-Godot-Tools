@@ -6,6 +6,7 @@ import {
 	defaultValueForType,
 	enumOptions,
 	inferTypeFromValue,
+	knownDefaultValue,
 	parseRangeHint,
 	parseScriptBaseClass,
 	parseScriptExports,
@@ -78,6 +79,8 @@ describe("inspector widgets", () => {
 		assert.equal(widgetForProperty({ name: "a", type: "Color", source: "script" }, value("Color(1, 1, 1, 1)")).kind, "color");
 		assert.equal(widgetForProperty({ name: "a", type: "NodePath", source: "script" }, value('NodePath("A")')).kind, "nodepath");
 		assert.equal(widgetForProperty({ name: "a", type: "Gradient", source: "script" }, value("null")).kind, "resource");
+		assert.equal(widgetForProperty({ name: "a", type: "Gradient", source: "script" }, value("null")).creatable, true);
+		assert.equal(widgetForProperty({ name: "a", type: "Texture2D", source: "script" }, value("null")).creatable, false, "abstract classes cannot be instantiated with New");
 		assert.equal(widgetForProperty({ name: "a", type: "Texture2D", source: "script" }, value('ExtResource("1_a")')).kind, "resource");
 		assert.equal(widgetForProperty({ name: "a", type: "Dictionary", source: "script" }, value("{}")).kind, "dictionary");
 		assert.equal(widgetForProperty({ name: "a", type: "String", source: "script", hint: "multiline" }, value('""')).kind, "textarea");
@@ -97,6 +100,20 @@ describe("inspector widgets", () => {
 		const enumWidget = widgetForProperty({ name: "a", type: "int", source: "script", hint: "enum", hintString: "Idle,Run" }, parseVariant("0").value);
 		assert.equal(enumWidget.kind, "enum");
 		assert.deepEqual(enumWidget.options, ["Idle", "Run"]);
+	});
+
+	it("preserves Godot's range flags and never shifts malformed bounds", () => {
+		assert.deepEqual(parseRangeHint('0, 1, 0.01, "or_greater", "or_less", "exp", "suffix:m"'), {
+			min: 0, max: 1, step: 0.01, allowGreater: true, allowLesser: true, exponential: true, suffix: "m",
+		});
+		assert.deepEqual(parseRangeHint('0, 1, "or_greater", "hide_slider"'), { min: 0, max: 1, step: undefined, allowGreater: true, hideSlider: true });
+		assert.deepEqual(parseRangeHint("invalid, 5, 0.1"), { min: undefined, max: 5, step: 0.1 });
+		assert.deepEqual(parseRangeHint("Infinity, 5, -1"), { min: undefined, max: 5, step: undefined });
+		assert.deepEqual(parseRangeHint("5, 1, 0"), { min: undefined, max: undefined, step: undefined });
+		const value = parseVariant("3").value;
+		assert.equal(widgetForProperty({ name: "mask", type: "int", source: "script", hint: "flags", hintString: "A,B" }, value).kind, "flags");
+		assert.equal(widgetForProperty({ name: "pos", type: "Vector2i", source: "script" }, parseVariant("Vector2i(1, 2)").value).integer, true);
+		assert.equal(widgetForProperty({ name: "value", type: "float", source: "lsp", hintString: "1, 4" }, value).min, undefined, "only range hints impose bounds");
 	});
 
 	it("carries the element type into array widgets", () => {
@@ -150,6 +167,37 @@ speed = 9.0
 		assert.equal(health?.type, "int");
 		const script = metadata.find((property) => property.name === "script");
 		assert.equal(script?.type, "Script");
+	});
+
+	it("does not mistake file values or type placeholders for defaults", () => {
+		const document = parseResourceDocument(text);
+		const metadata = collectPropertyMetadata({ document, lspProperties: [{ name: "health", type: "int" }] });
+		assert.equal(metadata.find((prop) => prop.name === "health")?.defaultValue, undefined);
+		assert.equal(metadata.find((prop) => prop.name === "speed")?.defaultValue, undefined);
+		const scriptMetadata = collectPropertyMetadata({ document, scriptSource: SCRIPT, lspProperties: [{ name: "health", type: "int" }] });
+		assert.equal(scriptMetadata.find((prop) => prop.name === "health")?.defaultValue, "100");
+	});
+
+	it("keeps built-in defaults and hints when nativeSymbol only supplies a type", () => {
+		const document = parseResourceDocument('[gd_resource type="StandardMaterial3D" format=3]\n[resource]\nroughness = 0.2\n');
+		const metadata = collectPropertyMetadata({ document, lspProperties: [{ name: "roughness", type: "float" }] });
+		const roughness = metadata.find((prop) => prop.name === "roughness");
+		assert.equal(roughness?.source, "lsp");
+		assert.equal(roughness?.defaultValue, "1.0");
+		assert.equal(roughness?.hint, "range");
+		assert.equal(roughness?.hintString, "0, 1, 0.01");
+	});
+
+	it("distinguishes implicit script defaults from unevaluated initializers", () => {
+		const exports = parseScriptExports(`extends Resource\n@export var speed: float\n@export var health: int = DEFAULT_HP\n@export var texture: Texture2D = preload("res://icon.png")\n`);
+		assert.equal(exports[0].defaultValue, "0.0");
+		assert.equal(exports[1].defaultValue, undefined);
+		assert.equal(exports[1].defaultExpression, "DEFAULT_HP");
+		const unknownTypes = parseScriptExports("@export var state: MyEnum\n@export var settings: MyResource");
+		for (const property of unknownTypes) assert.equal(knownDefaultValue(property), undefined, "unresolved types cannot prove a null default");
+		assert.equal(knownDefaultValue(parseScriptExports("@export var texture: Texture2D")[0]), "null");
+		assert.equal(knownDefaultValue(exports[2]), undefined);
+		assert.equal(defaultValueForType("Plane"), "Plane(0, 0, 0, 0)");
 	});
 
 	it("parses Godot 3 exports, setter suffixes, inline comments and shader uniforms", () => {

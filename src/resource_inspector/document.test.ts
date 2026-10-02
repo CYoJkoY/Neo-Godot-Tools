@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	applyResourceEdits,
 	parseResourceDocument,
+	resourceReference,
 	rewriteReferences,
 	uniqueExtResourceId,
 	uniqueSubResourceId,
@@ -172,6 +173,45 @@ describe("resource document editing", () => {
 		assert.equal(uniqueSubResourceId("Gradient", []), "Gradient_1");
 		assert.equal(uniqueExtResourceId(["1_script", "2_res"]), "3_res");
 		assert.equal(uniqueExtResourceId([]), "1_res");
+	});
+
+	it("continues after the largest ID, including numeric and mixed ID styles", () => {
+		assert.equal(uniqueExtResourceId(["1_script", "7_texture", "3_res"]), "8_res");
+		assert.equal(uniqueExtResourceId(["3", "9"]), "10");
+		assert.equal(uniqueExtResourceId(["3", "9"], "3"), "10");
+		assert.equal(uniqueExtResourceId(["2", "8_texture", "custom"]), "9_res");
+		assert.equal(uniqueExtResourceId(["custom", "12abc", "res_99"]), "1_res");
+		assert.equal(uniqueExtResourceId([], "2"), "1");
+		assert.equal(uniqueExtResourceId(["9007199254740993_tex"]), "9007199254740994_res");
+	});
+
+	it("adds legacy numeric IDs and references and keeps load_steps in sync", () => {
+		const legacy = SOURCE.replace("format=3", "format=2").replace('id="1_script"', "id=4").replace('ExtResource("1_script")', "ExtResource( 4 )");
+		const result = applyResourceEdits(legacy, [
+			{ kind: "addExtResource", type: "Texture", path: "res://icon.png" },
+			{ kind: "addExtResource", type: "Texture", path: "res://other.png" },
+		]);
+		assert.deepEqual(result.createdIds, ["5", "6"]);
+		assert.ok(result.text.includes('path="res://icon.png" id=5]'));
+		assert.equal(parseResourceDocument(result.text).loadSteps, "5");
+		assert.equal(resourceReference("Ext", "5", "2"), "ExtResource( 5 )");
+		assert.equal(resourceReference("Ext", "5", "3"), 'ExtResource("5")');
+		assert.equal(resourceReference("Ext", "6_res", "3"), 'ExtResource("6_res")');
+		const removed = applyResourceEdits(result.text, [{ kind: "deleteExtResource", id: "6" }]);
+		assert.equal(parseResourceDocument(removed.text).loadSteps, "4");
+	});
+
+	it("does not drop a sub-resource that shares a legacy external ID", () => {
+		const text = `[gd_resource type="Resource" format=2]
+[ext_resource type="Script" path="res://hero.gd" id=1]
+[sub_resource type="Gradient" id=1]
+[resource]
+script = ExtResource( 1 )
+gradient = SubResource( 1 )
+`;
+		const result = applyResourceEdits(text, [{ kind: "deleteExtResource", id: "1" }]);
+		assert.ok(result.text.includes("script = null"));
+		assert.ok(result.text.includes("gradient = SubResource( 1 )"));
 	});
 
 	it("rewrites references defensively", () => {

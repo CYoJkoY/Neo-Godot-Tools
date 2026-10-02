@@ -195,7 +195,7 @@ export type ResourceEdit =
 
 export interface EditResult {
 	text: string;
-	/** Ids created by `addSubResource`/`duplicateSubResource`. */
+	/** IDs created by adding or duplicating external/internal resources. */
 	createdIds: string[];
 }
 
@@ -207,11 +207,26 @@ export function uniqueSubResourceId(type: string, existing: readonly string[]): 
 	return `${base}_${index}`;
 }
 
-/** Generates the next free `N_xxxx` external resource id. */
-export function uniqueExtResourceId(existing: readonly string[]): string {
-	let index = 1;
-	while (existing.some((id) => id.startsWith(`${index}_`))) index++;
-	return `${index}_res`;
+/**
+ * Continues the numeric sequence, rather than filling a hole or restarting at
+ * 1 when a Godot 3 file uses bare numeric IDs. Existing IDs are never renamed.
+ */
+export function uniqueExtResourceId(existing: readonly string[], format?: string): string {
+	let largest = 0n;
+	for (const id of existing) {
+		const prefix = id.match(/^(\d+)(?:_|$)/)?.[1];
+		if (prefix !== undefined && BigInt(prefix) > largest) largest = BigInt(prefix);
+	}
+	const next = String(largest + 1n);
+	const numericStyle = format === "2" || (existing.length > 0 && existing.every((id) => /^\d+$/.test(id)));
+	return numericStyle ? next : `${next}_res`;
+}
+
+/** Godot 3 references use unquoted numeric IDs; Godot 4 uses strings. */
+export function resourceReference(kind: "Ext" | "Sub", id: string, format?: string): string {
+	return format === "2" && /^\d+$/.test(id)
+		? `${kind}Resource( ${id} )`
+		: `${kind}Resource(${JSON.stringify(id)})`;
 }
 
 function indentOf(line: string): string {
@@ -239,12 +254,12 @@ function replaceRange(lines: string[], start: number, end: number, replacement: 
 }
 
 /** Replaces every reference to `id`; `replacement===undefined` turns them into `null`. */
-function replaceReferences(text: string, id: string, replacement?: string): string {
+function replaceReferences(text: string, id: string, replacement?: string, kind?: "Ext" | "Sub"): string {
 	return text.replace(
 		/(Ext|Sub)Resource\(\s*(?:"([^"]*)"|(\d+))\s*\)/g,
 		(match, prefix: string, quotedId?: string, unquotedId?: string) => {
 			const referenceId = quotedId ?? unquotedId;
-			if (referenceId !== id) return match;
+			if (referenceId !== id || (kind && prefix !== kind)) return match;
 			if (replacement === undefined) return "null";
 			if (unquotedId !== undefined && /^\d+$/.test(replacement)) {
 				return `${prefix}Resource( ${replacement} )`;
@@ -260,8 +275,8 @@ export function rewriteReferences(text: string, oldId: string, newId: string): s
 }
 
 /** Replaces every reference to a removed id with `null`. */
-export function dropReferences(text: string, id: string): string {
-	return replaceReferences(text, id);
+export function dropReferences(text: string, id: string, kind?: "Ext" | "Sub"): string {
+	return replaceReferences(text, id, undefined, kind);
 }
 
 export function applyResourceEdits(text: string, edits: readonly ResourceEdit[]): EditResult {
@@ -310,14 +325,15 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 			insertSubResource(lines, edit.type, id, edit.properties ?? {});
 			createdIds.push(id);
 		} else if (edit.kind === "addExtResource") {
-			const id = uniqueExtResourceId(document.extResources.map((entry) => entry.id));
-			const attributes = [`type="${edit.type}"`];
-			if (edit.uid) attributes.push(`uid="${edit.uid}"`);
-			attributes.push(`path="${edit.path}"`);
+			const id = uniqueExtResourceId(document.extResources.map((entry) => entry.id), document.format);
+			const attributes = [`type=${JSON.stringify(edit.type)}`];
+			if (edit.uid) attributes.push(`uid=${JSON.stringify(edit.uid)}`);
+			attributes.push(`path=${JSON.stringify(edit.path)}`);
 			const target = document.extResources.length
 				? document.extResources[document.extResources.length - 1].endLine + 1
 				: Math.max(0, document.headerLine + 1);
-			const block = ["", `[ext_resource ${attributes.join(" ")} id="${id}"]`];
+			const idText = document.format === "2" ? id : JSON.stringify(id);
+			const block = ["", `[ext_resource ${attributes.join(" ")} id=${idText}]`];
 			if (target >= lines.length || lines[target].trim() !== "") block.push("");
 			for (const [offset, text] of block.entries()) insertLine(lines, target + offset, text);
 			createdIds.push(id);
@@ -326,7 +342,7 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 			if (!source) continue;
 			replaceRange(lines, source.line, source.endLine, []);
 			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "") replaceRange(lines, source.line, source.line, []);
-			current = dropReferences(lines.join(document.lineEnding), edit.id);
+			current = dropReferences(lines.join(document.lineEnding), edit.id, "Ext");
 			continue;
 		} else if (edit.kind === "duplicateSubResource") {
 			const source = document.subResources.find((entry) => entry.id === edit.id);
@@ -352,10 +368,26 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 			if (!source) continue;
 			replaceRange(lines, source.line, source.endLine, []);
 			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "") replaceRange(lines, source.line, source.line, []);
-			current = dropReferences(lines.join(document.lineEnding), edit.id);
+			current = dropReferences(lines.join(document.lineEnding), edit.id, "Sub");
 			continue;
 		}
 		current = lines.join(document.lineEnding);
+	}
+	// Resource additions/removals change the number of load steps too. Do not
+	// rewrite the header for ordinary property edits (or ignored commands).
+	if (current !== text && edits.some((edit) => ["addExtResource", "deleteExtResource", "addSubResource", "duplicateSubResource", "deleteSubResource"].includes(edit.kind))) {
+		const document = parseResourceDocument(current);
+		if (document.headerLine >= 0) {
+			const lines = current.split(/\r?\n/);
+			const count = document.extResources.length + document.subResources.length + 1;
+			const header = lines[document.headerLine];
+			if (/\bload_steps\s*=\s*\d+/.test(header)) {
+				lines[document.headerLine] = header.replace(/\bload_steps\s*=\s*\d+/, `load_steps=${count}`);
+			} else if (count > 1) {
+				lines[document.headerLine] = header.replace(/\]$/, ` load_steps=${count}]`);
+			}
+			current = lines.join(document.lineEnding);
+		}
 	}
 	return { text: current, createdIds };
 }

@@ -75,4 +75,4 @@ function main(): void {
 	console.log(JSON.stringify({ ...release, packageVersion }, null, 2));
 }
 
-main();
+if (require.main === module) main();
