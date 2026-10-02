@@ -11,6 +11,14 @@
 
 <!-- generated-release-notes:start -->
 
+### 2.12.5 — 2026-10-03
+
+Changes since [v2.12.4](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.4...v2.12.5).
+
+#### Fixed
+
+- unblock the extension host, resolve inner-class members, publish changelog without PRs ([#99](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/99))
+
 ### 2.12.4 — 2026-10-03
 
 Changes since [v2.12.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.3...v2.12.4).
