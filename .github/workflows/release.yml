@@ -13,9 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  stable-release:
+  release:
     name: Stable release
-    if: ${{ !contains(github.ref_name, '.dev') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -49,14 +48,9 @@ jobs:
       - name: Compile
         run: npm run compile
 
-      - name: Validate stable release tag
+      - name: Validate release tag
         id: release
-        run: |
-          npx ts-node tools/release.ts "$GITHUB_REF_NAME"
-          if grep -q '^development=true$' "$GITHUB_OUTPUT"; then
-            echo "A development tag cannot use the stable release channel."
-            exit 1
-          fi
+        run: npx ts-node tools/release.ts "$GITHUB_REF_NAME"
 
       - name: Generate changelog and release notes from live tags
         run: |
@@ -67,7 +61,7 @@ jobs:
           fi
           npm run changelog -- --ref "$GITHUB_REF_NAME" --tag "$GITHUB_REF_NAME" --notes-file out/release-notes.md
 
-      - name: Package stable VSIX
+      - name: Package VSIX
         run: npx @vscode/vsce@latest package --out "${{ steps.release.outputs.asset }}"
 
       - name: Validate VSIX
@@ -76,15 +70,15 @@ jobs:
           unzip -t "${{ steps.release.outputs.asset }}"
           npx @vscode/vsce@latest ls --tree
 
-      - name: Upload stable VSIX artifact
+      - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: neo-godot-tools-stable-${{ github.ref_name }}
+          name: neo-godot-tools-${{ github.ref_name }}
           path: ${{ steps.release.outputs.asset }}
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create stable GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET: ${{ steps.release.outputs.asset }}
@@ -100,93 +94,4 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" "${ASSET}" \
               --verify-tag --title "$GITHUB_REF_NAME" --notes-file out/release-notes.md
-          fi
-
-  development-release:
-    name: Development pre-release
-    if: ${{ contains(github.ref_name, '.dev') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Validate TypeScript-only source tree
-        shell: bash
-        run: |
-          if git ls-files -- '*.js' | grep -q .; then
-            echo "Tracked JavaScript source files are not allowed."
-            git ls-files -- '*.js'
-            exit 1
-          fi
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Compile
-        run: npm run compile
-
-      - name: Validate development release tag
-        id: release
-        run: |
-          npx ts-node tools/release.ts "$GITHUB_REF_NAME"
-          if grep -q '^development=false$' "$GITHUB_OUTPUT"; then
-            echo "A stable tag cannot use the development release channel."
-            exit 1
-          fi
-
-      - name: Generate changelog and release notes from live tags
-        run: |
-          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")" ]; then
-            echo "The release tag moved after checkout; refusing to publish a mismatched VSIX."
-            exit 1
-          fi
-          npm run changelog -- --ref "$GITHUB_REF_NAME" --tag "$GITHUB_REF_NAME" --notes-file out/release-notes.md
-
-      - name: Package development VSIX
-        run: npx @vscode/vsce@latest package --pre-release --out "${{ steps.release.outputs.asset }}"
-
-      - name: Validate VSIX
-        run: |
-          test -s "${{ steps.release.outputs.asset }}"
-          unzip -t "${{ steps.release.outputs.asset }}"
-          npx @vscode/vsce@latest ls --tree
-
-      - name: Upload development VSIX artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: neo-godot-tools-development-${{ github.ref_name }}
-          path: ${{ steps.release.outputs.asset }}
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Create GitHub pre-release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ steps.release.outputs.asset }}
-        run: |
-          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")" ]; then
-            echo "The release tag was deleted or moved while packaging; refusing to publish."
-            exit 1
-          fi
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${ASSET}" --clobber
-            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --prerelease --notes-file out/release-notes.md
-          else
-            gh release create "$GITHUB_REF_NAME" "${ASSET}" \
-              --verify-tag --title "$GITHUB_REF_NAME" --prerelease --notes-file out/release-notes.md
           fi
