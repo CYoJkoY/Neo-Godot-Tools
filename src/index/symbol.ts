@@ -29,6 +29,10 @@ export interface IndexedSymbol {
 	uri: string;
 	range: SourceRange;
 	containerName?: string;
+	/** Range of the enclosing class declaration, for nested declarations. */
+	containerRange?: SourceRange;
+	/** Base class of an inner `class X extends Y:` declaration. */
+	extendsName?: string;
 	returnType?: string;
 	type?: string;
 	parameters?: IndexedParameter[];
@@ -80,6 +84,7 @@ export function declarationToSymbol(
 	containerName?: string,
 	source?: string,
 	sourceLines?: readonly string[],
+	containerRange?: SourceRange,
 ): IndexedSymbol | undefined {
 	if (!declaration.name || declaration.kind === "extends") return undefined;
 	const symbol: IndexedSymbol = {
@@ -88,7 +93,9 @@ export function declarationToSymbol(
 		uri,
 		range: declaration.range,
 		containerName,
+		containerRange,
 	};
+	if (declaration.kind === "class") symbol.extendsName = declaration.extendsName;
 	if (declaration.kind === "function") {
 		symbol.returnType = declaration.returnType;
 		symbol.static = declaration.static;
@@ -113,12 +120,12 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 	// Split once per file. Splitting in declarationToSymbol made symbol collection
 	// quadratic for scripts with many methods and documentation comments.
 	const sourceLines = source?.split(/\r?\n/);
-	const visit = (declarations: GDScriptDeclaration[], containerName?: string) => {
+	const visit = (declarations: GDScriptDeclaration[], containerName?: string, containerRange?: SourceRange) => {
 		for (const declaration of declarations) {
 			if (declaration.kind === "enum") {
 				// Named enums are types whose members are only reachable through the
 				// enum name; members of unnamed enums act as plain script constants.
-				const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines);
+				const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines, containerRange);
 				if (symbol) symbols.push(symbol);
 				for (const member of declaration.members) {
 					const documentation = sourceLines
@@ -130,15 +137,16 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 						uri,
 						range: member.range,
 						containerName: declaration.name ?? containerName,
+						containerRange,
 						type: declaration.name,
 						...(documentation ? { documentation } : {}),
 					});
 				}
 				continue;
 			}
-			const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines);
+			const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines, containerRange);
 			if (symbol) symbols.push(symbol);
-			if (declaration.kind === "class") visit(declaration.declarations, declaration.name);
+			if (declaration.kind === "class") visit(declaration.declarations, declaration.name, declaration.range);
 		}
 	};
 	visit(ast.declarations);

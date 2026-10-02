@@ -7,6 +7,54 @@ import { createLogger } from "../utils";
 
 const log = createLogger("scenes.parser");
 
+/**
+ * `script path -> resolved class name`.
+ *
+ * `resolve_script_type` is reached once per node while a scene is parsed; a
+ * scene whose nodes all carry scripts used to stat and read the same files
+ * hundreds of times on the extension host thread. The short TTL keeps edits
+ * visible without paying that cost per node.
+ */
+const SCRIPT_TYPE_CACHE_TTL_MS = 5_000;
+const scriptTypeCache = new Map<string, { type: string | undefined; checkedAt: number }>();
+
+function cached_script_type(scriptPath: string, resolve: () => string | undefined): string | undefined {
+	const cached = scriptTypeCache.get(scriptPath);
+	if (cached && Date.now() - cached.checkedAt < SCRIPT_TYPE_CACHE_TTL_MS) return cached.type;
+	const type = resolve();
+	scriptTypeCache.set(scriptPath, { type, checkedAt: Date.now() });
+	return type;
+}
+
+/**
+ * O(log n) line lookup for a file's text.
+ *
+ * The previous `slice(0, offset).split()` counted lines with a fresh string per
+ * resource entry, which is quadratic on scenes with tens of thousands of nodes.
+ */
+function lineResolver(text: string): (offset: number) => number {
+	const starts = [0];
+	for (let index = 0; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		if (code === 10) starts.push(index + 1);
+		else if (code === 13) {
+			if (text.charCodeAt(index + 1) === 10) index++;
+			starts.push(index + 1);
+		}
+	}
+	return (offset: number) => {
+		const bounded = Math.max(0, Math.min(offset, text.length));
+		let low = 0;
+		let high = starts.length;
+		while (low < high) {
+			const middle = (low + high) >>> 1;
+			if (starts[middle] <= bounded) low = middle + 1;
+			else high = middle;
+		}
+		return Math.max(0, low - 1) + 1;
+	};
+}
+
 export class SceneParser {
 	private static instance: SceneParser;
 	private preparingScenes = new Set<string>();
@@ -42,7 +90,7 @@ export class SceneParser {
 			return undefined;
 		}
 
-		return this.parse_text(filePath, text, (offset) => text.slice(0, offset).split(/\r?\n/).length);
+		return this.parse_text(filePath, text, lineResolver(text));
 	}
 
 	private prepare_scene(scene: Scene): void {
@@ -346,7 +394,7 @@ export class SceneParser {
 
 		const scriptPath = this.resolve_resource_path(scene.path, resource.path);
 		if (!scriptPath || !fs.existsSync(scriptPath)) return undefined;
-		return this.resolve_script_type(scriptPath, new Set<string>());
+		return cached_script_type(scriptPath, () => this.resolve_script_type(scriptPath, new Set<string>()));
 	}
 
 	private resolve_script_type(scriptPath: string, visited: Set<string>): string | undefined {

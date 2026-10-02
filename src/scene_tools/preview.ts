@@ -27,7 +27,7 @@ import {
 } from "../utils";
 import { SceneParser } from "./parser";
 import type { Scene, SceneNode } from "./types";
-import { apply_custom_class_icons } from "./node_icons";
+import { apply_custom_class_icons, invalidateNodeIconCaches } from "./node_icons";
 
 const log = createLogger("scenes.preview");
 
@@ -40,6 +40,10 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	public parser = new SceneParser();
 	public scene: Scene | undefined;
 	watcher = workspace.createFileSystemWatcher("**/*.tscn");
+	scriptWatcher = workspace.createFileSystemWatcher("**/*.gd");
+	private refreshInFlight = false;
+	private refreshQueued = false;
+	private pendingSceneChanges = new Map<string, ReturnType<typeof setTimeout>>();
 	uniqueDecorator = new UniqueDecorationProvider(this);
 	scriptDecorator = new ScriptDecorationProvider(this);
 
@@ -69,6 +73,12 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 			window.registerFileDecorationProvider(this.scriptDecorator),
 			this.watcher.onDidChange(this.on_file_changed.bind(this)),
 			this.watcher,
+			// Custom class icons come from `class_name` declarations, so script
+			// changes invalidate the cached scan instead of keeping stale icons.
+			this.scriptWatcher.onDidCreate(() => invalidateNodeIconCaches()),
+			this.scriptWatcher.onDidChange(() => invalidateNodeIconCaches()),
+			this.scriptWatcher.onDidDelete(() => invalidateNodeIconCaches()),
+			this.scriptWatcher,
 			this.tree.onDidChangeSelection(this.tree_selection_changed),
 			this.tree,
 		);
@@ -109,14 +119,31 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 		if (!uri.fsPath.endsWith(".tscn")) {
 			return;
 		}
-		setTimeout(async () => {
+		// Editors write scenes in bursts (save, format-on-save, git operations).
+		// Coalesce those events and run one parse per settle instead of a parse
+		// per notification, each of which blocked the extension host.
+		const pending = this.pendingSceneChanges.get(uri.fsPath);
+		if (pending) clearTimeout(pending);
+		this.pendingSceneChanges.set(
+			uri.fsPath,
+			setTimeout(() => {
+				this.pendingSceneChanges.delete(uri.fsPath);
+				void this.handle_scene_file_changed(uri);
+			}, 150),
+		);
+	}
+
+	private async handle_scene_file_changed(uri: vscode.Uri) {
+		try {
 			if (uri.fsPath === this.currentScene) {
-				this.refresh();
-			} else {
-				const document = await vscode.workspace.openTextDocument(uri);
-				this.parser.parse_scene(document);
+				await this.refresh();
+				return;
 			}
-		}, 20);
+			const document = await vscode.workspace.openTextDocument(uri);
+			this.parser.parse_scene(document);
+		} catch (error) {
+			log.debug(`Unable to refresh changed scene ${uri.fsPath}: ${String(error)}`);
+		}
 	}
 
 	public async text_editor_changed() {
@@ -159,7 +186,29 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneNode>, TreeDr
 	}
 
 	public async refresh() {
-		if (!fs.existsSync(this.currentScene)) {
+		// Scene refreshes are triggered by editor switches, file watchers and the
+		// refresh command; overlapping runs used to stack parses on the extension
+		// host. Keep one run in flight and coalesce the rest.
+		if (this.refreshInFlight) {
+			this.refreshQueued = true;
+			return;
+		}
+		this.refreshInFlight = true;
+		try {
+			await this.apply_refresh();
+		} catch (error) {
+			log.debug(`Scene Preview refresh failed: ${String(error)}`);
+		} finally {
+			this.refreshInFlight = false;
+			if (this.refreshQueued) {
+				this.refreshQueued = false;
+				void this.refresh();
+			}
+		}
+	}
+
+	private async apply_refresh() {
+		if (!this.currentScene || !fs.existsSync(this.currentScene)) {
 			return;
 		}
 

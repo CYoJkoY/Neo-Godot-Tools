@@ -47,27 +47,33 @@ jobs:
       - name: Rebuild changelog
         run: npm run changelog
 
-      - name: Open or update changelog pull request
+      # Prefer a reviewable pull request. Repositories with
+      # "Allow GitHub Actions to create and approve pull requests" disabled make
+      # every Actions-created PR fail with a policy error, which used to leave
+      # the generated changelog unpublished and the workflow red; the script
+      # falls back to committing it directly to the default branch.
+      - name: Publish changelog update
         id: changelog_pr
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ github.token }}
-          branch: automation/changelog
-          base: ${{ github.event.repository.default_branch }}
-          add-paths: CHANGELOG.md
-          commit-message: "docs(changelog): refresh tag-based release notes"
-          title: "docs(changelog): synchronize live release tags"
-          body: |
-            Rebuilds only the generated release-note block from the current Git tags.
-            Manual history and Unreleased notes are preserved.
-
-            Deleted or moved tags are recomputed; stable releases include all
-            commits since the previous reachable stable tag. No direct writes
-            are made to the protected default branch.
-          delete-branch: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CHANGELOG_DIRECT_PUSH: ${{ vars.CHANGELOG_DIRECT_PUSH }}
+        run: bash tools/publish_changelog.sh
 
       - name: Run CI for the bot pull request
         if: ${{ steps.changelog_pr.outputs.pull-request-operation == 'created' || steps.changelog_pr.outputs.pull-request-operation == 'updated' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run ci.yml --ref automation/changelog
+
+      - name: Summarize the publish path
+        if: always()
+        env:
+          OPERATION: ${{ steps.changelog_pr.outputs.pull-request-operation }}
+        run: |
+          case "${OPERATION:-none}" in
+            created|updated) echo "Changelog published through a pull request." ;;
+            direct) echo "Changelog committed directly to the default branch (pull requests are not permitted for Actions)." ;;
+            *) echo "Changelog already up to date; nothing was published." ;;
+          esac

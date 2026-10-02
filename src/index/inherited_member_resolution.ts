@@ -1,6 +1,6 @@
 import { GDScriptDeclaration } from "../analyzer/index.js";
 import { FileIndex } from "./file_index.js";
-import { IndexedSymbol } from "./symbol.js";
+import { IndexedFile, IndexedSymbol } from "./symbol.js";
 import { SymbolIndex } from "./symbol_index.js";
 
 /** Member kinds that can be resolved through `receiver.name` expressions. */
@@ -19,6 +19,58 @@ export class InheritedMemberResolver {
 
 	resolve(uri: string, name: string, containerName?: string): IndexedSymbol | undefined {
 		return this.resolveInHierarchy(uri, name, new Set<string>(), containerName);
+	}
+
+	/**
+	 * Resolves `name` against a specific class declaration (an inner class or a
+	 * `class_name` script), following that class's own `extends` chain.
+	 *
+	 * Passing the class symbol instead of a name keeps `self.run()` and
+	 * `Worker.run()` correct when several nested classes define `run`.
+	 */
+	resolveInClass(uri: string, classSymbol: IndexedSymbol, name: string): IndexedSymbol | undefined {
+		return this.resolveInClassHierarchy(uri, classSymbol, name, new Set<string>());
+	}
+
+	private resolveInClassHierarchy(
+		uri: string,
+		classSymbol: IndexedSymbol,
+		name: string,
+		visited: Set<string>,
+	): IndexedSymbol | undefined {
+		const key = `${uri}#${classSymbol.range.start.offset}`;
+		if (visited.has(key)) return undefined;
+		visited.add(key);
+
+		const file = this.files.get(uri);
+		if (!file) return undefined;
+
+		const own = file.symbols.find((symbol) =>
+			MEMBER_KINDS.has(symbol.kind) &&
+			symbol.name === name &&
+			(this.belongsToClass(symbol, classSymbol) || this.belongsToClassByName(file, symbol, classSymbol)),
+		);
+		if (own) return own;
+
+		const reference = classSymbol.extendsName ? normalizeScriptReference(classSymbol.extendsName) : "";
+		if (!reference) return undefined;
+		if (reference.startsWith("res://") || reference.endsWith(".gd")) {
+			const base = this.resolveScriptPath(reference);
+			return base?.uri ? this.resolveInHierarchy(base.uri, name, new Set<string>()) : undefined;
+		}
+		const sameFile = file.symbols.filter((symbol) => symbol.kind === "class" && symbol.name === reference);
+		if (sameFile.length === 1) return this.resolveInClassHierarchy(uri, sameFile[0], name, visited);
+		return this.resolve(uri, name);
+	}
+
+	private belongsToClass(symbol: IndexedSymbol, classSymbol: IndexedSymbol): boolean {
+		return Boolean(symbol.containerRange) && symbol.containerRange!.start.offset === classSymbol.range.start.offset;
+	}
+
+	private belongsToClassByName(file: IndexedFile, symbol: IndexedSymbol, classSymbol: IndexedSymbol): boolean {
+		// Fallback for symbols built without `containerRange` (older callers or
+		// hand-written test fixtures).
+		return symbol.uri === file.uri && Boolean(symbol.containerName) && symbol.containerName === classSymbol.name;
 	}
 
 	private resolveInHierarchy(uri: string, name: string, visited: Set<string>, containerName?: string): IndexedSymbol | undefined {
@@ -57,13 +109,7 @@ export class InheritedMemberResolver {
 
 	private resolveScriptPath(value: string): { uri: string } | undefined {
 		const path = normalizeScriptReference(value).replace(/^res:\/\//, "").replace(/^\/+/, "");
-		const matches = [...this.files.values()].filter((file) => {
-			try {
-				return decodeURIComponent(new URL(file.uri).pathname).replace(/^\/+/, "").endsWith(path);
-			} catch {
-				return file.uri.endsWith(path);
-			}
-		});
-		return matches.length === 1 ? { uri: matches[0].uri } : undefined;
+		const uri = this.files.findByPathSuffix(path);
+		return uri ? { uri } : undefined;
 	}
 }

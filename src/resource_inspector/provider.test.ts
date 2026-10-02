@@ -12,6 +12,7 @@ import {
 	ResourceInspectorProvider,
 	ResourceModel,
 } from "./provider.js";
+import { scriptClassNameIndex } from "./script_index.js";
 
 const configuration = (vscode as unknown as { __configuration: Record<string, unknown> }).__configuration;
 
@@ -448,5 +449,51 @@ shader_param/strength = 0.8
 		assert.equal(formatPropertyValue("Vector2(1, 2)"), "Vector2(1, 2)");
 		assert.equal(formatPropertyValue("  3.0  "), "3.0");
 		assert.equal(formatPropertyValue('&"Hero"'), '&"Hero"');
+	});
+	it("finishes a model build when the language server never answers", async () => {
+		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) };
+		const provider = new ResourceInspectorProvider(context as unknown as vscode.ExtensionContext, {
+			lspClient: () => ({ sendRequest: () => new Promise(() => {}) }),
+			lspTimeoutMs: 25,
+		});
+		try {
+			const uri = vscode.Uri.file(path.join(os.tmpdir(), "hung-lsp.tres"));
+			const text = '[gd_resource type="StandardMaterial3D" format=3]\n[resource]\nroughness = 0.5\n';
+			const started = Date.now();
+			const model = await provider.buildModel(makeDocument(uri, text));
+			assert.ok(Date.now() - started < 2_000, "an unanswered metadata request must not hang the inspector");
+			assert.equal(model.resourceType, "StandardMaterial3D");
+			assert.equal(model.properties.find((property) => property.name === "roughness")?.raw, "0.5");
+			// A timeout must not poison the cache: the next build must try again
+			// instead of reusing a permanently pending promise.
+			const second = await provider.buildModel(makeDocument(uri, text));
+			assert.equal(second.resourceType, "StandardMaterial3D");
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("finds class_name scripts through the asynchronous index", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-script-index-"));
+		const workspace = vscode.workspace as unknown as {
+			workspaceFolders: unknown;
+			findFiles: unknown;
+		};
+		const previousFolders = workspace.workspaceFolders;
+		const previousFindFiles = workspace.findFiles;
+		try {
+			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
+			fs.writeFileSync(path.join(root, "hero.gd"), "class_name Hero\nextends Resource\n");
+			workspace.workspaceFolders = [{ uri: vscode.Uri.file(root), name: "project", index: 0 }];
+			workspace.findFiles = async () => [];
+			scriptClassNameIndex.invalidate();
+			const found = await scriptClassNameIndex.find("Hero", vscode.Uri.file(path.join(root, "hero.tres")));
+			assert.equal(found?.fsPath, path.join(root, "hero.gd"));
+		} finally {
+			workspace.workspaceFolders = previousFolders;
+			workspace.findFiles = previousFindFiles;
+			scriptClassNameIndex.invalidate();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
