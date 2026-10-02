@@ -11,6 +11,14 @@
 
 <!-- generated-release-notes:start -->
 
+### 2.12.4 — 2026-10-03
+
+Changes since [v2.12.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.3...v2.12.4).
+
+#### Fixed
+
+- improve Tres inspector and automate tag-based release notes ([#98](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/98))
+
 ### 2.12.3 — 2026-10-02
 
 Changes since [v2.12.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.2...v2.12.3).
