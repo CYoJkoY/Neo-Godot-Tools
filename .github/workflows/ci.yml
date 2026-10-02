@@ -1,6 +1,6 @@
 name: Continuous integration
 
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
   build:
@@ -26,6 +26,11 @@ jobs:
             git ls-files -- '*.js'
             exit 1
           fi
+
+      - name: Unit and release tooling tests
+        run: |
+          npm run test:unit
+          npm run test:release
 
       - name: Lint and build extension
         run: |

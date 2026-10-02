@@ -148,6 +148,12 @@ When the selected Godot version supports headless LSP operation, Neo Godot Tools
 
 The inspector understands both Godot 3 and Godot 4 text-resource syntax, including `PoolColorArray`, `Transform`, `StringName("…")` and `ExtResource( 1 )`.
 
+- Resource properties use a single selector with Browse/Open actions, and controls adapt to a narrow sidebar without overlapping.
+- Range properties provide synchronized sliders and number fields with bounds, step sizes and Godot's `or_greater`/`or_less` flags. Bit flags can be combined with checkboxes.
+- Image references and image-path strings show thumbnails. Hover or focus the path/thumbnail for a larger preview and dimensions; click the thumbnail to open the image. Inline previews stay inside the project/workspace and show an explanation for missing or unsupported formats.
+- **Modified** compares known script or built-in defaults, including when native LSP metadata is available. If the actual default cannot be determined, Revert removes the explicit override rather than guessing a type's zero value.
+- New external-resource IDs continue after the largest numeric prefix in the file. Existing IDs are preserved, including Godot 3's numeric reference syntax.
+
 ## Architecture
 
 Neo Godot Tools is no longer a thin wrapper around the upstream Godot Tools architecture. The current implementation is organized around a local-first language intelligence pipeline:

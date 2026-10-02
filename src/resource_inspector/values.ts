@@ -303,13 +303,13 @@ function parseDictionaryBody(body: string): { entries: DictionaryEntry[]; error?
 	const entries: DictionaryEntry[] = [];
 	let error: string | undefined;
 	for (const part of splitTopLevel(body)) {
-		const separator = part.indexOf(":");
-		if (separator === -1) {
+		const pair = splitTopLevel(part, ":");
+		if (pair.length !== 2) {
 			error = `invalid dictionary entry: ${part}`;
 			continue;
 		}
-		const key = parseVariant(part.slice(0, separator));
-		const value = parseVariant(part.slice(separator + 1));
+		const key = parseVariant(pair[0]);
+		const value = parseVariant(pair[1]);
 		error = error ?? key.error ?? value.error;
 		entries.push({ key: key.value, value: value.value });
 	}
@@ -415,7 +415,7 @@ export function parseVariant(raw: string): ParseResult {
 		if (PACKED_ARRAYS[name]) {
 			// A lone quoted argument is a base64 payload (Godot writes those for
 			// `PackedByteArray`); it is kept verbatim instead of being edited.
-			if (args.length === 1 && parseQuoted(args[0])) {
+			if (PACKED_ARRAYS[name] === "PackedByteArray" && args.length === 1 && parseQuoted(args[0])) {
 				return { value: { kind: PACKED_ARRAYS[name], raw: text, typeName: name } };
 			}
 			const items = args.map((item) => parseVariant(item));
@@ -572,4 +572,50 @@ export function valueMatchesType(value: VariantValue, type: string): boolean {
 	if (expected === "int") return value.kind === "int" || value.kind === "float";
 	if (expected === "float") return value.kind === "float" || value.kind === "int";
 	return value.kind === expected;
+}
+
+/**
+ * Compares known literals without rewriting their original spelling. Formatting
+ * differences (1 vs 1.0, whitespace, constructor aliases, dictionary order) do
+ * not make an override; different string contents and unknown expressions do.
+ */
+export function variantValuesEqual(leftText: string, rightText: string): boolean {
+	const left = parseVariant(leftText);
+	const right = parseVariant(rightText);
+	if (left.error || right.error) return false;
+	return equalVariant(left.value, right.value);
+}
+
+function equalVariant(left: VariantValue, right: VariantValue): boolean {
+	const numeric = (value: VariantValue) => value.kind === "int" || value.kind === "float";
+	if (numeric(left) && numeric(right)) {
+		if (left.kind === "int" && right.kind === "int") return BigInt(left.raw) === BigInt(right.raw);
+		// Do not lose int64 precision and accidentally mark a different integer
+		// as the default because JavaScript rounded both to the same number.
+		if ((left.kind === "int" && !Number.isSafeInteger(left.number)) || (right.kind === "int" && !Number.isSafeInteger(right.number))) return false;
+		return left.number === right.number || (Number.isNaN(left.number) && Number.isNaN(right.number));
+	}
+	if (left.kind !== right.kind) return false;
+	if (left.kind === "bool") return left.number === right.number;
+	if (left.kind === "ExtResource" || left.kind === "SubResource") return left.referenceId === right.referenceId;
+	if (left.components || right.components) {
+		return Boolean(left.components && right.components && left.components.length === right.components.length && left.components.every((component, index) => component === right.components![index]));
+	}
+	if (left.text !== undefined || right.text !== undefined) return left.text === right.text;
+	if (left.items || right.items) {
+		return Boolean(left.items && right.items && left.items.length === right.items.length && left.items.every((item, index) => equalVariant(item, right.items![index])));
+	}
+	if (left.entries && right.entries) {
+		if (left.entries.length !== right.entries.length) return false;
+		const remaining = right.entries.slice();
+		return left.entries.every((entry) => {
+			const index = remaining.findIndex((other) => equalVariant(entry.key, other.key) && equalVariant(entry.value, other.value));
+			if (index < 0) return false;
+			remaining.splice(index, 1);
+			return true;
+		});
+	}
+	if (["null", "nil"].includes(left.raw) && ["null", "nil"].includes(right.raw)) return true;
+	// Opaque values/base64 payloads remain conservative: no guessed defaults.
+	return left.raw.trim() === right.raw.trim();
 }

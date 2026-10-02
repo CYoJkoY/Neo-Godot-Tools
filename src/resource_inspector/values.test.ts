@@ -1,3 +1,4 @@
+import { variantValuesEqual } from "./values.js";
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
@@ -261,5 +262,28 @@ describe("resource inspector variant values", () => {
 		assert.ok(valueMatchesType(parseVariant("Transform(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)").value, "Transform3D"));
 		assert.ok(valueMatchesType(parseVariant('StringName("x")').value, "StringName"));
 		assert.ok(valueMatchesType(parseVariant("nil").value, "Texture2D"));
+	});
+});
+
+
+describe("resource default value comparison", () => {
+	it("compares parsed literals rather than formatting", () => {
+		for (const [left, right] of [
+			["1.0", "1"], ["-0.0", "0.0"], ["1e-3", "0.001"],
+			["Vector2(1,2)", "Vector2(1.0, 2.0)"], ["Quat(0, 0, 0, 1)", "Quaternion(0.0, 0, 0, 1)"],
+			['ExtResource( 2 )', 'ExtResource("2")'], ['&"name"', 'StringName("name")'],
+			['Array[int]([1, 2])', '[1.0, 2]'], ['PoolRealArray(0, 1)', 'PackedFloat32Array(0.0, 1.0)'],
+			['{"res://icon.png": 1, "b": [2]}', '{ "b": [2.0], "res://icon.png": 1.0 }'],
+			['PackedStringArray("a")', 'PackedStringArray( "a" )'], ["nil", "null"],
+		]) assert.equal(variantValuesEqual(left, right), true, `${left} == ${right}`);
+	});
+
+	it("does not equate non-default content or lose int64 precision", () => {
+		for (const [left, right] of [
+			["1", "2"], ["true", "1"], ['"a b"', '"ab"'], ['"a "', '"a"'],
+			["Vector2(1, 3)", "Vector2(1, 2)"], ['ExtResource("1")', 'SubResource("1")'],
+			["[1, 2]", "[2, 1]"], ['{"a": 1}', '{"a": 2}'],
+			["9007199254740993", "9007199254740992"], ["DEFAULT_HP", "100"], ["DEFAULT_HP", "DEFAULT_HP"],
+		]) assert.equal(variantValuesEqual(left, right), false, `${left} != ${right}`);
 	});
 });

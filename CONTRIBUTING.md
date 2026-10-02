@@ -126,6 +126,13 @@ Stable tags use `v2.8.0`; development tags use `v2.8.0.dev1`, `v2.8.0.dev2`, and
 
 Release validation must reject a tag whose base version does not match `package.json` and must not mutate the source version.
 
+Release notes are generated from live tag ranges. See [Tag-based release notes](docs/release-notes.md) for deletion/retag behavior, the changelog-sync PR workflow and package-time notes. To validate the tooling locally:
+
+```bash
+npm run changelog -- --check
+npm run test:release
+```
+
 ## Development debug server
 
 When the extension is running in debug mode (`VSCODE_DEBUG_MODE=true`), a development HTTP server starts on port 7331. It provides runtime inspection of extension state:

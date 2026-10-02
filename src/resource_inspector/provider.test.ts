@@ -209,6 +209,8 @@ describe("resource inspector provider", () => {
 				assert.equal(byName.get("max_hp")?.raw, "100");
 				assert.equal(byName.get("max_hp")?.definedInFile, false);
 				assert.equal(byName.get("attack")?.raw, "15");
+				assert.equal(byName.get("attack")?.modified, false);
+				assert.equal(byName.get("attack")?.metadata?.defaultValue, "15");
 				assert.equal(byName.get("attack")?.metadata?.category, "Combat");
 				assert.equal(byName.get("mana")?.raw, "50.0");
 				assert.equal(byName.get("icon")?.raw, "null");
@@ -258,6 +260,153 @@ shader_param/strength = 0.8
 			assert.equal(codeProp?.widget.kind, "textarea");
 		} finally {
 			provider.dispose();
+		}
+	});
+
+	it("keeps the newest metadata result even when the .tres version is unchanged", async () => {
+		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context);
+		const document = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "metadata-refresh.tres")), '[gd_resource type="Resource" format=3]\n[resource]\n');
+		const model = await provider.buildModel(document);
+		let resolveOld: (model: ResourceModel) => void = () => {};
+		const old = new Promise<ResourceModel>((resolve) => { resolveOld = resolve; });
+		let calls = 0;
+		provider.buildModel = async () => ++calls === 1 ? old : model;
+		const posted: Array<{ type: string; model: ResourceModel }> = [];
+		const webview = { options: {}, postMessage: async (message: { type: string; model: ResourceModel }) => { posted.push(message); return true; } } as unknown as vscode.Webview;
+		const protocol = provider as unknown as { sendModel(document: vscode.TextDocument, webview: vscode.Webview, updateDiagnostics: boolean): Promise<void> };
+		try {
+			const pending = protocol.sendModel(document, webview, false);
+			await protocol.sendModel(document, webview, false);
+			const latestRoots = webview.options.localResourceRoots;
+			resolveOld({ ...model, resourceType: "Outdated metadata" });
+			await pending;
+			assert.equal(posted.length, 1);
+			assert.equal(posted[0].model.resourceType, model.resourceType);
+			assert.equal(webview.options.localResourceRoots, latestRoots);
+		} finally { provider.dispose(); }
+	});
+
+	it("does not let delayed metadata replace a newly selected resource or its preview roots", async () => {
+		let resolveNative: (value: unknown) => void = () => {};
+		const native = new Promise((resolve) => { resolveNative = resolve; });
+		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context, { lspClient: () => ({ sendRequest: async () => native }) });
+		const posted: unknown[] = [];
+		const initialRoots = [vscode.Uri.file("/unchanged-preview-root")];
+		const webview = { options: { localResourceRoots: initialRoots }, postMessage: async (message: unknown) => { posted.push(message); return true; } } as unknown as vscode.Webview;
+		const protocol = provider as unknown as { panelUri: vscode.Uri; view: { webview: vscode.Webview }; sendModel(document: vscode.TextDocument, webview: vscode.Webview, updateDiagnostics: boolean): Promise<void> };
+		const first = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "first.tres")), '[gd_resource type="Resource" format=3]\n[resource]\n');
+		const second = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "second.tres")), '[gd_resource type="Resource" format=3]\n[resource]\n');
+		try {
+			protocol.view = { webview };
+			protocol.panelUri = first.uri;
+			const pending = protocol.sendModel(first, webview, false);
+			protocol.panelUri = second.uri;
+			resolveNative({ children: [{ name: "resource_name", kind: 7, detail: "var Resource.resource_name: String" }] });
+			await pending;
+			assert.equal(posted.length, 0);
+			assert.equal(webview.options.localResourceRoots, initialRoots);
+			await protocol.sendModel(second, webview, false);
+			assert.equal(posted.length, 1);
+			assert.notEqual(webview.options.localResourceRoots, initialRoots);
+		} finally { provider.dispose(); }
+	});
+
+	it("compares real defaults with LSP connected, for resources and sub-resources", async () => {
+		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context, { lspClient: () => ({ sendRequest: async () => ({ children: [
+			{ name: "roughness", kind: 7, detail: "var StandardMaterial3D.roughness: float" },
+			{ name: "unknown_native", kind: 7, detail: "var StandardMaterial3D.unknown_native: float" },
+			{ name: "native_default", kind: 7, detail: "var StandardMaterial3D.native_default: float = 2.0" },
+			{ name: "unserialized", kind: 7, detail: "var StandardMaterial3D.unserialized: int" },
+			{ name: "method", kind: 6, detail: "func StandardMaterial3D.method()" },
+		] }) }) });
+		try {
+			const text = `[gd_resource type="StandardMaterial3D" format=3]\n[sub_resource type="StandardMaterial3D" id="Material_1"]\nroughness = 0.2\nunknown_native = 0.0\n[resource]\nroughness = 1\nunknown_native = 0.0\nnative_default = 2\n`;
+			const model = await provider.buildModel(makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "material.tres")), text));
+			const byName = new Map(model.properties.map((prop) => [prop.name, prop]));
+			assert.equal(byName.get("roughness")?.modified, false, "1 and 1.0 are the same default");
+			assert.equal(byName.get("roughness")?.metadata?.defaultValue, "1.0");
+			assert.equal(byName.get("roughness")?.widget.max, 1, "LSP must not erase range hints");
+			assert.equal(byName.get("unknown_native")?.modified, true);
+			assert.equal(byName.get("unknown_native")?.metadata?.defaultValue, undefined);
+			assert.equal(byName.get("native_default")?.modified, false);
+			assert.equal(byName.get("unserialized")?.definedInFile, false);
+			assert.equal(byName.get("unserialized")?.modified, false);
+			assert.equal(byName.get("unserialized")?.metadata?.defaultValue, undefined, "a placeholder is not a native default");
+			assert.ok(!byName.has("method"), "native methods are not properties");
+			assert.equal(model.subResources[0].properties.find((prop) => prop.name === "roughness")?.modified, true);
+			assert.equal(model.subResources[0].properties.find((prop) => prop.name === "unknown_native")?.metadata?.defaultValue, undefined);
+		} finally { provider.dispose(); }
+	});
+
+	it("provides scoped previews for external, string and atlas image paths", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-images-"));
+		const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-outside-"));
+		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context);
+		try {
+			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
+			fs.writeFileSync(path.join(root, "icon with space.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+			fs.writeFileSync(path.join(root, "image.dds"), "unsupported");
+			fs.writeFileSync(path.join(outside, "private.png"), "outside project");
+			fs.symlinkSync(path.join(outside, "private.png"), path.join(root, "escape.png"));
+			const text = `[gd_resource type="Resource" format=3]\n[ext_resource type="Texture2D" path="res://icon with space.svg" id="2_tex"]\n[ext_resource type="Texture2D" path="res://missing.png" id="3_tex"]\n[sub_resource type="AtlasTexture" id="Atlas_1"]\natlas = ExtResource("2_tex")\n[resource]\nicon = ExtResource("2_tex")\nimage_file = "res://icon with space.svg"\natlas_icon = SubResource("Atlas_1")\nunsupported = "res://image.dds"\nunsafe_image = "res://escape.png"\n`;
+			const doc = makeDocument(vscode.Uri.file(path.join(root, "thing.tres")), text);
+			const webview = { asWebviewUri: (uri: vscode.Uri) => vscode.Uri.parse(`https://images.example${uri.path}`) } as vscode.Webview;
+			const model = await provider.buildModel(doc, webview);
+			const byName = new Map(model.properties.map((prop) => [prop.name, prop]));
+			for (const name of ["icon", "image_file", "atlas_icon"]) {
+				assert.equal(byName.get(name)?.imagePreview?.path, "res://icon with space.svg");
+				assert.ok(byName.get(name)?.imagePreview?.uri?.startsWith("https://images.example/"));
+			}
+			assert.equal(model.subResources[0].properties.find((prop) => prop.name === "atlas")?.imagePreview?.path, "res://icon with space.svg");
+			assert.equal(model.extResources[0].imagePreview?.uri, byName.get("icon")?.imagePreview?.uri);
+			assert.equal(model.extResources[1].imagePreview?.message, "Image file is missing.");
+			assert.equal(byName.get("unsupported")?.imagePreview?.uri, undefined);
+			assert.match(byName.get("unsupported")?.imagePreview?.message ?? "", /cannot be previewed/);
+			assert.equal(byName.get("unsafe_image")?.imagePreview?.uri, undefined);
+			assert.match(byName.get("unsafe_image")?.imagePreview?.message ?? "", /restricted/);
+			assert.equal(resolveResourceUri(doc.uri, path.join(root, "icon with space.svg"))?.fsPath, path.join(root, "icon with space.svg"));
+			assert.equal(resolveResourceUri(doc.uri, "https://example.com/image.png"), undefined);
+		} finally {
+			provider.dispose();
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	it("picks legacy resources sequentially and reverts unknown defaults by removing overrides", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-edits-"));
+		const oldOpen = vscode.workspace.openTextDocument;
+		const oldApply = vscode.workspace.applyEdit;
+		const oldDialog = vscode.window.showOpenDialog;
+		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context);
+		try {
+			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
+			const uri = vscode.Uri.file(path.join(root, "thing.tres"));
+			const text = `[gd_resource type="Resource" load_steps=3 format=2]\n[ext_resource type="Texture" path="res://a.png" id=2]\n[ext_resource type="Texture" path="res://b.png" id=7]\n[resource]\nhealth = 30\n`;
+			const document = makeDocument(uri, text);
+			(vscode.workspace as { openTextDocument: unknown }).openTextDocument = async () => document;
+			let edited = "";
+			(vscode.workspace as { applyEdit: unknown }).applyEdit = async (edit: { edits: Array<{ newText: string }> }) => { edited = edit.edits[0].newText; return true; };
+			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = async () => [vscode.Uri.file(path.join(root, "new.png"))];
+			const protocol = provider as unknown as { onMessage(uri: vscode.Uri, message: Record<string, unknown>): Promise<void> };
+			await protocol.onMessage(uri, { command: "pickResource", name: "icon" });
+			assert.ok(edited.includes('path="res://new.png" id=8]'));
+			assert.ok(edited.includes("icon = ExtResource( 8 )"));
+			assert.ok(edited.includes('type="Texture"'));
+			assert.ok(edited.includes("load_steps=4"));
+			await protocol.onMessage(uri, { command: "revertProperty", name: "health", defaultValue: "0" });
+			assert.ok(!edited.includes("health ="), "never trust a guessed/stale default from the webview");
+		} finally {
+			(vscode.workspace as { openTextDocument: unknown }).openTextDocument = oldOpen;
+			(vscode.workspace as { applyEdit: unknown }).applyEdit = oldApply;
+			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = oldDialog;
+			provider.dispose();
+			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 
