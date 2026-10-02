@@ -178,5 +178,13 @@ describe("resource document editing", () => {
 		assert.equal(rewriteReferences('a = SubResource("X")', "X", "Y"), 'a = SubResource("Y")');
 		assert.equal(rewriteReferences('a = ExtResource("X")', "X", "Y"), 'a = ExtResource("Y")');
 		assert.equal(rewriteReferences('a = SubResource("Other")', "X", "Y"), 'a = SubResource("Other")');
+		assert.equal(rewriteReferences("a = SubResource( 63 )", "63", "70"), "a = SubResource( 70 )");
+		assert.equal(rewriteReferences("a = SubResource( 63 )", "63", "Shader_1"), 'a = SubResource("Shader_1")');
+	});
+
+	it("deletes an external resource and drops its references", () => {
+		const result = applyResourceEdits(SOURCE, [{ kind: "deleteExtResource", id: "1_script" }]);
+		assert.ok(!result.text.includes("[ext_resource"));
+		assert.ok(result.text.includes("script = null"));
 	});
 });

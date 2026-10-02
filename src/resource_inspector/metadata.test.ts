@@ -3,10 +3,13 @@ import { describe, it } from "node:test";
 import { parseResourceDocument } from "./document.js";
 import {
 	collectPropertyMetadata,
+	defaultValueForType,
 	enumOptions,
 	inferTypeFromValue,
 	parseRangeHint,
+	parseScriptBaseClass,
 	parseScriptExports,
+	parseShaderUniforms,
 	widgetForProperty,
 } from "./metadata.js";
 import { parseVariant } from "./values.js";
@@ -147,5 +150,41 @@ speed = 9.0
 		assert.equal(health?.type, "int");
 		const script = metadata.find((property) => property.name === "script");
 		assert.equal(script?.type, "Script");
+	});
+
+	it("parses Godot 3 exports, setter suffixes, inline comments and shader uniforms", () => {
+		const legacyScript = `extends "res://base.gd"
+export(int) var hp = 50 # inline comment
+export(float, 0.0, 5.0, 0.25) var speed = 1.5:
+	set(v):
+		speed = v
+export(String, "Easy", "Hard") var difficulty = "Easy"
+`;
+		assert.equal(parseScriptBaseClass(legacyScript), "res://base.gd");
+		const exports = parseScriptExports(legacyScript);
+		assert.equal(exports.length, 3);
+		assert.equal(exports[0].name, "hp");
+		assert.equal(exports[0].type, "int");
+		assert.equal(exports[0].defaultValue, "50");
+		assert.equal(exports[1].name, "speed");
+		assert.equal(exports[1].type, "float");
+		assert.equal(exports[1].hint, "range");
+		assert.equal(exports[1].defaultValue, "1.5");
+		assert.equal(exports[2].name, "difficulty");
+		assert.equal(exports[2].type, "String");
+		assert.equal(exports[2].hint, "enum");
+
+		const uniforms = parseShaderUniforms(
+			`shader_type canvas_item;\nuniform float strength: hint_range(0., 1.) = 0.5;\nuniform vec4 tint: source_color = vec4(1.0, 0.5, 0.0, 1.0);`,
+			"shader_param/",
+		);
+		assert.equal(uniforms.length, 2);
+		assert.equal(uniforms[0].name, "shader_param/strength");
+		assert.equal(uniforms[0].hint, "range");
+		assert.equal(uniforms[0].defaultValue, "0.5");
+		assert.equal(uniforms[1].name, "shader_param/tint");
+		assert.equal(uniforms[1].type, "Color");
+		assert.equal(defaultValueForType("Vector2"), "Vector2(0, 0)");
+		assert.equal(defaultValueForType("Array[int]"), "Array[int]([])");
 	});
 });
