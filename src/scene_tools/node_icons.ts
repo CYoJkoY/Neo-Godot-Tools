@@ -2,16 +2,25 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Scene, SceneNode } from "./types";
 import { get_extension_uri } from "../utils";
+import { yieldToEventLoop } from "../utils/scheduling";
 
 const ICON_ROOT = get_extension_uri("resources", "godot_icons").fsPath;
 const DEFAULT_NODE_ICON = "Node";
+/** Skip pathological files while scanning scripts for custom classes. */
+const MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
+const CLASS_INDEX_TTL_MS = 60_000;
+/** Icon file existence never changes while the extension runs. */
+const iconCache = new Map<string, boolean>();
 
 function icon_exists(className: string): boolean {
 	if (!className) return false;
-	return (
+	const cached = iconCache.get(className);
+	if (cached !== undefined) return cached;
+	const exists =
 		fs.existsSync(path.join(ICON_ROOT, "light", `${className}.svg`)) ||
-		fs.existsSync(path.join(ICON_ROOT, "dark", `${className}.svg`))
-	);
+		fs.existsSync(path.join(ICON_ROOT, "dark", `${className}.svg`));
+	iconCache.set(className, exists);
+	return exists;
 }
 
 function res_to_abs(projectDir: string, resPath: string): string | undefined {
@@ -41,59 +50,114 @@ function script_extends(source: string): string | undefined {
 	return cs?.[1];
 }
 
+/**
+ * `class_name` -> script path for the current project.
+ *
+ * The scan walks the project once, reads scripts asynchronously and yields
+ * between directories: it runs while the user is browsing scenes, and doing it
+ * synchronously froze the extension host on large projects.
+ */
 class ClassNameIndex {
 	private readonly byName = new Map<string, string>();
 	private projectDir = "";
+	private builtAt = 0;
+	private generation = 0;
+	private building?: Promise<void>;
 
 	async refresh(scenePath: string): Promise<void> {
 		const dir = find_project_dir(scenePath);
 		if (!dir) return;
-		if (dir === this.projectDir && this.byName.size > 0) return;
-		this.projectDir = dir;
-		this.byName.clear();
-		await this.walk(dir);
-	}
-
-	private async walk(dir: string): Promise<void> {
-		const skip = new Set([".git", ".godot", ".vscode", "bin", "build", "node_modules"]);
-		const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-		for (const entry of entries) {
-			if (entry.name.startsWith(".") && entry.name !== ".godot") continue;
-			if (skip.has(entry.name)) continue;
-			const full = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				await this.walk(full);
-				continue;
-			}
-			const ext = path.extname(entry.name).toLowerCase();
-			if (ext === ".gd" || ext === ".cs") this.index_file(full);
+		const fresh = dir === this.projectDir && this.byName.size > 0 && Date.now() - this.builtAt < CLASS_INDEX_TTL_MS;
+		if (fresh) return;
+		if (this.building) {
+			await this.building;
+			const stillFresh = dir === this.projectDir && this.byName.size > 0 && Date.now() - this.builtAt < CLASS_INDEX_TTL_MS;
+			if (stillFresh) return;
 		}
-	}
-
-	private index_file(file: string): void {
-		let source: string;
+		const generation = ++this.generation;
+		this.building = this.build(dir, generation);
 		try {
-			source = fs.readFileSync(file, "utf8");
-		} catch {
-			return;
+			await this.building;
+		} finally {
+			this.building = undefined;
 		}
-		const match = source.match(CLASS_NAME_RE);
-		if (match?.[1]) this.byName.set(match[1], file);
+	}
+
+	/** Drops cached class names; called when a script file changes on disk. */
+	invalidate(): void {
+		this.builtAt = 0;
+		this.generation++;
 	}
 
 	script_for(className: string): string | undefined {
 		return this.byName.get(className);
+	}
+
+	private async build(dir: string, generation: number): Promise<void> {
+		const found = new Map<string, string>();
+		const skip = new Set([".git", ".godot", ".vscode", "bin", "build", "node_modules", "out"]);
+		const queue: string[] = [dir];
+		let scanned = 0;
+		while (queue.length) {
+			const current = queue.shift()!;
+			let entries: fs.Dirent[];
+			try {
+				entries = await fs.promises.readdir(current, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				if (entry.name.startsWith(".") && entry.name !== ".godot") continue;
+				if (skip.has(entry.name)) continue;
+				const full = path.join(current, entry.name);
+				if (entry.isDirectory()) {
+					queue.push(full);
+					continue;
+				}
+				const ext = path.extname(entry.name).toLowerCase();
+				if (ext !== ".gd" && ext !== ".cs") continue;
+				const className = await this.readClassName(full);
+				if (className && !found.has(className)) found.set(className, full);
+				scanned++;
+				if (scanned % 64 === 0) await yieldToEventLoop();
+			}
+			await yieldToEventLoop();
+		}
+		// A script changed (or a newer scan started) while this one ran: keep the
+		// previous index rather than publishing stale names.
+		if (generation !== this.generation) return;
+		this.projectDir = dir;
+		this.builtAt = Date.now();
+		this.byName.clear();
+		for (const [className, file] of found) this.byName.set(className, file);
+	}
+
+	private async readClassName(file: string): Promise<string | undefined> {
+		try {
+			const stats = await fs.promises.stat(file);
+			if (stats.size > MAX_SCRIPT_BYTES) return undefined;
+			const source = await fs.promises.readFile(file, "utf8");
+			return source.match(CLASS_NAME_RE)?.[1];
+		} catch {
+			return undefined;
+		}
 	}
 }
 
 const classIndex = new ClassNameIndex();
 const baseClassCache = new Map<string, { base: string | undefined; mtime: number }>();
 
-function resolve_base_class(scriptPath: string, depth = 0): string | undefined {
+/** Invalidate cached custom-class metadata after a script file changed. */
+export function invalidateNodeIconCaches(): void {
+	classIndex.invalidate();
+	baseClassCache.clear();
+}
+
+async function resolve_base_class(scriptPath: string, depth = 0): Promise<string | undefined> {
 	if (depth > 8) return undefined;
 	let stat: fs.Stats;
 	try {
-		stat = fs.statSync(scriptPath);
+		stat = await fs.promises.stat(scriptPath);
 	} catch {
 		return undefined;
 	}
@@ -102,7 +166,8 @@ function resolve_base_class(scriptPath: string, depth = 0): string | undefined {
 
 	let source: string;
 	try {
-		source = fs.readFileSync(scriptPath, "utf8");
+		if (stat.size > MAX_SCRIPT_BYTES) return undefined;
+		source = await fs.promises.readFile(scriptPath, "utf8");
 	} catch {
 		return undefined;
 	}
@@ -117,16 +182,12 @@ function resolve_base_class(scriptPath: string, depth = 0): string | undefined {
 			base = target;
 		} else {
 			const parentScript = direct && direct !== target ? classIndex.script_for(target) : undefined;
-			if (parentScript) {
-				base = resolve_base_class(parentScript, depth + 1);
-			} else {
-				base = DEFAULT_NODE_ICON;
-			}
+			base = parentScript ? await resolve_base_class(parentScript, depth + 1) : DEFAULT_NODE_ICON;
 		}
 	} else {
 		const projectDir = find_project_dir(scriptPath);
 		const abs = projectDir ? res_to_abs(projectDir, target) : undefined;
-		base = abs ? resolve_base_class(abs, depth + 1) : DEFAULT_NODE_ICON;
+		base = abs ? await resolve_base_class(abs, depth + 1) : DEFAULT_NODE_ICON;
 	}
 
 	baseClassCache.set(scriptPath, { base, mtime: stat.mtimeMs });
@@ -175,6 +236,7 @@ export async function apply_custom_class_icons(scene: Scene): Promise<void> {
 	const projectDir = find_project_dir(scene.path);
 	const visited = new Set<Scene>();
 	const queue: Scene[] = [scene];
+	let processed = 0;
 
 	while (queue.length > 0) {
 		const current = queue.shift()!;
@@ -191,8 +253,11 @@ export async function apply_custom_class_icons(scene: Scene): Promise<void> {
 			// type (`type="Hitbox"`) and no script resource; the class index maps
 			// that name back to the script so the base engine icon can be used.
 			const scriptPath = node_script_path(node, current, projectDir) ?? classIndex.script_for(node.className);
-			const base = scriptPath ? resolve_base_class(scriptPath) : undefined;
+			const base = scriptPath ? await resolve_base_class(scriptPath) : undefined;
 			node.setIconClass(base ?? DEFAULT_NODE_ICON);
+			processed++;
+			// Large scenes still yield so a scene switch cannot stall the host.
+			if (processed % 128 === 0) await yieldToEventLoop();
 		}
 	}
 }

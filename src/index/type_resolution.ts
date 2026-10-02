@@ -68,6 +68,16 @@ function findFunctions(declarations: GDScriptDeclaration[], name: string): GDScr
 	}
 	return result;
 }
+function findFunctionAt(declarations: GDScriptDeclaration[], offset: number): GDScriptFunction | undefined {
+	for (const declaration of declarations) {
+		if (declaration.kind === "function" && declaration.range.start.offset === offset) return declaration;
+		if (declaration.kind === "class") {
+			const nested = findFunctionAt(declaration.declarations, offset);
+			if (nested) return nested;
+		}
+	}
+	return undefined;
+}
 function findContainingFunction(declarations: GDScriptDeclaration[], offset: number): GDScriptFunction | undefined {
 	for (const declaration of declarations) {
 		if (declaration.kind === "function" && declaration.bodyRange && declaration.bodyRange.start.offset <= offset && offset <= declaration.bodyRange.end.offset) return declaration;
@@ -152,18 +162,31 @@ export class TypeResolutionIndex {
 		return this.resolveInitializerType(binding.uri, binding.name, offset, new Set<string>());
 	}
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
-		if (name === "self") return { name: "self", uri, builtin: false };
+		if (name === "self") {
+			// Inside an inner class `self` is an instance of that class, not of the
+			// script: `self.run()` must find `Worker.run`, not a top-level `run`.
+			const containing = this.resolveContainingClass(uri, offset);
+			if (containing) return containing;
+			return { name: "self", uri, builtin: false };
+		}
 		if (name === "super") {
+			const containing = this.resolveContainingClass(uri, offset);
+			if (containing?.symbol) return this.resolveClassBase(uri, containing.symbol);
 			const file = this.files.get(uri);
 			return file ? this.resolveExtends(file.ast.declarations) : undefined;
 		}
 		const binding = this.bindings.getBinding(uri, offset, name);
 		if (binding) { const type = this.resolveBinding(binding, offset); if (type) return type; }
+		// `Worker.run()` and `Worker.new()`: the receiver is a class (or helper
+		// type such as an enum) rather than a variable.
+		const named = this.resolveName(name);
+		if (named) return named;
 		return this.resolveInitializerType(uri, name, offset, new Set<string>());
 	}
 	getMembers(type: ResolvedType): IndexedSymbol[] {
 		if (!type.uri) return [];
 		if (type.symbol?.kind === "enum") return this.enumMembers(type.symbol);
+		if (type.symbol?.kind === "class") return this.getClassMembers(type.uri, type.symbol);
 		const signature = this.memberSignature(type.uri, new Set<string>());
 		const cached = this.memberCache.get(type.uri);
 		if (cached && cached.signature === signature) return cached.members;
@@ -173,19 +196,110 @@ export class TypeResolutionIndex {
 	}
 	getMember(type: ResolvedType, name: string): IndexedSymbol | undefined {
 		const members = this.getMembers(type).filter((symbol) => symbol.name === name);
-		return members.length === 1 ? members[0] : undefined;
+		if (members.length === 1) return members[0];
+		// Ambiguity across nested scopes must not hide the member: prefer the
+		// declaration that belongs to the resolved class itself.
+		if (type.symbol?.kind === "class") {
+			const own = members.filter((symbol) => this.belongsToClass(symbol, type.symbol!));
+			if (own.length === 1) return own[0];
+		}
+		return undefined;
 	}
 	resolveMemberReturnType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
 		// The value of `EnumName.Member` is the enum itself.
-		if (member.kind === "enum_member") return type;
+		if (member.kind === "enum_member") return type.name === member.containerName ? type : this.resolveEnumMemberType(member) ?? type;
 		if (member.returnType) return this.resolveName(member.returnType);
 		if (member.type) return this.resolveName(member.type);
-		return member.kind === "function" ? this.resolveFunctionReturnType(member.uri, member.name, new Set<string>()) : undefined;
+		if (member.kind !== "function") return undefined;
+		// Resolve the declaration the symbol points at, not the first function
+		// with that name: two inner classes may both define `run()`.
+		return this.resolveFunctionReturnTypeForSymbol(member, new Set<string>());
+	}
+	/** Innermost `class` declaration containing `offset`, if any. */
+	resolveContainingClass(uri: string, offset: number): ResolvedType | undefined {
+		const file = this.files.get(uri);
+		if (!file) return undefined;
+		let best: IndexedSymbol | undefined;
+		for (const symbol of file.symbols) {
+			if (symbol.kind !== "class") continue;
+			if (symbol.range.start.offset > offset || symbol.range.end.offset < offset) continue;
+			if (!best || symbol.range.start.offset > best.range.start.offset) best = symbol;
+		}
+		return best ? { name: best.name, uri, symbol: best, builtin: false } : undefined;
+	}
+	/** Members declared directly on an inner class, plus the inherited ones. */
+	getClassMembers(uri: string, classSymbol: IndexedSymbol): IndexedSymbol[] {
+		const key = `${uri}#${classSymbol.range.start.offset}`;
+		const signature = this.classMemberSignature(uri, classSymbol, new Set<string>());
+		const cached = this.memberCache.get(key);
+		if (cached && cached.signature === signature) return cached.members;
+		const members = this.collectClassMembers(uri, classSymbol, new Set<string>());
+		this.memberCache.set(key, { signature, members });
+		return members;
+	}
+	/** Resolves `class Worker extends Base` for an inner class. */
+	resolveClassBase(uri: string, classSymbol: IndexedSymbol): ResolvedType | undefined {
+		const file = this.files.get(uri);
+		const reference = classSymbol.extendsName ? normalizeScriptReference(classSymbol.extendsName) : "";
+		if (!file || !reference) return undefined;
+		if (reference.startsWith("res://") || reference.endsWith(".gd")) return this.resolveScriptPath(reference);
+		const sameFile = file.symbols.filter((symbol) => symbol.kind === "class" && symbol.name === reference);
+		if (sameFile.length === 1) return { name: reference, uri, symbol: sameFile[0], builtin: false };
+		return this.resolveName(reference);
+	}
+	private belongsToClass(symbol: IndexedSymbol, classSymbol: IndexedSymbol): boolean {
+		if (symbol.containerRange && classSymbol.uri === symbol.uri) {
+			return symbol.containerRange.start.offset === classSymbol.range.start.offset;
+		}
+		return Boolean(symbol.containerName) && symbol.containerName === classSymbol.name;
+	}
+	private collectClassMembers(uri: string, classSymbol: IndexedSymbol, visited: Set<string>): IndexedSymbol[] {
+		const key = `${uri}#${classSymbol.range.start.offset}`;
+		if (visited.has(key)) return [];
+		visited.add(key);
+		const file = this.files.get(uri);
+		if (!file) return [];
+		// `containerRange` identifies the owner exactly; the name comparison keeps
+		// older/partial indexes (or hand-built symbols) working.
+		const own = file.symbols.filter((symbol) => symbol.kind !== "class_name" && this.belongsToClass(symbol, classSymbol));
+		const base = this.resolveClassBase(uri, classSymbol);
+		const inherited = base?.uri
+			? base.symbol?.kind === "class"
+				? this.collectClassMembers(base.uri, base.symbol, visited)
+				: this.collectMembers(base.uri, visited)
+			: [];
+		const result = [...own];
+		for (const symbol of inherited) if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
+		return result;
+	}
+	private classMemberSignature(uri: string, classSymbol: IndexedSymbol, visited: Set<string>): string {
+		const key = `${uri}#${classSymbol.range.start.offset}`;
+		if (visited.has(key)) return `cycle:${key}`;
+		visited.add(key);
+		const file = this.files.get(uri);
+		if (!file) return `missing:${uri}`;
+		const base = this.resolveClassBase(uri, classSymbol);
+		const baseSignature = base?.uri
+			? base.symbol?.kind === "class"
+				? this.classMemberSignature(base.uri, base.symbol, visited)
+				: this.memberSignature(base.uri, visited)
+			: "";
+		return `${key}@${file.sourceFingerprint}[${baseSignature}]`;
+	}
+	private resolveEnumMemberType(member: IndexedSymbol): ResolvedType | undefined {
+		if (!member.containerName) return undefined;
+		const file = this.files.get(member.uri);
+		const symbol = file?.symbols.find((candidate) => candidate.kind === "enum" && candidate.name === member.containerName);
+		return symbol ? { name: symbol.name, uri: member.uri, symbol, builtin: false } : undefined;
 	}
 	invalidate(uris: Iterable<string>): void {
 		const affected = new Set(uris);
 		for (const key of this.statementCache.keys()) { const marker = key.indexOf(":function:"); if (marker >= 0 && affected.has(key.slice(0, marker))) this.statementCache.delete(key); }
-		for (const [uri] of this.memberCache) if (affected.has(uri)) this.memberCache.delete(uri);
+		for (const [key] of this.memberCache) {
+			const marker = key.indexOf("#");
+			const keyUri = marker >= 0 ? key.slice(0, marker) : key;
+			if (affected.has(keyUri)) this.memberCache.delete(key);
+		}
 		for (const [name, cached] of this.nameCache) if (cached.value?.uri && affected.has(cached.value.uri)) this.nameCache.delete(name);
 		if (affected.size) for (const [name, cached] of this.nameCache) if (cached.value === null) this.nameCache.delete(name);
 	}
@@ -236,14 +350,12 @@ export class TypeResolutionIndex {
 	}
 	private resolveScriptPath(value: string): ResolvedType | undefined {
 		const path = normalizeScriptReference(value).replace(/^res:\/\//, "").replace(/^\/+/, "");
-		const matches = [...this.files.values()].filter((file) => {
-			try { return decodeURIComponent(new URL(file.uri).pathname).replace(/^\/+/, "").endsWith(path); }
-			catch { return file.uri.endsWith(path); }
-		});
-		if (matches.length !== 1) return undefined;
-		const className = findScriptClassName(matches[0]);
-		const symbol = className ? this.symbols.find(className).find((item) => item.uri === matches[0].uri) : undefined;
-		return { name: className ?? path.replace(/\.gd$/, ""), uri: matches[0].uri, symbol, builtin: false };
+		const uri = this.files.findByPathSuffix(path);
+		if (!uri) return undefined;
+		const file = this.files.get(uri);
+		const className = findScriptClassName(file);
+		const symbol = className ? this.symbols.find(className).find((item) => item.uri === uri) : undefined;
+		return { name: className ?? path.replace(/\.gd$/, ""), uri, symbol, builtin: false };
 	}
 	private getBodyStatements(uri: string, fn: GDScriptFunction): LocalStatement[] {
 		const file = this.files.get(uri);
@@ -327,6 +439,23 @@ export class TypeResolutionIndex {
 		for (const statement of statements) if (statement.kind === "assignment" && statement.name === name && statement.offset <= offset) latest = statement;
 		if (!latest?.expression || latest.expressionOffset === undefined) return undefined;
 		return this.resolveExpressionType(uri, latest.expression, latest.expressionOffset, visited);
+	}
+	private resolveFunctionReturnTypeForSymbol(member: IndexedSymbol, visited: Set<string>): ResolvedType | undefined {
+		const file = this.files.get(member.uri);
+		if (!file) return undefined;
+		const declaration = findFunctionAt(file.ast.declarations, member.range.start.offset);
+		if (!declaration) return this.resolveFunctionReturnType(member.uri, member.name, visited);
+		if (declaration.returnType) return this.resolveName(declaration.returnType);
+		const returns = this.getBodyStatements(member.uri, declaration).filter((statement) => statement.kind === "return");
+		if (!returns.length) return undefined;
+		let resolved: ResolvedType | undefined;
+		for (const item of returns) {
+			const type = this.resolveExpressionType(member.uri, item.expression, item.expressionOffset, visited);
+			if (!type) return undefined;
+			if (resolved && resolved.name !== type.name) return undefined;
+			resolved = type;
+		}
+		return resolved;
 	}
 	private resolveFunctionReturnType(uri: string, name: string, visited: Set<string>): ResolvedType | undefined {
 		const key = `${uri}:function:${name}`;

@@ -1,0 +1,220 @@
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
+import { parseGDScript } from "../analyzer/index.js";
+import { BindingIndex } from "./bindings.js";
+import { FileIndex } from "./file_index.js";
+import { SymbolIndex } from "./symbol_index.js";
+import { TypeResolutionIndex } from "./type_resolution.js";
+import { SemanticQueryEngine } from "../language/semantic/query_engine.js";
+
+const URI = "file:///workspace/inner.gd";
+
+function index(source: string) {
+	const files = new FileIndex();
+	const symbols = new SymbolIndex(files);
+	const bindings = new BindingIndex(files);
+	files.update(URI, source, 1);
+	symbols.update(URI);
+	bindings.update(URI);
+	const types = new TypeResolutionIndex(files, symbols, bindings);
+	return { files, symbols, bindings, types, semantic: new SemanticQueryEngine(files, symbols, bindings, types) };
+}
+
+function definitionAt(source: string, marker: string, offsetInMarker = marker.length - 1) {
+	const { semantic } = index(source);
+	const start = source.indexOf(marker);
+	assert.ok(start >= 0, `marker ${marker} not found`);
+	return semantic.getDefinition(URI, { offset: start + offsetInMarker });
+}
+
+function completionsAt(source: string, marker: string, offsetInMarker = marker.length) {
+	const { semantic } = index(source);
+	const start = source.indexOf(marker);
+	assert.ok(start >= 0, `marker ${marker} not found`);
+	return semantic.getCompletions(URI, { offset: start + offsetInMarker });
+}
+
+describe("inner class parsing", () => {
+	it("keeps the body of a class that extends another class", () => {
+		const result = parseGDScript("class_name C\nclass Worker extends Base:\n\tfunc run():\n\t\tpass\n");
+		const inner = result.ast.declarations.find((declaration) => declaration.kind === "class");
+		assert.ok(inner && inner.kind === "class");
+		assert.equal(inner.extendsName, "Base", "the declaration colon must not be part of the base name");
+		assert.deepEqual(inner.declarations.map((declaration) => declaration.name), ["run"]);
+	});
+
+	it("does not leak function locals into the class member list", () => {
+		const source = "class_name C\nvar speed := 1\nfunc run():\n\tvar local_speed := speed\n\tvar helper := Worker.new()\n\treturn local_speed\nclass Worker:\n\tfunc go():\n\t\tvar inner_local := 1\n";
+		const { files, types } = index(source);
+		const names = files.get(URI)!.symbols.map((symbol) => symbol.name);
+		assert.equal(names.includes("local_speed"), false, "a local variable is not a script member");
+		assert.equal(names.includes("helper"), false, "a local variable is not a script member");
+		assert.equal(names.includes("inner_local"), false, "a local variable is not a class member");
+		assert.deepEqual(types.getMembers(types.resolveName("Worker")!).map((symbol) => symbol.name), ["go"]);
+	});
+
+	it("records the owning class of every nested declaration", () => {
+		const source = "class_name C\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nclass Outer:\n\tclass Inner:\n\t\tfunc deep():\n\t\t\tpass\n";
+		const { files } = index(source);
+		const symbols = files.get(URI)!.symbols;
+		const worker = symbols.find((symbol) => symbol.name === "Worker")!;
+		const run = symbols.find((symbol) => symbol.name === "run")!;
+		const inner = symbols.find((symbol) => symbol.name === "Inner")!;
+		const deep = symbols.find((symbol) => symbol.name === "deep")!;
+		assert.equal(run.containerName, "Worker");
+		assert.equal(run.containerRange?.start.offset, worker.range.start.offset);
+		assert.equal(inner.containerName, "Outer");
+		assert.equal(deep.containerName, "Inner");
+		assert.equal(deep.containerRange?.start.offset, inner.range.start.offset);
+	});
+});
+
+describe("inner class member resolution", () => {
+	const INNER_SOURCE = `class_name Child
+class Worker:
+	var speed := 1
+	func run() -> int:
+		return speed
+	func helper():
+		self.run()
+		var worker := Worker.new()
+		worker.run()
+func use_worker():
+	Worker.run()
+	Worker.new().run()
+`;
+
+	it("lists own members for a class instead of the class symbol", () => {
+		const { types } = index(INNER_SOURCE);
+		const worker = types.resolveName("Worker")!;
+		assert.deepEqual(
+			types.getMembers(worker).map((symbol) => symbol.name).sort(),
+			["helper", "run", "speed"],
+		);
+	});
+
+	it("resolves self.member inside an inner class", () => {
+		const result = definitionAt(INNER_SOURCE, "self.run", "self.run".length - 1);
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "run");
+		assert.equal(result.value?.containerName, "Worker");
+	});
+
+	it("resolves class-qualified calls and instances created from the class", () => {
+		const qualified = definitionAt(INNER_SOURCE, "Worker.run", "Worker.run".length - 1);
+		assert.equal(qualified.value?.name, "run");
+		const chained = definitionAt(INNER_SOURCE, "Worker.new().run", "Worker.new().run".length - 1);
+		assert.equal(chained.value?.name, "run");
+		const variable = definitionAt(INNER_SOURCE, "worker.run", "worker.run".length - 1);
+		assert.equal(variable.value?.name, "run");
+	});
+
+	it("keeps identically named members of different inner classes apart", () => {
+		const source = `class_name Child
+class Alpha:
+	func run():
+		pass
+class Beta:
+	func run():
+		pass
+func use_alpha():
+	self.alpha.run()
+	Alpha.run()
+func use_beta():
+	Beta.run()
+`;
+		const alpha = definitionAt(source, "Alpha.run", "Alpha.run".length - 1);
+		assert.equal(alpha.value?.range.start.line, 2);
+		const beta = definitionAt(source, "Beta.run", "Beta.run".length - 1);
+		assert.equal(beta.value?.range.start.line, 5);
+	});
+
+	it("follows inheritance between inner classes", () => {
+		const source = `class_name Child
+class Base:
+	func base_fn() -> int:
+		return 1
+class Worker extends Base:
+	func run():
+		self.base_fn()
+`;
+		const result = definitionAt(source, "self.base_fn", "self.base_fn".length - 1);
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "base_fn");
+		assert.equal(result.value?.containerName, "Base");
+	});
+
+	it("resolves super calls inside an inner class to the inner base class", () => {
+		const source = `class_name Child
+class Base:
+	func ping():
+		pass
+class Worker extends Base:
+	func ping():
+		super.ping()
+`;
+		const result = definitionAt(source, "super.ping", "super.ping".length - 1);
+		assert.equal(result.value?.containerName, "Base");
+	});
+
+	it("resolves members of nested classes through self", () => {
+		const source = `class_name Child
+class A:
+	class B:
+		func deep():
+			pass
+	func call():
+		self.B.deep()
+`;
+		const result = definitionAt(source, "self.B.deep", "self.B.deep".length - 1);
+		assert.equal(result.value?.name, "deep");
+		assert.equal(result.value?.containerName, "B");
+	});
+
+	it("resolves enum members declared inside an inner class", () => {
+		const source = `class_name Child
+class Worker:
+	enum Mode { IDLE, BUSY }
+	func run():
+		self.Mode
+`;
+		const result = definitionAt(source, "self.Mode", "self.Mode".length - 1);
+		assert.equal(result.value?.kind, "enum");
+		assert.equal(result.value?.containerName, "Worker");
+	});
+});
+
+describe("inner class completions", () => {
+	it("completes class members after a class name and after self", () => {
+		const qualified = completionsAt("class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.\n", "Worker.");
+		assert.deepEqual(qualified.value?.map((item) => item.name).sort(), ["run", "speed"]);
+
+		const self = completionsAt("class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tself.\n", "self.");
+		assert.deepEqual(self.value?.map((item) => item.name).sort(), ["run", "speed"]);
+	});
+});
+
+describe("inner class references", () => {
+	it("binds qualified, self and instance calls to one declaration", () => {
+		const source = `class_name Child
+class Worker:
+	func run():
+		pass
+	func helper():
+		self.run()
+func use_worker():
+	var worker := Worker.new()
+	worker.run()
+	Worker.run()
+`;
+		const { bindings, files } = index(source);
+		const declaration = bindings.getBinding(URI, source.indexOf("func run") + "func ".length, "run");
+		assert.ok(declaration, "the inner class method must be a binding");
+		const lines = bindings
+			.findReferences(declaration.id)
+			.map((reference) => reference.range.start.line)
+			.sort((left, right) => left - right);
+		assert.deepEqual(lines, [2, 5, 8, 9], "every call form must reference the declaration");
+		assert.equal(files.get(URI)?.symbols.filter((symbol) => symbol.name === "run").length, 1);
+	});
+});

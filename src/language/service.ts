@@ -8,6 +8,7 @@ import { SemanticQueryEngine } from "./semantic/query_engine";
 import { isSafeLocalConfidence } from "./semantic/resolution_policy";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
 import { languageProfiler } from "../performance/profiler";
+import { forEachWithTimeBudget } from "../utils/scheduling";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
 	return document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
@@ -66,6 +67,7 @@ export class LanguageService implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly updateScheduler: UpdateScheduler;
 	private scanGeneration = 0;
+	private disposed = false;
 
 	constructor(
 		private readonly definitionFallback: DefinitionFallback,
@@ -87,6 +89,7 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.scanGeneration++;
 		this.updateScheduler.dispose();
 		for (const disposable of this.disposables) disposable.dispose();
@@ -345,38 +348,59 @@ export class LanguageService implements vscode.Disposable {
 		this.files.remove(key);
 	}
 
+	/**
+	 * Indexes the workspace without monopolizing the extension host thread.
+	 *
+	 * Every `.gd` file in a project used to be parsed in tight batches; on a
+	 * workspace with thousands of scripts that starved the event loop and froze
+	 * the language features (and every other extension) for minutes. The scan
+	 * now yields whenever the synchronous budget is exhausted, reads files with
+	 * bounded concurrency and stops as soon as the service is disposed.
+	 */
 	private async rebuildWorkspaceIndex(): Promise<void> {
+		if (this.disposed) return;
 		const generation = ++this.scanGeneration;
 		// Ignore Godot's generated import/cache directory as well as dependency and
 		// VCS trees; none of these scripts should delay the first project index.
-		const files = await vscode.workspace.findFiles("**/*.gd", "**/{.git,node_modules,.godot}/**");
+		let files: vscode.Uri[];
+		try {
+			files = await vscode.workspace.findFiles("**/*.gd", "**/{.git,node_modules,.godot}/**");
+		} catch {
+			return;
+		}
+		if (this.disposed || generation !== this.scanGeneration) return;
 		const openDocuments = new Map(
 			vscode.workspace.textDocuments
 				.filter((document) => document.languageId === "gdscript" && document.uri.scheme === "file")
 				.map((document) => [document.uri.toString(), document] as const),
 		);
-		const batchSize = 16;
-		for (let start = 0; start < files.length; start += batchSize) {
-			if (generation !== this.scanGeneration) return;
-			const batch = files.slice(start, start + batchSize);
-			// File I/O is the avoidable startup wait: read a small bounded batch in
-			// parallel, then do CPU indexing in order and yield between batches.
-			const contents = await Promise.all(batch.map(async (uri) => {
+		// Open documents are what the user is looking at: index them first so
+		// hover/definition/completion work while the rest of the project follows.
+		const ordered = [...files].sort((left, right) => {
+			const leftOpen = openDocuments.has(left.toString()) ? 0 : 1;
+			const rightOpen = openDocuments.has(right.toString()) ? 0 : 1;
+			return leftOpen - rightOpen;
+		});
+		const isCancelled = () => generation !== this.scanGeneration;
+		await forEachWithTimeBudget(
+			ordered,
+			async (uri) => {
+				if (isCancelled()) return;
 				const openDocument = openDocuments.get(uri.toString());
-				if (openDocument) return { uri, source: openDocument.getText(), version: openDocument.version };
+				if (openDocument) {
+					this.updateText(uri.toString(), openDocument.getText(), openDocument.version);
+					return;
+				}
 				try {
 					const bytes = await vscode.workspace.fs.readFile(uri);
-					return { uri, source: Buffer.from(bytes).toString("utf8"), version: 0 };
+					if (isCancelled()) return;
+					this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"), 0);
 				} catch {
-					return undefined;
+					/* unreadable files are skipped; a later watcher event can retry */
 				}
-			}));
-			if (generation !== this.scanGeneration) return;
-			for (const entry of contents) {
-				if (entry) this.updateText(entry.uri.toString(), entry.source, entry.version);
-			}
-			if (start + batchSize < files.length) await new Promise<void>((resolve) => setImmediate(resolve));
-		}
+			},
+			{ budgetMs: 8, isCancelled },
+		);
 	}
 
 	private async updateUri(uri: vscode.Uri): Promise<void> {

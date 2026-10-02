@@ -103,7 +103,10 @@ class Parser {
 		this.advance();
 		const parts: string[] = [];
 		while (!this.atLineEnd() && !this.at("eof")) parts.push(this.advance().value);
-		const name = parts.join("");
+		// `extends` never includes the declaration colon, but inner classes are
+		// written as `class Worker extends Base:`, and a stray colon made every
+		// base-class lookup fail.
+		const name = parts.join("").replace(/:$/, "");
 		if (!name) {
 			this.error("Expected base class or script path.", start);
 			return undefined;
@@ -215,6 +218,10 @@ class Parser {
 		const headerEnd = this.lineEndOffset(start.line);
 		this.skipToLineEnd();
 		const bodyRange = this.findIndentedBody(start.indent, start.line);
+		// Consume the body so statements inside it are never mistaken for class
+		// members: `var speed := 1` inside a method used to become a script
+		// variable that polluted completions and member resolution.
+		if (bodyRange) this.skipToOffset(bodyRange.end.offset);
 		return {
 			kind: "function",
 			name: name.value,
@@ -236,8 +243,13 @@ class Parser {
 		if (this.isKeyword("extends")) {
 			this.advance();
 			const parts: string[] = [];
-			while (!this.atLineEnd() && !this.at("eof")) parts.push(this.advance().value);
+			// `class Worker extends Base:` terminates the base name at the colon;
+			// keeping it broke inner-class inheritance resolution. The rest of the
+			// header line (the colon) still has to be consumed so the class body
+			// below is parsed instead of skipped.
+			while (!this.atLineEnd() && !this.at("eof") && !this.atValue(":")) parts.push(this.advance().value);
 			extendsName = parts.join("");
+			this.skipToLineEnd();
 		} else this.skipToLineEnd();
 
 		const declarations: GDScriptDeclaration[] = [];
@@ -389,6 +401,11 @@ class Parser {
 
 	private skipExpressionUntil(values: string[]) {
 		while (!this.at("eof") && !values.includes(this.current().value)) this.advance();
+	}
+
+	/** Advances past every token that starts before `offset`. */
+	private skipToOffset(offset: number) {
+		while (!this.at("eof") && this.current().start < offset) this.advance();
 	}
 
 	private skipToLineEnd() {

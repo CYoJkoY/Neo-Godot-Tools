@@ -33,6 +33,8 @@ import {
 } from "./metadata.js";
 import { validateResourceDocument } from "./diagnostics.js";
 import { formatVariant, parseVariant, variantValuesEqual } from "./values.js";
+import { scriptClassNameIndex } from "./script_index.js";
+import { withTimeout } from "../utils/scheduling.js";
 
 export const RESOURCE_INSPECTOR_VIEW_TYPE = "neoGodotTools.resourceInspector";
 export const RESOURCE_INSPECTOR_VIEW_ID = "neoGodotTools.resourceInspector";
@@ -90,6 +92,8 @@ export interface WorkspaceResourceItem {
 
 export interface ResourceInspectorOptions {
 	lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined;
+	/** Upper bound for language-server metadata requests. */
+	lspTimeoutMs?: number;
 }
 
 const SCRIPT_PROPERTY = "script";
@@ -101,6 +105,8 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private readonly modelGenerations = new WeakMap<vscode.Webview, number>();
 	private readonly nativePropertiesCache = new Map<string, Promise<LspPropertyInfo[] | undefined>>();
 	private readonly watcher = vscode.workspace.createFileSystemWatcher("**/*.tres");
+	private readonly scriptWatcher = vscode.workspace.createFileSystemWatcher("**/*.gd");
+	private readonly pendingModelUpdates = new Map<string, ReturnType<typeof setTimeout>>();
 	private view?: vscode.WebviewView;
 	private panelUri?: vscode.Uri;
 	private locked = false;
@@ -143,6 +149,11 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			this.watcher.onDidChange((uri) => void this.onFileSystemChanged(uri)),
 			this.watcher.onDidDelete((uri) => void this.onFileDeleted(uri)),
 			this.watcher,
+			// `class_name` lookup and script metadata must not survive a script edit.
+			this.scriptWatcher.onDidCreate(() => scriptClassNameIndex.invalidate()),
+			this.scriptWatcher.onDidChange(() => scriptClassNameIndex.invalidate()),
+			this.scriptWatcher.onDidDelete(() => scriptClassNameIndex.invalidate()),
+			this.scriptWatcher,
 			vscode.commands.registerCommand("neoGodotTools.resourceInspector.refresh", () => this.refresh()),
 			vscode.commands.registerCommand("neoGodotTools.resourceInspector.lock", () => this.lockInspector()),
 			vscode.commands.registerCommand("neoGodotTools.resourceInspector.unlock", () => this.unlockInspector()),
@@ -1020,7 +1031,33 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			// The file changed while the panel had pending edits: let the user decide.
 			for (const webview of webviews) void webview.postMessage({ type: "externalChange", text: event.document.getText() });
 		}
-		await Promise.all(webviews.map((webview) => this.sendModel(event.document, webview)));
+		// Typing produces one event per keystroke; rebuilding the whole model
+		// (script chain, shader, metadata, previews) that often kept the
+		// extension host busy while the inspector was open. Coalesce the edits.
+		this.scheduleModelUpdate(uri, webviews);
+	}
+
+	private scheduleModelUpdate(uri: vscode.Uri, webviews: vscode.Webview[]): void {
+		const key = uri.toString();
+		const pending = this.pendingModelUpdates.get(key);
+		if (pending) clearTimeout(pending);
+		this.pendingModelUpdates.set(
+			key,
+			setTimeout(() => {
+				this.pendingModelUpdates.delete(key);
+				void this.flushModelUpdate(uri, webviews);
+			}, MODEL_UPDATE_DEBOUNCE_MS),
+		);
+	}
+
+	private async flushModelUpdate(uri: vscode.Uri, webviews: vscode.Webview[]): Promise<void> {
+		try {
+			const document = await vscode.workspace.openTextDocument(uri);
+			if (!isResourceDocument(document)) return;
+			await Promise.all(webviews.map((webview) => this.sendModel(document, webview)));
+		} catch {
+			/* the document may have been closed while the update was pending */
+		}
 	}
 
 	// ------------------------------------------------------------------- misc
@@ -1041,7 +1078,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			if (resolved) return resolved;
 		}
 		if (document.scriptClass) {
-			return this.findScriptByClassName(uri, document.scriptClass);
+			return await this.findScriptByClassName(uri, document.scriptClass);
 		}
 		return undefined;
 	}
@@ -1072,7 +1109,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			if (base.startsWith("res://") || base.startsWith(".") || base.endsWith(".gd")) {
 				currentUri = resolveResourceUri(currentUri, base);
 			} else {
-				const classScript = this.findScriptByClassName(uri, base);
+				const classScript = await this.findScriptByClassName(uri, base);
 				if (classScript) {
 					currentUri = classScript;
 				} else {
@@ -1120,16 +1157,15 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		}
 	}
 
-	private findScriptByClassName(contextUri: vscode.Uri, className: string): vscode.Uri | undefined {
-		const classRe = new RegExp(`^\\s*class_name\\s+${className}\\b`, "m");
-		for (const doc of vscode.workspace.textDocuments ?? []) {
-			if (doc.uri.fsPath.toLowerCase().endsWith(".gd") && classRe.test(doc.getText())) {
-				return doc.uri;
-			}
-		}
-		const projectRoot = findProjectRoot(contextUri) ?? vscode.workspace.getWorkspaceFolder(contextUri)?.uri;
-		if (!projectRoot || !fs.existsSync(projectRoot.fsPath)) return undefined;
-		return findScriptInDirectory(projectRoot.fsPath, classRe, 0);
+	/**
+	 * Resolves `class_name` to its script without blocking the extension host.
+	 *
+	 * This used to recurse through the project with `readFileSync`, once per base
+	 * class of every rebuilt model, which froze the editor while a `.tres` file
+	 * was open. `ScriptClassNameIndex` caches the asynchronous scan.
+	 */
+	private async findScriptByClassName(contextUri: vscode.Uri, className: string): Promise<vscode.Uri | undefined> {
+		return scriptClassNameIndex.find(className, contextUri);
 	}
 
 	/** Asks the connected Godot language server for native properties. */
@@ -1143,7 +1179,13 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const sendRequest = client.sendRequest.bind(client);
 		const request = (async () => {
 			try {
-				const symbol = await sendRequest("textDocument/nativeSymbol", { native_class: resourceType, symbol_name: resourceType }) as {
+				// The language server can be connected but wedged; an unanswered
+				// request must never keep the inspector on its loading state.
+				const symbol = (await withTimeout(
+					sendRequest("textDocument/nativeSymbol", { native_class: resourceType, symbol_name: resourceType }),
+					this.options.lspTimeoutMs ?? LSP_METADATA_TIMEOUT_MS,
+					() => this.nativePropertiesCache.delete(resourceType),
+				)) as {
 					children?: Array<{ name?: string; detail?: string; kind?: number; hint?: string; hint_string?: string }>;
 				} | undefined;
 				const children = symbol?.children ?? [];
@@ -1178,36 +1220,17 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	dispose(): void {
+		for (const timer of this.pendingModelUpdates.values()) clearTimeout(timer);
+		this.pendingModelUpdates.clear();
+		this.scriptWatcher.dispose();
 		this.watcher.dispose();
 		this.diagnostics.dispose();
 	}
 }
 
-function findScriptInDirectory(dirPath: string, classRe: RegExp, depth: number): vscode.Uri | undefined {
-	if (depth > 6) return undefined;
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(dirPath, { withFileTypes: true });
-	} catch {
-		return undefined;
-	}
-	for (const entry of entries) {
-		if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "out") continue;
-		const fullPath = path.join(dirPath, entry.name);
-		if (entry.isDirectory()) {
-			const nested = findScriptInDirectory(fullPath, classRe, depth + 1);
-			if (nested) return nested;
-		} else if (entry.isFile() && entry.name.toLowerCase().endsWith(".gd")) {
-			try {
-				const content = fs.readFileSync(fullPath, "utf8");
-				if (classRe.test(content)) return vscode.Uri.file(fullPath);
-			} catch {
-				/* ignore unreadable files */
-			}
-		}
-	}
-	return undefined;
-}
+const LSP_METADATA_TIMEOUT_MS = 4_000;
+/** Typing coalescing window for `.tres` model rebuilds. */
+const MODEL_UPDATE_DEBOUNCE_MS = 120;
 
 function isResourceFile(uri: vscode.Uri | undefined): boolean {
 	if (!uri) return false;
