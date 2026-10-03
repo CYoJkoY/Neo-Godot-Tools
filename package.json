@@ -17,6 +17,7 @@
     "format": "biome format --write --changed src",
     "compile": "tsc -p ./",
     "lint": "biome lint src",
+    "check:standards": "ts-node tools/check_standards.ts",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "vscode:prepublish": "npm run esbuild-base -- --minify",

@@ -10,7 +10,8 @@
 		"tools/vscode_stub.ts",
 		"tools/vscode_languageclient_stub.ts",
 		"tools/vscode_stub_register.ts",
-		"tools/run_unit_tests.ts"
+		"tools/run_unit_tests.ts",
+		"tools/check_standards.ts"
 	],
 	"exclude": ["node_modules", "out", "out-test", "media"]
 }

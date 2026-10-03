@@ -72,16 +72,21 @@ Violations found in code touched by a change must be fixed in the same change.
 
 31,581 lines of TypeScript in 149 `src` files and 15 `tools` files.
 
+Measured by `npm run check:standards`; strings and template literals are excluded, so
+embedded GDScript and webview JavaScript do not inflate the numbers.
+
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
-| `class` declarations | 167 | debugger 62, index 35, tools 22, providers 14 |
-| `let` / `var` declarations | 516 | debugger 110, resource inspector 106, index 67, providers 66 |
-| `for` loops | 350 | index 78, resource inspector 74, debugger 66 |
-| `while` / `do` loops | 81 | protocol and settle-wait loops |
-| `} else` branches | 211 | debugger 119, resource inspector 40 |
-| `throw new ...` | 51 | parameter validation and protocol errors |
+| `class` declarations | 139 | debugger, index, tools, providers |
+| `let` / `var` declarations | 405 | debugger, resource inspector, index, providers |
+| `for` loops | 321 | index, resource inspector, debugger |
+| `while` / `do` loops | 78 | protocol and settle-wait loops |
+| `} else` branches | 198 | debugger, resource inspector |
+| `throw` statements | 53 | parameter validation and protocol errors |
 | `as` assertions | 59 | narrowing the compiler cannot express |
 | `readonly` annotations | 158 | present, not yet uniform |
+
+Total tracked constructs: 1194 in 167 files; none needs a `// perf:` justification yet.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -90,7 +95,7 @@ Violations found in code touched by a change must be fixed in the same change.
    Stateful protocol machines (debugger sessions, LSP client) also earn their classes: they own
    sockets, buffers and disposable timers. The standard's "composition over inheritance" applies —
    `extends` is allowed only where the API demands it — and a class that only groups pure helpers
-   must become functions. Rewriting all 167 declarations would change the extension's contracts
+   must become functions. Rewriting all 139 declarations would change the extension's contracts
    without improving correctness.
 2. **Loops and `let` in measured hot paths.** The lexer/parser, variant encode/decode and index
    queries use indexed loops on purpose; `map`/`filter` allocate intermediate arrays and closure
@@ -105,12 +110,17 @@ Violations found in code touched by a change must be fixed in the same change.
 
 ## 6. Migration order (ratchet)
 
-1. **Prevent regressions now.** The census in §4 is the baseline; a checker verifies that no count
-   grows. New code must be clean regardless of its file's history.
+1. **Prevent regressions now.** `tools/check_standards.ts` re-reads the census, compares it with
+   `tools/standards_baseline.json` and fails the build when any count grows; `npm run check:standards`
+   runs in CI. `--update` refreshes the baseline after a deliberate reduction, so progress is visible
+   in the diff. New code must be clean regardless of its file's history.
 2. **Small, hot, already-typed modules** (`src/utils`, `src/performance`, `src/analyzer`).
 3. **Index and query layers** (`src/index`), then providers and the resource inspector.
 4. **Debugger protocol modules** — functional cores, classes only for the sockets/sessions.
 5. **`noUncheckedIndexedAccess`** enabled last, when it reports zero errors.
+6. **Widen the lint and type-check surface to every tool script.** `npm run lint` lints `src`
+   (biome would also accept `tools`, where `tools/generate_icons.ts` still has 21 diagnostics), and
+   `tsconfig.test.json` type-checks four of the sixteen files in `tools`.
 
 ## 7. Verification
 
@@ -120,6 +130,7 @@ npx tsc -p tsconfig.test.json --noEmit   # tests and tools
 npm run test:unit                        # 256 unit tests
 npm run lint                             # biome, 0 errors required
 npm run compile                          # extension build
+npm run check:standards                  # coding standard ratchet (CI)
 ```
 
 Census commands:
