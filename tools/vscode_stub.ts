@@ -6,15 +6,23 @@
  * loadable. Only the surface used by the local semantic pipeline and the
  * resource tooling is implemented; everything else is a deliberate no-op.
  *
- * `tools/vscode_stub_register.cjs` makes `require("vscode")` resolve here.
+ * `tools/vscode_stub_register.ts` makes `require("vscode")` resolve here.
  */
 
-const path = require("node:path");
-const fs = require("node:fs");
+import * as fs from "node:fs";
+import * as path from "node:path";
 
-const EXTENSION_ROOT = process.env.NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT || path.resolve(__dirname, "..");
+/**
+ * Repository root.
+ *
+ * The stub is compiled to `out-test/tools/vscode_stub.js`, so the repository
+ * root is two directories up; tests that need fixture paths can override it
+ * with `NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT`.
+ */
+const EXTENSION_ROOT = process.env.NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT || path.resolve(__dirname, "..", "..");
 
 class Uri {
+	[key: string]: any;
 	constructor(scheme, authority, uriPath, query, fragment) {
 		this.scheme = scheme || "";
 		this.authority = authority || "";
@@ -80,6 +88,7 @@ function splitOnce(value, separator) {
 }
 
 class Position {
+	[key: string]: any;
 	constructor(line, character) {
 		this.line = line;
 		this.character = character;
@@ -87,7 +96,8 @@ class Position {
 }
 
 class Range {
-	constructor(startOrStartLine, startCharacterOrEnd, endLine, endCharacter) {
+	[key: string]: any;
+	constructor(startOrStartLine, startCharacterOrEnd, endLine = 0, endCharacter = 0) {
 		if (typeof startOrStartLine === "number") {
 			this.start = new Position(startOrStartLine, startCharacterOrEnd);
 			this.end = new Position(endLine, endCharacter);
@@ -101,15 +111,16 @@ class Range {
 class Selection extends Range {}
 
 class Location {
+	[key: string]: any;
 	constructor(uri, rangeOrPosition) {
 		this.uri = uri;
-		this.range = rangeOrPosition instanceof Position
-			? new Range(rangeOrPosition, rangeOrPosition)
-			: rangeOrPosition;
+		this.range =
+			rangeOrPosition instanceof Position ? new Range(rangeOrPosition, rangeOrPosition) : rangeOrPosition;
 	}
 }
 
 class MarkdownString {
+	[key: string]: any;
 	constructor(value = "") {
 		this.value = value;
 		this.isTrusted = false;
@@ -133,6 +144,7 @@ class MarkdownString {
 }
 
 class Hover {
+	[key: string]: any;
 	constructor(contents, range) {
 		this.contents = Array.isArray(contents) ? contents : [contents];
 		this.range = range;
@@ -140,6 +152,7 @@ class Hover {
 }
 
 class CompletionItem {
+	[key: string]: any;
 	constructor(label, kind) {
 		this.label = label;
 		this.kind = kind;
@@ -147,6 +160,7 @@ class CompletionItem {
 }
 
 class CompletionList {
+	[key: string]: any;
 	constructor(items, isIncomplete) {
 		this.items = items ?? [];
 		this.isIncomplete = !!isIncomplete;
@@ -154,6 +168,7 @@ class CompletionList {
 }
 
 class SignatureInformation {
+	[key: string]: any;
 	constructor(label, documentation) {
 		this.label = label;
 		this.documentation = documentation;
@@ -162,6 +177,7 @@ class SignatureInformation {
 }
 
 class ParameterInformation {
+	[key: string]: any;
 	constructor(label, documentation) {
 		this.label = label;
 		this.documentation = documentation;
@@ -169,6 +185,7 @@ class ParameterInformation {
 }
 
 class SignatureHelp {
+	[key: string]: any;
 	constructor() {
 		this.signatures = [];
 		this.activeSignature = 0;
@@ -177,6 +194,7 @@ class SignatureHelp {
 }
 
 class SymbolInformation {
+	[key: string]: any;
 	constructor(name, kind, rangeOrLocation, uri, containerName) {
 		this.name = name;
 		this.kind = kind;
@@ -186,6 +204,7 @@ class SymbolInformation {
 }
 
 class TreeItem {
+	[key: string]: any;
 	constructor(label, collapsibleState) {
 		this.label = label;
 		this.collapsibleState = collapsibleState;
@@ -194,6 +213,7 @@ class TreeItem {
 }
 
 class EventEmitter {
+	[key: string]: any;
 	constructor() {
 		this.listeners = [];
 		this.event = (listener) => {
@@ -210,14 +230,20 @@ class EventEmitter {
 }
 
 class Disposable {
+	[key: string]: any;
 	static from(...disposables) {
-		return { dispose: () => disposables.forEach((disposable) => disposable?.dispose?.()) };
+		return {
+			dispose: () => {
+				for (const disposable of disposables) disposable?.dispose?.();
+			},
+		};
 	}
 
 	dispose() {}
 }
 
 class WorkspaceEdit {
+	[key: string]: any;
 	constructor() {
 		this.edits = [];
 	}
@@ -232,6 +258,7 @@ class WorkspaceEdit {
 }
 
 class RelativePattern {
+	[key: string]: any;
 	constructor(base, pattern) {
 		this.base = base;
 		this.pattern = pattern;
@@ -239,6 +266,7 @@ class RelativePattern {
 }
 
 class ThemeColor {
+	[key: string]: any;
 	constructor(id) {
 		this.id = id;
 	}
@@ -308,12 +336,23 @@ const window = {
 	registerCustomEditorProvider: () => ({ dispose: () => {} }),
 	registerWebviewViewProvider: () => ({ dispose: () => {} }),
 	registerWebviewPanelSerializer: () => ({ dispose: () => {} }),
-	createWebviewPanel: () => ({ webview: { html: "", onDidReceiveMessage: event, postMessage: async () => true }, onDidDispose: event, dispose: () => {} }),
+	createWebviewPanel: () => ({
+		webview: { html: "", onDidReceiveMessage: event, postMessage: async () => true },
+		onDidDispose: event,
+		dispose: () => {},
+	}),
 	onDidChangeActiveTextEditor: event,
 	onDidChangeVisibleTextEditors: event,
 	onDidChangeActiveColorTheme: event,
 	createOutputChannel: () => ({ appendLine: () => {}, append: () => {}, show: () => {}, dispose: () => {} }),
-	createStatusBarItem: () => ({ show: () => {}, hide: () => {}, dispose: () => {}, text: "", command: undefined, tooltip: undefined }),
+	createStatusBarItem: () => ({
+		show: () => {},
+		hide: () => {},
+		dispose: () => {},
+		text: "",
+		command: undefined,
+		tooltip: undefined,
+	}),
 	withProgress: async (_options, task) => task({ report: () => {} }, { isCancellationRequested: false }),
 	visibleTextEditors: [],
 };
@@ -395,17 +434,60 @@ const tests = {};
 const ColorThemeKind = { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 };
 
 const CompletionItemKind = {
-	Text: 0, Method: 1, Function: 2, Constructor: 3, Field: 4, Variable: 5, Class: 6, Interface: 7,
-	Module: 8, Property: 9, Unit: 10, Value: 11, Enum: 12, Keyword: 13, Snippet: 14, Color: 15,
-	File: 16, Reference: 17, Folder: 18, EnumMember: 19, Constant: 20, Struct: 21, Event: 22,
-	Operator: 23, TypeParameter: 24,
+	Text: 0,
+	Method: 1,
+	Function: 2,
+	Constructor: 3,
+	Field: 4,
+	Variable: 5,
+	Class: 6,
+	Interface: 7,
+	Module: 8,
+	Property: 9,
+	Unit: 10,
+	Value: 11,
+	Enum: 12,
+	Keyword: 13,
+	Snippet: 14,
+	Color: 15,
+	File: 16,
+	Reference: 17,
+	Folder: 18,
+	EnumMember: 19,
+	Constant: 20,
+	Struct: 21,
+	Event: 22,
+	Operator: 23,
+	TypeParameter: 24,
 };
 
 const SymbolKind = {
-	File: 0, Module: 1, Namespace: 2, Package: 3, Class: 4, Method: 5, Property: 6, Field: 7,
-	Constructor: 8, Enum: 9, Interface: 10, Function: 11, Variable: 12, Constant: 13, String: 14,
-	Number: 15, Boolean: 16, Array: 17, Object: 18, Key: 19, Null: 20, EnumMember: 21,
-	Struct: 22, Event: 23, Operator: 24, TypeParameter: 25,
+	File: 0,
+	Module: 1,
+	Namespace: 2,
+	Package: 3,
+	Class: 4,
+	Method: 5,
+	Property: 6,
+	Field: 7,
+	Constructor: 8,
+	Enum: 9,
+	Interface: 10,
+	Function: 11,
+	Variable: 12,
+	Constant: 13,
+	String: 14,
+	Number: 15,
+	Boolean: 16,
+	Array: 17,
+	Object: 18,
+	Key: 19,
+	Null: 20,
+	EnumMember: 21,
+	Struct: 22,
+	Event: 23,
+	Operator: 24,
+	TypeParameter: 25,
 };
 
 const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 };
@@ -421,6 +503,7 @@ const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 };
 const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 
 class Diagnostic {
+	[key: string]: any;
 	constructor(range, message, severity) {
 		this.range = range;
 		this.message = message;
@@ -433,14 +516,51 @@ const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 };
 const UIKind = { Desktop: 1, Web: 2 };
 
 const version = "1.96.0";
+const __stub = true;
+const __configuration = configuration;
 
-module.exports = {
-	Uri, Position, Range, Selection, Location, MarkdownString, Hover, CompletionItem, CompletionList,
-	SignatureInformation, ParameterInformation, SignatureHelp, SymbolInformation, TreeItem, EventEmitter,
-	Disposable, WorkspaceEdit, RelativePattern, ThemeColor,
-	workspace, window, commands, languages, extensions, env, debug, tasks, tests,
-	ColorThemeKind, CompletionItemKind, SymbolKind, TreeItemCollapsibleState, StatusBarAlignment,
-	ViewColumn, FileType, ProgressLocation, ConfigurationTarget, UIKind, version, Diagnostic, DiagnosticSeverity,
-	__stub: true,
-	__configuration: configuration,
+export {
+	Uri,
+	Position,
+	Range,
+	Selection,
+	Location,
+	MarkdownString,
+	Hover,
+	CompletionItem,
+	CompletionList,
+	SignatureInformation,
+	ParameterInformation,
+	SignatureHelp,
+	SymbolInformation,
+	TreeItem,
+	EventEmitter,
+	Disposable,
+	WorkspaceEdit,
+	RelativePattern,
+	ThemeColor,
+	workspace,
+	window,
+	commands,
+	languages,
+	extensions,
+	env,
+	debug,
+	tasks,
+	tests,
+	ColorThemeKind,
+	CompletionItemKind,
+	SymbolKind,
+	TreeItemCollapsibleState,
+	StatusBarAlignment,
+	ViewColumn,
+	FileType,
+	ProgressLocation,
+	ConfigurationTarget,
+	UIKind,
+	version,
+	Diagnostic,
+	DiagnosticSeverity,
+	__stub,
+	__configuration,
 };

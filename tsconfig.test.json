@@ -2,7 +2,15 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"outDir": "out-test",
+		"rootDir": ".",
 		"noEmit": false
 	},
-	"exclude": ["node_modules", "out", "out-test", "tools", "media"]
+	"include": [
+		"src/**/*.ts",
+		"tools/vscode_stub.ts",
+		"tools/vscode_languageclient_stub.ts",
+		"tools/vscode_stub_register.ts",
+		"tools/run_unit_tests.ts"
+	],
+	"exclude": ["node_modules", "out", "out-test", "media"]
 }

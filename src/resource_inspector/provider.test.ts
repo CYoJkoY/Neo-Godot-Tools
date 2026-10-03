@@ -49,7 +49,10 @@ function makeDocument(uri: vscode.Uri, text: string): vscode.TextDocument {
 
 describe("resource inspector provider", () => {
 	it("declares the sidebar view as a webview in package.json", () => {
-		const pkgPath = path.resolve(__dirname, "..", "..", "package.json");
+		// The unit runner sets the repository root; the fallback keeps the test
+		// runnable from a plain `node --test out-test/src/...` invocation.
+		const root = process.env.NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT ?? path.resolve(__dirname, "..", "..", "..");
+		const pkgPath = path.join(root, "package.json");
 		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		const views = pkg.contributes?.views?.neoGodotTools ?? [];
 		const inspectorView = views.find((view: { id: string }) => view.id === "neoGodotTools.resourceInspector");
