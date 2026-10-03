@@ -23,7 +23,7 @@ import {
 	improvements,
 	isStandardsBaseline,
 	violationTotal,
-} from "../src/standards/census";
+} from "../src/standards/census.js";
 
 const ROOT = path.resolve(__dirname, "..");
 const BASELINE_PATH = path.join(ROOT, "tools", "standards_baseline.json");

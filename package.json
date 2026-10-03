@@ -29,7 +29,7 @@
     "test:unit": "tsc -p tsconfig.test.json && node out-test/tools/run_unit_tests.js",
     "test:release": "node -r ts-node/register --test tools/changelog.test.ts tools/changelog_workflow.test.ts",
     "changelog": "ts-node tools/changelog.ts",
-    "profile:language": "npm run compile && ts-node tools/profile_language.ts",
+    "profile:language": "ts-node tools/profile_language.ts",
     "test:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm test",
     "test:engine": "ts-node tools/run_tests.ts"
   },
