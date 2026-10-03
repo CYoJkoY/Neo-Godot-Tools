@@ -1,9 +1,15 @@
-import { TreeItem, TreeItemCollapsibleState, MarkdownString, Uri } from "vscode";
+import {
+	TreeItem,
+	TreeItemCollapsibleState,
+	MarkdownString,
+	Uri,
+} from "vscode";
 import type { SceneProperty } from "./properties";
 import * as path from "node:path";
 import { get_extension_uri } from "../utils";
 import * as fs from "node:fs";
 const DEFAULT_NODE_ICON = "Node";
+
 
 const iconDir = get_extension_uri("resources", "godot_icons").fsPath;
 
@@ -83,12 +89,9 @@ export class SceneNode extends TreeItem {
 		this.update_icon();
 	}
 
-	private update_icon(): void {
+    private update_icon(): void {
 		const iconName = `${this.iconClass || this.className}.svg`;
-		if (
-			!fs.existsSync(path.join(iconDir, "light", iconName)) &&
-			!fs.existsSync(path.join(iconDir, "dark", iconName))
-		) {
+		if (!fs.existsSync(path.join(iconDir, "light", iconName)) && !fs.existsSync(path.join(iconDir, "dark", iconName))) {
 			if (!this.iconClass && !fs.existsSync(path.join(iconDir, "light", `${this.className}.svg`))) {
 				this.setIconClass(DEFAULT_NODE_ICON);
 				return;
@@ -140,11 +143,7 @@ export class ScenePropertiesGroup extends TreeItem {
 
 /** One editable property of a node. */
 export class ScenePropertyItem extends TreeItem {
-	constructor(
-		public node: SceneNode,
-		public property: SceneProperty,
-		label?: string,
-	) {
+	constructor(public node: SceneNode, public property: SceneProperty, label?: string) {
 		super(label ?? "", TreeItemCollapsibleState.None);
 		this.label = property.name;
 		this.description = property.raw.length > 80 ? `${property.raw.slice(0, 77)}...` : property.raw;

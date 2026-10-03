@@ -8,18 +8,14 @@ const MEMBER_KINDS = new Set(["variable", "constant", "signal", "function", "enu
 
 function normalizeScriptReference(value: string): string {
 	const trimmed = value.trim();
-	const unquoted =
-		(trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))
-			? trimmed.slice(1, -1)
-			: trimmed;
+	const unquoted = ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
+		? trimmed.slice(1, -1)
+		: trimmed;
 	return unquoted.replace(/\\/g, "/");
 }
 
 export class InheritedMemberResolver {
-	constructor(
-		private readonly files: FileIndex,
-		private readonly symbols: SymbolIndex,
-	) {}
+	constructor(private readonly files: FileIndex, private readonly symbols: SymbolIndex) {}
 
 	resolve(uri: string, name: string, containerName?: string): IndexedSymbol | undefined {
 		return this.resolveInHierarchy(uri, name, new Set<string>(), containerName);
@@ -49,11 +45,10 @@ export class InheritedMemberResolver {
 		const file = this.files.get(uri);
 		if (!file) return undefined;
 
-		const own = file.symbols.find(
-			(symbol) =>
-				MEMBER_KINDS.has(symbol.kind) &&
-				symbol.name === name &&
-				(this.belongsToClass(symbol, classSymbol) || this.belongsToClassByName(file, symbol, classSymbol)),
+		const own = file.symbols.find((symbol) =>
+			MEMBER_KINDS.has(symbol.kind) &&
+			symbol.name === name &&
+			(this.belongsToClass(symbol, classSymbol) || this.belongsToClassByName(file, symbol, classSymbol)),
 		);
 		if (own) return own;
 
@@ -78,9 +73,9 @@ export class InheritedMemberResolver {
 
 	/** Top-level `class_name`/script class declaration named `reference`. */
 	private resolveNamedClass(reference: string): { uri: string; symbol: IndexedSymbol } | undefined {
-		const matches = this.symbols
-			.find(reference)
-			.filter((symbol) => (symbol.kind === "class_name" || symbol.kind === "class") && !symbol.containerName);
+		const matches = this.symbols.find(reference).filter((symbol) =>
+			(symbol.kind === "class_name" || symbol.kind === "class") && !symbol.containerName,
+		);
 		if (matches.length !== 1) return undefined;
 		return { uri: matches[0].uri, symbol: matches[0] };
 	}
@@ -95,23 +90,17 @@ export class InheritedMemberResolver {
 		return symbol.uri === file.uri && Boolean(symbol.containerName) && symbol.containerName === classSymbol.name;
 	}
 
-	private resolveInHierarchy(
-		uri: string,
-		name: string,
-		visited: Set<string>,
-		containerName?: string,
-	): IndexedSymbol | undefined {
+	private resolveInHierarchy(uri: string, name: string, visited: Set<string>, containerName?: string): IndexedSymbol | undefined {
 		if (visited.has(uri)) return undefined;
 		visited.add(uri);
 
 		const file = this.files.get(uri);
 		if (!file) return undefined;
 
-		const own = file.symbols.find(
-			(symbol) =>
-				MEMBER_KINDS.has(symbol.kind) &&
+		const own = file.symbols.find((symbol) =>
+			MEMBER_KINDS.has(symbol.kind) &&
 				symbol.name === name &&
-				(containerName ? symbol.containerName === containerName : !symbol.containerName),
+			(containerName ? symbol.containerName === containerName : !symbol.containerName),
 		);
 		if (own) return own;
 
@@ -128,17 +117,15 @@ export class InheritedMemberResolver {
 		const reference = normalizeScriptReference(declaration.name);
 		if (reference.startsWith("res://") || reference.endsWith(".gd")) return this.resolveScriptPath(reference);
 
-		const matches = this.symbols
-			.find(reference)
-			.filter((symbol) => (symbol.kind === "class_name" || symbol.kind === "class") && !symbol.containerName);
+		const matches = this.symbols.find(reference).filter((symbol) =>
+			(symbol.kind === "class_name" || symbol.kind === "class") && !symbol.containerName,
+		);
 		if (matches.length !== 1) return undefined;
 		return { uri: matches[0].uri };
 	}
 
 	private resolveScriptPath(value: string): { uri: string } | undefined {
-		const path = normalizeScriptReference(value)
-			.replace(/^res:\/\//, "")
-			.replace(/^\/+/, "");
+		const path = normalizeScriptReference(value).replace(/^res:\/\//, "").replace(/^\/+/, "");
 		const uri = this.files.findByPathSuffix(path);
 		return uri ? { uri } : undefined;
 	}

@@ -95,12 +95,7 @@ class Parser {
 		const name = this.consumeIdentifier("Expected class name.");
 		if (!name) return undefined;
 		this.skipToLineEnd();
-		return {
-			kind: "class_name",
-			name: name.value,
-			nameOffset: name.start,
-			range: this.range(start.start, this.lineEndOffset(start.line)),
-		};
+		return { kind: "class_name", name: name.value, nameOffset: name.start, range: this.range(start.start, this.lineEndOffset(start.line)) };
 	}
 
 	private parseExtends(): GDScriptExtends | undefined {
@@ -158,13 +153,7 @@ class Parser {
 			}
 			if (this.atValue("}")) this.advance();
 		} else this.skipToLineEnd();
-		return {
-			kind: "enum",
-			name: nameToken?.value,
-			nameOffset: nameToken?.start,
-			members,
-			range: this.range(start.start, this.previous().end),
-		};
+		return { kind: "enum", name: nameToken?.value, nameOffset: nameToken?.start, members, range: this.range(start.start, this.previous().end) };
 	}
 
 	private parseConstant(): GDScriptConstant | undefined {
@@ -279,14 +268,7 @@ class Parser {
 		const end = declarations.length
 			? declarations[declarations.length - 1].range.end.offset
 			: this.lineEndOffset(start.line);
-		return {
-			kind: "class",
-			name: name.value,
-			nameOffset: name.start,
-			extendsName,
-			declarations,
-			range: this.range(start.start, end),
-		};
+		return { kind: "class", name: name.value, nameOffset: name.start, extendsName, declarations, range: this.range(start.start, end) };
 	}
 
 	private parseParameterList(): GDScriptParameter[] {

@@ -1,10 +1,4 @@
-import {
-	GDScriptConstant,
-	GDScriptDeclaration,
-	GDScriptFunction,
-	GDScriptToken,
-	GDScriptVariable,
-} from "../analyzer/index.js";
+import { GDScriptConstant, GDScriptDeclaration, GDScriptFunction, GDScriptToken, GDScriptVariable } from "../analyzer/index.js";
 import { Binding, BindingIndex } from "./bindings.js";
 import { collectControlFlowAssignments } from "./control_flow.js";
 import { ChainLink, dotBefore, memberAccessDot, parseChainEndingAt, startsStatement } from "./expression.js";
@@ -13,100 +7,30 @@ import { IndexedSymbol } from "./symbol.js";
 import { SymbolIndex } from "./symbol_index.js";
 import { tokensFor } from "./token_cache.js";
 
-export interface ResolvedType {
-	name: string;
-	uri?: string;
-	symbol?: IndexedSymbol;
-	builtin: boolean;
-}
+export interface ResolvedType { name: string; uri?: string; symbol?: IndexedSymbol; builtin: boolean; }
 
 const BUILTIN_TYPES = new Set([
-	"bool",
-	"int",
-	"float",
-	"String",
-	"StringName",
-	"NodePath",
-	"Node",
-	"Node2D",
-	"Node3D",
-	"Control",
-	"Object",
-	"RefCounted",
-	"Resource",
-	"Array",
-	"Dictionary",
-	"Callable",
-	"Signal",
-	"Variant",
-	"Vector2",
-	"Vector2i",
-	"Vector3",
-	"Vector3i",
-	"Vector4",
-	"Vector4i",
-	"Color",
-	"Rect2",
-	"Rect2i",
-	"Transform2D",
-	"Transform3D",
-	"Basis",
-	"Quaternion",
-	"Plane",
-	"AABB",
-	"RID",
-	"PackedByteArray",
-	"PackedInt32Array",
-	"PackedInt64Array",
-	"PackedFloat32Array",
-	"PackedFloat64Array",
-	"PackedStringArray",
-	"PackedVector2Array",
-	"PackedVector3Array",
-	"PackedVector4Array",
-	"PackedColorArray",
+	"bool", "int", "float", "String", "StringName", "NodePath", "Node", "Node2D", "Node3D", "Control", "Object",
+	"RefCounted", "Resource", "Array", "Dictionary", "Callable", "Signal", "Variant", "Vector2", "Vector2i",
+	"Vector3", "Vector3i", "Vector4", "Vector4i", "Color", "Rect2", "Rect2i", "Transform2D", "Transform3D", "Basis",
+	"Quaternion", "Plane", "AABB", "RID", "PackedByteArray", "PackedInt32Array", "PackedInt64Array", "PackedFloat32Array",
+	"PackedFloat64Array", "PackedStringArray", "PackedVector2Array", "PackedVector3Array", "PackedVector4Array", "PackedColorArray",
 ]);
 const CONSTRUCTOR_TYPES = new Set([
-	"StringName",
-	"NodePath",
-	"Vector2",
-	"Vector2i",
-	"Vector3",
-	"Vector3i",
-	"Vector4",
-	"Vector4i",
-	"Color",
-	"Rect2",
-	"Rect2i",
-	"Transform2D",
-	"Transform3D",
-	"Basis",
-	"Quaternion",
-	"Plane",
-	"AABB",
-	"RID",
-	"Array",
-	"Dictionary",
-	"Callable",
+	"StringName", "NodePath", "Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Vector4i", "Color", "Rect2", "Rect2i",
+	"Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB", "RID", "Array", "Dictionary", "Callable",
 ]);
 
 type LocalStatement =
 	| { kind: "return"; expression: string; expressionOffset: number }
 	| { kind: "assignment"; name: string; expression?: string; expressionOffset?: number; offset: number };
 
-function findDeclaration(
-	file: ReturnType<FileIndex["get"]>,
-	name: string,
-): GDScriptVariable | GDScriptConstant | undefined {
+function findDeclaration(file: ReturnType<FileIndex["get"]>, name: string): GDScriptVariable | GDScriptConstant | undefined {
 	if (!file) return undefined;
 	const visit = (declarations: GDScriptDeclaration[]): GDScriptVariable | GDScriptConstant | undefined => {
 		for (const declaration of declarations) {
-			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name)
-				return declaration;
-			if (declaration.kind === "class") {
-				const nested = visit(declaration.declarations);
-				if (nested) return nested;
-			}
+			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name) return declaration;
+			if (declaration.kind === "class") { const nested = visit(declaration.declarations); if (nested) return nested; }
 		}
 		return undefined;
 	};
@@ -120,10 +44,7 @@ function findScriptClassName(file: ReturnType<FileIndex["get"]>): string | undef
 }
 
 function stripComments(expression: string): string {
-	return expression
-		.replace(/\s+#.*$/, "")
-		.replace(/\s*\.\s*/g, ".")
-		.trim();
+	return expression.replace(/\s+#.*$/, "").replace(/\s*\.\s*/g, ".").trim();
 }
 function literalType(expression: string): string | undefined {
 	const value = stripComments(expression);
@@ -161,17 +82,8 @@ function findFunctionAt(declarations: GDScriptDeclaration[], offset: number): GD
 }
 function findContainingFunction(declarations: GDScriptDeclaration[], offset: number): GDScriptFunction | undefined {
 	for (const declaration of declarations) {
-		if (
-			declaration.kind === "function" &&
-			declaration.bodyRange &&
-			declaration.bodyRange.start.offset <= offset &&
-			offset <= declaration.bodyRange.end.offset
-		)
-			return declaration;
-		if (declaration.kind === "class") {
-			const nested = findContainingFunction(declaration.declarations, offset);
-			if (nested) return nested;
-		}
+		if (declaration.kind === "function" && declaration.bodyRange && declaration.bodyRange.start.offset <= offset && offset <= declaration.bodyRange.end.offset) return declaration;
+		if (declaration.kind === "class") { const nested = findContainingFunction(declaration.declarations, offset); if (nested) return nested; }
 	}
 	return undefined;
 }
@@ -179,19 +91,12 @@ function splitConditional(expression: string): [string, string] | undefined {
 	const match = expression.match(/^(.*?)\s+if\s+.*?\s+else\s+(.*?)$/s);
 	return match ? [match[1].trim(), match[2].trim()] : undefined;
 }
-function tokenText(tokens: GDScriptToken[]): string {
-	return tokens
-		.map((token) => token.value)
-		.join(" ")
-		.trim();
-}
+function tokenText(tokens: GDScriptToken[]): string { return tokens.map((token) => token.value).join(" ").trim(); }
 function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 	if (!tokens.length) return undefined;
 	if (tokens[0].value === "return") {
 		const expressionTokens = tokens.slice(1);
-		return expressionTokens.length
-			? { kind: "return", expression: tokenText(expressionTokens), expressionOffset: expressionTokens[0].start }
-			: undefined;
+		return expressionTokens.length ? { kind: "return", expression: tokenText(expressionTokens), expressionOffset: expressionTokens[0].start } : undefined;
 	}
 	const nameIndex = tokens[0].value === "var" || tokens[0].value === "const" ? 1 : 0;
 	const name = tokens[nameIndex];
@@ -204,36 +109,19 @@ function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 	const isInferredAssignment = tokens[equalsIndex]?.value === ":=";
 	if (!isInferredAssignment && tokens[equalsIndex]?.value !== "=") return undefined;
 	const expressionTokens = tokens.slice(equalsIndex + 1);
-	return {
-		kind: "assignment",
-		name: name.value,
-		expression: expressionTokens.length ? tokenText(expressionTokens) : undefined,
-		expressionOffset: expressionTokens[0]?.start,
-		offset: name.start,
-	};
+	return { kind: "assignment", name: name.value, expression: expressionTokens.length ? tokenText(expressionTokens) : undefined, expressionOffset: expressionTokens[0]?.start, offset: name.start };
 }
-function collectBodyStatements(
-	tokens: readonly GDScriptToken[],
-	bodyRange: GDScriptFunction["bodyRange"],
-): LocalStatement[] {
+function collectBodyStatements(tokens: readonly GDScriptToken[], bodyRange: GDScriptFunction["bodyRange"]): LocalStatement[] {
 	if (!bodyRange) return [];
 	const result: LocalStatement[] = [];
 	let lineTokens: GDScriptToken[] = [];
 	let currentLine = -1;
-	const flush = () => {
-		const statement = parseStatement(lineTokens);
-		if (statement) result.push(statement);
-		lineTokens = [];
-	};
+	const flush = () => { const statement = parseStatement(lineTokens); if (statement) result.push(statement); lineTokens = []; };
 	for (const token of tokens) {
 		if (token.kind === "eof") break;
 		if (token.start < bodyRange.start.offset) continue;
 		if (token.end > bodyRange.end.offset) break;
-		if (token.kind === "newline") {
-			flush();
-			currentLine = -1;
-			continue;
-		}
+		if (token.kind === "newline") { flush(); currentLine = -1; continue; }
 		if (currentLine !== -1 && token.line !== currentLine) flush();
 		currentLine = token.line;
 		lineTokens.push(token);
@@ -244,10 +132,9 @@ function collectBodyStatements(
 
 function normalizeScriptReference(value: string): string {
 	const trimmed = value.trim();
-	const unquoted =
-		(trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))
-			? trimmed.slice(1, -1)
-			: trimmed;
+	const unquoted = ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
+		? trimmed.slice(1, -1)
+		: trimmed;
 	return unquoted.replace(/\\/g, "/");
 }
 
@@ -255,50 +142,26 @@ export class TypeResolutionIndex {
 	private readonly nameCache = new Map<string, { signature: string; value: ResolvedType | null }>();
 	private readonly memberCache = new Map<string, { signature: string; members: IndexedSymbol[] }>();
 	private readonly statementCache = new Map<string, { fingerprint: string; statements: LocalStatement[] }>();
-	constructor(
-		private readonly files: FileIndex,
-		private readonly symbols: SymbolIndex,
-		private readonly bindings: BindingIndex,
-	) {}
+	constructor(private readonly files: FileIndex, private readonly symbols: SymbolIndex, private readonly bindings: BindingIndex) {}
 
 	resolveName(name: string): ResolvedType | undefined {
 		const normalized = name.trim().replace(/^const\s+/, "");
 		// `Outer.Inner` / `A.B.C`: a type reached through members of another type.
 		if (normalized.includes(".")) return this.resolveQualifiedName(normalized);
 		if (BUILTIN_TYPES.has(normalized)) return { name: normalized, builtin: true };
-		const matches = this.symbols
-			.find(normalized)
-			.filter(
-				(symbol) =>
-					symbol.kind === "class_name" ||
-					symbol.kind === "class" ||
-					(symbol.kind === "enum" && !symbol.containerName),
-			);
-		const signature = matches
-			.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`)
-			.join("|");
+		const matches = this.symbols.find(normalized).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class" || (symbol.kind === "enum" && !symbol.containerName));
+		const signature = matches.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`).join("|");
 		const cached = this.nameCache.get(normalized);
 		if (cached && cached.signature === signature) return cached.value ?? undefined;
-		if (matches.length !== 1) {
-			this.nameCache.set(normalized, { signature, value: null });
-			return undefined;
-		}
-		const result = {
-			name: normalized,
-			uri: matches[0].uri,
-			symbol: matches[0],
-			builtin: false,
-		} satisfies ResolvedType;
+		if (matches.length !== 1) { this.nameCache.set(normalized, { signature, value: null }); return undefined; }
+		const result = { name: normalized, uri: matches[0].uri, symbol: matches[0], builtin: false } satisfies ResolvedType;
 		this.nameCache.set(normalized, { signature, value: result });
 		return result;
 	}
 	resolveBinding(binding: Binding, offset = binding.declarationRange.start.offset): ResolvedType | undefined {
 		if (binding.kind === "enum") return this.resolveEnumBinding(binding);
 		if (binding.type) return this.resolveTypeReference(binding.type);
-		if (binding.kind === "function")
-			return binding.returnType
-				? this.resolveTypeReference(binding.returnType)
-				: this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
+		if (binding.kind === "function") return binding.returnType ? this.resolveTypeReference(binding.returnType) : this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
 		return this.resolveInitializerType(binding.uri, binding.name, offset, new Set<string>());
 	}
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
@@ -316,10 +179,7 @@ export class TypeResolutionIndex {
 			return file ? this.resolveExtends(file.ast.declarations) : undefined;
 		}
 		const binding = this.bindings.getBinding(uri, offset, name);
-		if (binding) {
-			const type = this.resolveBinding(binding, offset);
-			if (type) return type;
-		}
+		if (binding) { const type = this.resolveBinding(binding, offset); if (type) return type; }
 		// `Worker.run()` and `Worker.new()`: the receiver is a class (or helper
 		// type such as an enum) rather than a variable.
 		const named = this.resolveName(name);
@@ -350,8 +210,7 @@ export class TypeResolutionIndex {
 	}
 	resolveMemberReturnType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
 		// The value of `EnumName.Member` is the enum itself.
-		if (member.kind === "enum_member")
-			return type.name === member.containerName ? type : (this.resolveEnumMemberType(member) ?? type);
+		if (member.kind === "enum_member") return type.name === member.containerName ? type : this.resolveEnumMemberType(member) ?? type;
 		// Nested classes and named enums are types, not values with a declared type.
 		if (member.kind === "class" || member.kind === "class_name" || member.kind === "enum") {
 			return { name: member.name, uri: member.uri, symbol: member, builtin: false };
@@ -496,9 +355,7 @@ export class TypeResolutionIndex {
 		const functions = this.symbols.find(name).filter((symbol) => symbol.kind === "function");
 		if (functions.length !== 1) return undefined;
 		const fn = functions[0];
-		return fn.returnType
-			? this.resolveTypeReference(fn.returnType)
-			: this.resolveFunctionReturnType(fn.uri, fn.name, new Set<string>());
+		return fn.returnType ? this.resolveTypeReference(fn.returnType) : this.resolveFunctionReturnType(fn.uri, fn.name, new Set<string>());
 	}
 
 	private isClassLike(type: ResolvedType): boolean {
@@ -546,9 +403,7 @@ export class TypeResolutionIndex {
 		if (!file) return [];
 		// `containerRange` identifies the owner exactly; the name comparison keeps
 		// older/partial indexes (or hand-built symbols) working.
-		const own = file.symbols.filter(
-			(symbol) => symbol.kind !== "class_name" && this.belongsToClass(symbol, classSymbol),
-		);
+		const own = file.symbols.filter((symbol) => symbol.kind !== "class_name" && this.belongsToClass(symbol, classSymbol));
 		const base = this.resolveClassBase(uri, classSymbol);
 		const inherited = base?.uri
 			? base.symbol?.kind === "class"
@@ -556,8 +411,7 @@ export class TypeResolutionIndex {
 				: this.collectMembers(base.uri, visited)
 			: [];
 		const result = [...own];
-		for (const symbol of inherited)
-			if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
+		for (const symbol of inherited) if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
 		return result;
 	}
 	private classMemberSignature(uri: string, classSymbol: IndexedSymbol, visited: Set<string>): string {
@@ -577,42 +431,28 @@ export class TypeResolutionIndex {
 	private resolveEnumMemberType(member: IndexedSymbol): ResolvedType | undefined {
 		if (!member.containerName) return undefined;
 		const file = this.files.get(member.uri);
-		const symbol = file?.symbols.find(
-			(candidate) => candidate.kind === "enum" && candidate.name === member.containerName,
-		);
+		const symbol = file?.symbols.find((candidate) => candidate.kind === "enum" && candidate.name === member.containerName);
 		return symbol ? { name: symbol.name, uri: member.uri, symbol, builtin: false } : undefined;
 	}
 	invalidate(uris: Iterable<string>): void {
 		const affected = new Set(uris);
-		for (const key of this.statementCache.keys()) {
-			const marker = key.indexOf(":function:");
-			if (marker >= 0 && affected.has(key.slice(0, marker))) this.statementCache.delete(key);
-		}
+		for (const key of this.statementCache.keys()) { const marker = key.indexOf(":function:"); if (marker >= 0 && affected.has(key.slice(0, marker))) this.statementCache.delete(key); }
 		for (const [key] of this.memberCache) {
 			const marker = key.indexOf("#");
 			const keyUri = marker >= 0 ? key.slice(0, marker) : key;
 			if (affected.has(keyUri)) this.memberCache.delete(key);
 		}
-		for (const [name, cached] of this.nameCache)
-			if (cached.value?.uri && affected.has(cached.value.uri)) this.nameCache.delete(name);
-		if (affected.size)
-			for (const [name, cached] of this.nameCache) if (cached.value === null) this.nameCache.delete(name);
+		for (const [name, cached] of this.nameCache) if (cached.value?.uri && affected.has(cached.value.uri)) this.nameCache.delete(name);
+		if (affected.size) for (const [name, cached] of this.nameCache) if (cached.value === null) this.nameCache.delete(name);
 	}
-	clear(): void {
-		this.nameCache.clear();
-		this.memberCache.clear();
-		this.statementCache.clear();
-	}
+	clear(): void { this.nameCache.clear(); this.memberCache.clear(); this.statementCache.clear(); }
 	/** Resolves the declaration behind an enum binding instead of guessing by name. */
 	private resolveEnumBinding(binding: Binding): ResolvedType | undefined {
-		const symbol = this.symbols
-			.find(binding.name)
-			.find(
-				(candidate) =>
-					candidate.kind === "enum" &&
-					candidate.uri === binding.uri &&
-					(candidate.nameOffset ?? candidate.range.start.offset) === binding.nameOffset,
-			);
+		const symbol = this.symbols.find(binding.name).find((candidate) =>
+			candidate.kind === "enum" &&
+			candidate.uri === binding.uri &&
+			(candidate.nameOffset ?? candidate.range.start.offset) === binding.nameOffset,
+		);
 		if (symbol) return { name: binding.name, uri: binding.uri, symbol, builtin: false };
 		return this.resolveName(binding.name);
 	}
@@ -620,9 +460,7 @@ export class TypeResolutionIndex {
 	private enumMembers(symbol: IndexedSymbol): IndexedSymbol[] {
 		const file = this.files.get(symbol.uri);
 		if (!file) return [];
-		return file.symbols.filter(
-			(candidate) => candidate.kind === "enum_member" && candidate.containerName === symbol.name,
-		);
+		return file.symbols.filter((candidate) => candidate.kind === "enum_member" && candidate.containerName === symbol.name);
 	}
 
 	private memberSignature(uri: string, visited: Set<string>): string {
@@ -643,22 +481,17 @@ export class TypeResolutionIndex {
 		const base = this.resolveExtends(file.ast.declarations);
 		const inherited = base?.uri ? this.collectMembers(base.uri, visited) : [];
 		const result = [...own];
-		for (const symbol of inherited)
-			if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
+		for (const symbol of inherited) if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
 		return result;
 	}
 	private resolveExtends(declarations: GDScriptDeclaration[]): ResolvedType | undefined {
 		const declaration = declarations.find((item) => item.kind === "extends");
 		if (!declaration || declaration.kind !== "extends") return undefined;
 		const reference = normalizeScriptReference(declaration.name);
-		return reference.startsWith("res://") || reference.endsWith(".gd")
-			? this.resolveScriptPath(reference)
-			: this.resolveName(reference);
+		return reference.startsWith("res://") || reference.endsWith(".gd") ? this.resolveScriptPath(reference) : this.resolveName(reference);
 	}
 	private resolveScriptPath(value: string): ResolvedType | undefined {
-		const path = normalizeScriptReference(value)
-			.replace(/^res:\/\//, "")
-			.replace(/^\/+/, "");
+		const path = normalizeScriptReference(value).replace(/^res:\/\//, "").replace(/^\/+/, "");
 		const uri = this.files.findByPathSuffix(path);
 		if (!uri) return undefined;
 		const file = this.files.get(uri);
@@ -676,12 +509,7 @@ export class TypeResolutionIndex {
 		this.statementCache.set(key, { fingerprint: file.sourceFingerprint, statements });
 		return statements;
 	}
-	private resolveExpressionType(
-		uri: string,
-		expression: string,
-		offset: number,
-		visited: Set<string>,
-	): ResolvedType | undefined {
+	private resolveExpressionType(uri: string, expression: string, offset: number, visited: Set<string>): ResolvedType | undefined {
 		const value = stripComments(expression);
 		const literal = literalType(value);
 		if (literal) return this.resolveName(literal) ?? { name: literal, builtin: true };
@@ -698,18 +526,14 @@ export class TypeResolutionIndex {
 		if (load) return { name: "Resource", builtin: true };
 		const constructed = value.match(/^([A-Za-z_]\w*)\s*\.\s*new\s*\(.*\)$/s);
 		if (constructed) {
-			if (CONSTRUCTOR_TYPES.has(constructed[1]))
-				return this.resolveName(constructed[1]) ?? { name: constructed[1], builtin: true };
+			if (CONSTRUCTOR_TYPES.has(constructed[1])) return this.resolveName(constructed[1]) ?? { name: constructed[1], builtin: true };
 			const type = this.resolveName(constructed[1]);
 			if (type) return type;
 		}
 		const memberCall = value.match(/^([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)\s*\(.*\)$/s);
 		if (memberCall) {
 			const receiver = this.resolveReceiver(uri, offset, memberCall[1]);
-			if (receiver) {
-				const member = this.getMember(receiver, memberCall[2]);
-				if (member) return this.resolveMemberReturnType(receiver, member);
-			}
+			if (receiver) { const member = this.getMember(receiver, memberCall[2]); if (member) return this.resolveMemberReturnType(receiver, member); }
 		}
 		const memberAccess = value.match(/^([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)$/s);
 		if (memberAccess) {
@@ -721,26 +545,15 @@ export class TypeResolutionIndex {
 		}
 		const call = topLevelCall(value);
 		if (call) {
-			if (CONSTRUCTOR_TYPES.has(call.name))
-				return this.resolveName(call.name) ?? { name: call.name, builtin: true };
+			if (CONSTRUCTOR_TYPES.has(call.name)) return this.resolveName(call.name) ?? { name: call.name, builtin: true };
 			const functions = this.symbols.find(call.name).filter((symbol) => symbol.kind === "function");
-			if (functions.length === 1) {
-				const fn = functions[0];
-				return fn.returnType
-					? this.resolveTypeReference(fn.returnType)
-					: this.resolveFunctionReturnType(fn.uri, fn.name, visited);
-			}
+			if (functions.length === 1) { const fn = functions[0]; return fn.returnType ? this.resolveTypeReference(fn.returnType) : this.resolveFunctionReturnType(fn.uri, fn.name, visited); }
 		}
 		const binding = this.bindings.getBinding(uri, offset, value);
 		if (binding) return this.resolveBinding(binding, offset);
 		return this.resolveName(value);
 	}
-	private resolveInitializerType(
-		uri: string,
-		name: string,
-		offset: number,
-		visited: Set<string>,
-	): ResolvedType | undefined {
+	private resolveInitializerType(uri: string, name: string, offset: number, visited: Set<string>): ResolvedType | undefined {
 		const key = `${uri}:${name}:${offset}`;
 		if (visited.has(key)) return undefined;
 		visited.add(key);
@@ -748,10 +561,7 @@ export class TypeResolutionIndex {
 		if (!file) return undefined;
 		const declaration = findDeclaration(file, name);
 		if (declaration?.type) return this.resolveTypeReference(declaration.type);
-		if (declaration?.value) {
-			const result = this.resolveExpressionType(uri, declaration.value, declaration.range.start.offset, visited);
-			if (result) return result;
-		}
+		if (declaration?.value) { const result = this.resolveExpressionType(uri, declaration.value, declaration.range.start.offset, visited); if (result) return result; }
 		const functionDeclaration = findContainingFunction(file.ast.declarations, offset);
 		if (!functionDeclaration) return undefined;
 		const controlFlow = collectControlFlowAssignments(file.source, functionDeclaration.bodyRange, name, offset);
@@ -768,9 +578,7 @@ export class TypeResolutionIndex {
 		}
 		const statements = this.getBodyStatements(uri, functionDeclaration);
 		let latest: LocalStatement | undefined;
-		for (const statement of statements)
-			if (statement.kind === "assignment" && statement.name === name && statement.offset <= offset)
-				latest = statement;
+		for (const statement of statements) if (statement.kind === "assignment" && statement.name === name && statement.offset <= offset) latest = statement;
 		if (!latest?.expression || latest.expressionOffset === undefined) return undefined;
 		return this.resolveExpressionType(uri, latest.expression, latest.expressionOffset, visited);
 	}
@@ -780,9 +588,7 @@ export class TypeResolutionIndex {
 		const declaration = findFunctionAt(file.ast.declarations, member.range.start.offset);
 		if (!declaration) return this.resolveFunctionReturnType(member.uri, member.name, visited);
 		if (declaration.returnType) return this.resolveTypeReference(declaration.returnType);
-		const returns = this.getBodyStatements(member.uri, declaration).filter(
-			(statement) => statement.kind === "return",
-		);
+		const returns = this.getBodyStatements(member.uri, declaration).filter((statement) => statement.kind === "return");
 		if (!returns.length) return undefined;
 		let resolved: ResolvedType | undefined;
 		for (const item of returns) {
@@ -803,9 +609,7 @@ export class TypeResolutionIndex {
 		if (functions.length !== 1) return undefined;
 		const fn = functions[0];
 		if (fn.returnType) return this.resolveTypeReference(fn.returnType);
-		const returns = this.getBodyStatements(uri, fn).filter(
-			(statement): statement is Extract<LocalStatement, { kind: "return" }> => statement.kind === "return",
-		);
+		const returns = this.getBodyStatements(uri, fn).filter((statement): statement is Extract<LocalStatement, { kind: "return" }> => statement.kind === "return");
 		if (!returns.length) return undefined;
 		let resolved: ResolvedType | undefined;
 		for (const item of returns) {

@@ -128,14 +128,7 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 			if (declaration.kind === "enum") {
 				// Named enums are types whose members are only reachable through the
 				// enum name; members of unnamed enums act as plain script constants.
-				const symbol = declarationToSymbol(
-					declaration,
-					uri,
-					containerName,
-					source,
-					sourceLines,
-					containerRange,
-				);
+				const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines, containerRange);
 				if (symbol) symbols.push(symbol);
 				for (const member of declaration.members) {
 					const documentation = sourceLines

@@ -1,13 +1,5 @@
 import { GDScriptDeclaration } from "../../analyzer/index.js";
-import {
-	Binding,
-	BindingIndex,
-	FileIndex,
-	IndexedSymbol,
-	SymbolIndex,
-	TypeResolutionIndex,
-	ResolvedType,
-} from "../../index/index.js";
+import { Binding, BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
 import { InheritedMemberResolver } from "../../index/inherited_member_resolution.js";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./builtin_symbols.js";
 
@@ -60,12 +52,7 @@ function wordAt(source: string, offset: number): { name: string; start: number; 
 
 function findContainingFunctionName(declarations: GDScriptDeclaration[], offset: number): string | undefined {
 	for (const declaration of declarations) {
-		if (
-			declaration.kind === "function" &&
-			declaration.bodyRange &&
-			declaration.bodyRange.start.offset <= offset &&
-			offset <= declaration.bodyRange.end.offset
-		) {
+		if (declaration.kind === "function" && declaration.bodyRange && declaration.bodyRange.start.offset <= offset && offset <= declaration.bodyRange.end.offset) {
 			return declaration.name;
 		}
 		if (declaration.kind === "class") {
@@ -79,10 +66,7 @@ function findContainingFunctionName(declarations: GDScriptDeclaration[], offset:
 function symbolFromBinding(binding: Binding): IndexedSymbol {
 	return {
 		name: binding.name,
-		kind:
-			binding.kind === "member" || binding.kind === "local" || binding.kind === "parameter"
-				? "variable"
-				: binding.kind,
+		kind: binding.kind === "member" || binding.kind === "local" || binding.kind === "parameter" ? "variable" : binding.kind,
 		uri: binding.uri,
 		range: binding.declarationRange,
 		type: binding.type,
@@ -105,10 +89,7 @@ function completionFromSymbol(symbol: IndexedSymbol, priority: number): Semantic
 
 export class SemanticQueryEngine {
 	private readonly symbolCache = new Map<string, CacheEntry<ResolutionResult<IndexedSymbol>>>();
-	private readonly completionCache = new Map<
-		string,
-		CacheEntry<ResolutionResult<readonly SemanticCompletionItem[]>>
-	>();
+	private readonly completionCache = new Map<string, CacheEntry<ResolutionResult<readonly SemanticCompletionItem[]>>>();
 	private readonly inheritedMembers: InheritedMemberResolver;
 
 	constructor(
@@ -137,11 +118,7 @@ export class SemanticQueryEngine {
 		return this.getSymbol(uri, position);
 	}
 
-	getReferences(
-		uri: string,
-		position: SemanticPosition,
-		includeDeclaration: boolean,
-	): ResolutionResult<ReturnType<BindingIndex["findReferences"]>> {
+	getReferences(uri: string, position: SemanticPosition, includeDeclaration: boolean): ResolutionResult<ReturnType<BindingIndex["findReferences"]>> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
 		const word = wordAt(file.source, position.offset);
@@ -228,21 +205,14 @@ export class SemanticQueryEngine {
 		if (memberReceiver) {
 			const receiver = this.types.resolveReceiver(uri, word!.start, memberReceiver.name);
 			if (receiver?.uri) this.captureFile(files, receiver.uri);
-			return {
-				files,
-				symbolQueries: new Map([[memberReceiver.name, this.symbols.signature(memberReceiver.name)]]),
-				workspaceQueries,
-			};
+			return { files, symbolQueries: new Map([[memberReceiver.name, this.symbols.signature(memberReceiver.name)]]), workspaceQueries };
 		}
 		const prefix = word?.name ?? "";
 		workspaceQueries.set(prefix, this.symbols.workspaceSignature(prefix));
 		return { files, symbolQueries: new Map(), workspaceQueries };
 	}
 
-	private memberReceiver(
-		file: ReturnType<FileIndex["get"]>,
-		word: { name: string; start: number; end: number } | undefined,
-	): { name: string } | undefined {
+	private memberReceiver(file: ReturnType<FileIndex["get"]>, word: { name: string; start: number; end: number } | undefined): { name: string } | undefined {
 		if (!file || !word) return undefined;
 		const prefix = file.source.slice(0, word.start);
 		const match = prefix.match(/([A-Za-z_]\w*)\.$/);
@@ -257,9 +227,7 @@ export class SemanticQueryEngine {
 		const uri = receiver.uri;
 		if (!uri) return undefined;
 		if (receiver.symbol?.kind === "class") {
-			return (
-				this.inheritedMembers.resolveInClass(uri, receiver.symbol, name) ?? this.types.getMember(receiver, name)
-			);
+			return this.inheritedMembers.resolveInClass(uri, receiver.symbol, name) ?? this.types.getMember(receiver, name);
 		}
 		return this.inheritedMembers.resolve(uri, name) ?? this.types.getMember(receiver, name);
 	}
@@ -270,10 +238,8 @@ export class SemanticQueryEngine {
 
 	private dependenciesValid(dependencies: QueryDependencySnapshot): boolean {
 		for (const [uri, snapshot] of dependencies.files) if (this.snapshot(uri) !== snapshot) return false;
-		for (const [name, signature] of dependencies.symbolQueries)
-			if (this.symbols.signature(name) !== signature) return false;
-		for (const [query, signature] of dependencies.workspaceQueries)
-			if (this.symbols.workspaceSignature(query) !== signature) return false;
+		for (const [name, signature] of dependencies.symbolQueries) if (this.symbols.signature(name) !== signature) return false;
+		for (const [query, signature] of dependencies.workspaceQueries) if (this.symbols.workspaceSignature(query) !== signature) return false;
 		return true;
 	}
 
@@ -294,8 +260,7 @@ export class SemanticQueryEngine {
 		if (word.name === "super" && /^\s*\(/.test(after)) {
 			const functionName = findContainingFunctionName(file.ast.declarations, word.start);
 			const parent = this.types.resolveReceiver(uri, word.start, "super");
-			const member =
-				functionName && parent?.uri ? this.inheritedMembers.resolve(parent.uri, functionName) : undefined;
+			const member = functionName && parent?.uri ? this.inheritedMembers.resolve(parent.uri, functionName) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (parent) return { confidence: "partial" };
 		}
@@ -322,10 +287,7 @@ export class SemanticQueryEngine {
 		return { confidence: "unknown" };
 	}
 
-	private resolveCompletions(
-		uri: string,
-		position: SemanticPosition,
-	): ResolutionResult<readonly SemanticCompletionItem[]> {
+	private resolveCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
 		const source = file.source;
@@ -351,26 +313,15 @@ export class SemanticQueryEngine {
 			.filter((binding) => binding.name.startsWith(completionPrefix))
 			.map((binding, index) => completionFromSymbol(symbolFromBinding(binding), index));
 		const localNames = new Set(localItems.map((item) => item.name));
-		const workspaceItems = this.symbols
-			.workspaceSymbols(completionPrefix)
+		const workspaceItems = this.symbols.workspaceSymbols(completionPrefix)
 			// Members of named enums are only valid after `EnumName.`.
 			.filter((symbol) => !(symbol.kind === "enum_member" && symbol.containerName))
 			.filter((symbol) => !localNames.has(symbol.name))
-			.sort(
-				(left, right) =>
-					left.name.localeCompare(right.name) ||
-					left.uri.localeCompare(right.uri) ||
-					left.range.start.offset - right.range.start.offset,
-			)
+			.sort((left, right) => left.name.localeCompare(right.name) || left.uri.localeCompare(right.uri) || left.range.start.offset - right.range.start.offset)
 			.map((symbol, index) => completionFromSymbol(symbol, localItems.length + index));
 		const builtinItems = resolveBuiltinSymbols(completionPrefix)
-			.filter(
-				({ builtin }) =>
-					!localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name),
-			)
-			.map(({ symbol }, index) =>
-				completionFromSymbol(symbol, localItems.length + workspaceItems.length + index),
-			);
+			.filter(({ builtin }) => !localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name))
+			.map(({ symbol }, index) => completionFromSymbol(symbol, localItems.length + workspaceItems.length + index));
 		const items = [...localItems, ...workspaceItems, ...builtinItems];
 		if (!items.length) return { confidence: "unknown" };
 		return { value: items, confidence: "exact" };
