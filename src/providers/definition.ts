@@ -113,6 +113,19 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		const memberAccess = hasMemberReceiver(document, range);
 		const word = document.getText(range);
 
+		// Engine members of a native receiver (`node.get_class()`) are documented
+		// by Godot, not by the project index.
+		if (memberAccess) {
+			const nativeMember = await this.resolveNativeMemberFromReceiver(document, range, token);
+			if (nativeMember) return nativeMember;
+		}
+
+		// Project symbols come first: a script may declare a function, an inner
+		// class or an inner class *method* whose name is also a builtin, and
+		// Ctrl+Click must reach the declaration the project actually calls.
+		const local = this.languageService.getLocalDefinition(document, position);
+		if (local) return local;
+
 		if (functionCall && !memberAccess) {
 			const builtin = resolveBuiltinSymbol(word);
 			if (builtin) {
@@ -127,14 +140,6 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		if (!functionCall && !memberAccess && globals.docsProvider?.classInfo.has(word)) {
 			return new Location(make_docs_uri(word), new Position(0, 0));
 		}
-
-		if (memberAccess) {
-			const nativeMember = await this.resolveNativeMemberFromReceiver(document, range, token);
-			if (nativeMember) return nativeMember;
-		}
-
-		const local = await this.languageService.getDefinition(document, position, token);
-		if (local) return local;
 
 		return this.provideBuiltinSymbolDefinition(document, position, token, range);
 	}

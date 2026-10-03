@@ -9,19 +9,21 @@ import { SemanticQueryEngine } from "../language/semantic/query_engine.js";
 
 const URI = "file:///workspace/inner.gd";
 
-function index(source: string) {
+function index(source: string, extra: Record<string, string> = {}) {
 	const files = new FileIndex();
 	const symbols = new SymbolIndex(files);
 	const bindings = new BindingIndex(files);
-	files.update(URI, source, 1);
-	symbols.update(URI);
-	bindings.update(URI);
+	for (const [uri, text] of Object.entries({ [URI]: source, ...extra })) {
+		files.update(uri, text, 1);
+		symbols.update(uri);
+		bindings.update(uri);
+	}
 	const types = new TypeResolutionIndex(files, symbols, bindings);
 	return { files, symbols, bindings, types, semantic: new SemanticQueryEngine(files, symbols, bindings, types) };
 }
 
-function definitionAt(source: string, marker: string, offsetInMarker = marker.length - 1) {
-	const { semantic } = index(source);
+function definitionAt(source: string, marker: string, offsetInMarker = marker.length - 1, extra: Record<string, string> = {}) {
+	const { semantic } = index(source, extra);
 	const start = source.indexOf(marker);
 	assert.ok(start >= 0, `marker ${marker} not found`);
 	return semantic.getDefinition(URI, { offset: start + offsetInMarker });
@@ -29,7 +31,7 @@ function definitionAt(source: string, marker: string, offsetInMarker = marker.le
 
 function completionsAt(source: string, marker: string, offsetInMarker = marker.length) {
 	const { semantic } = index(source);
-	const start = source.indexOf(marker);
+	const start = source.lastIndexOf(marker);
 	assert.ok(start >= 0, `marker ${marker} not found`);
 	return semantic.getCompletions(URI, { offset: start + offsetInMarker });
 }
@@ -216,5 +218,156 @@ func use_worker():
 			.sort((left, right) => left - right);
 		assert.deepEqual(lines, [2, 5, 8, 9], "every call form must reference the declaration");
 		assert.equal(files.get(URI)?.symbols.filter((symbol) => symbol.name === "run").length, 1);
+	});
+});
+
+describe("nested class navigation through expressions", () => {
+	it("resolves a qualified type annotation to the nested class", () => {
+		const source = `class_name Child
+class Outer:
+	class Inner:
+		var speed := 1
+func use():
+	var item: Outer.Inner = null
+	item.speed
+`;
+		const annotation = definitionAt(source, "Outer.Inner", "Outer.Inner".length - 1);
+		assert.equal(annotation.value?.name, "Inner");
+		assert.equal(annotation.value?.kind, "class");
+
+		const member = definitionAt(source, "item.speed", "item.speed".length - 1);
+		assert.equal(member.confidence, "exact");
+		assert.equal(member.value?.name, "speed");
+	});
+
+	it("resolves a qualified annotation that points into another script", () => {
+		const source = `extends Node
+func use():
+	var item: Outer.Inner = null
+	item.inner_fn()
+`;
+		const extra = {
+			"file:///workspace/outer.gd": "class_name Outer\nclass Inner:\n\tfunc inner_fn():\n\t\tpass\n",
+		};
+		const member = definitionAt(source, "item.inner_fn", "item.inner_fn".length - 1, extra);
+		assert.equal(member.confidence, "exact");
+		assert.equal(member.value?.name, "inner_fn");
+		assert.equal(member.value?.containerName, "Inner");
+	});
+
+	it("keeps chained constructions of same-named methods apart", () => {
+		const source = `class_name Child
+class Alpha:
+	func run():
+		pass
+class Beta:
+	func run():
+		pass
+func use():
+	Alpha.new().run()
+	Beta.new().run()
+`;
+		const alpha = definitionAt(source, "Alpha.new().run", "Alpha.new().run".length - 1);
+		assert.equal(alpha.value?.containerName, "Alpha");
+		const beta = definitionAt(source, "Beta.new().run", "Beta.new().run".length - 1);
+		assert.equal(beta.value?.containerName, "Beta");
+	});
+
+	it("resolves a method called on the result of another method", () => {
+		const source = `class_name Child
+class Worker:
+	func run():
+		pass
+static func make() -> Worker:
+	return Worker.new()
+func use():
+	self.make().run()
+	self.make().run()
+`;
+		const result = definitionAt(source, "self.make().run", "self.make().run".length - 1);
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "run");
+		assert.equal(result.value?.containerName, "Worker");
+	});
+
+	it("follows a nested class base declared as a qualified name", () => {
+		const source = `class_name Child
+class Outer:
+	class Base:
+		func deep():
+			pass
+	class Worker extends Outer.Base:
+		func run():
+			self.deep()
+`;
+		const result = definitionAt(source, "self.deep", "self.deep".length - 1);
+		assert.equal(result.value?.name, "deep");
+		assert.equal(result.value?.containerName, "Base");
+	});
+
+	it("inherits nested class members from a class_name base in another script", () => {
+		const source = `class_name Outer
+class Inner extends Base:
+	func inner_fn():
+		self.base_fn()
+`;
+		const extra = { "file:///workspace/base.gd": "class_name Base\nfunc base_fn() -> int:\n\treturn 1\n" };
+		const result = definitionAt(source, "self.base_fn", "self.base_fn".length - 1, extra);
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "base_fn");
+		assert.equal(result.value?.uri, "file:///workspace/base.gd");
+	});
+
+	it("resolves a chained call on an inherited nested class member", () => {
+		const userSource = "extends Node\nfunc use():\n\tOuter.Inner.new().base_fn()\n";
+		const extra = {
+			"file:///workspace/base.gd": "class_name Base\nfunc base_fn() -> int:\n\treturn 1\n",
+			"file:///workspace/outer.gd": "class_name Outer\nclass Inner extends Base:\n\tfunc inner_fn():\n\t\tpass\n",
+		};
+		const files = new FileIndex();
+		const symbols = new SymbolIndex(files);
+		const bindings = new BindingIndex(files);
+		for (const [uri, text] of Object.entries({ [URI]: userSource, ...extra })) {
+			files.update(uri, text, 1);
+			symbols.update(uri);
+			bindings.update(uri);
+		}
+		const types = new TypeResolutionIndex(files, symbols, bindings);
+		const semantic = new SemanticQueryEngine(files, symbols, bindings, types);
+		const offset = userSource.indexOf("Outer.Inner.new().base_fn") + "Outer.Inner.new().base_fn".length - 1;
+		const result = semantic.getDefinition(URI, { offset });
+		assert.equal(result.confidence, "exact");
+		assert.equal(result.value?.name, "base_fn");
+		assert.equal(result.value?.uri, "file:///workspace/base.gd");
+	});
+
+	it("binds a super call of a nested class to its own base", () => {
+		const source = `class_name Child
+class Base:
+	func ping():
+		pass
+class Worker extends Base:
+	func ping():
+		super.ping()
+`;
+		const { bindings } = index(source);
+		const baseDeclaration = bindings.getBinding(URI, source.indexOf("func ping"), "ping");
+		assert.ok(baseDeclaration);
+		assert.deepEqual(
+			bindings.findReferences(baseDeclaration.id).map((reference) => reference.range.start.line).sort((a, b) => a - b),
+			[2, 6],
+			"the base declaration and the super call must share one binding",
+		);
+
+		const override = bindings.getBinding(URI, source.lastIndexOf("func ping"), "ping");
+		assert.ok(override);
+		assert.notEqual(override.id, baseDeclaration.id, "an override is its own declaration");
+	});
+
+	it("completes members after a chained construction", () => {
+		const source = "class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
+		const result = completionsAt(source, "Worker.new().", "Worker.new().".length);
+		assert.equal(result.confidence, "exact");
+		assert.deepEqual(result.value?.map((item) => item.name).sort(), ["run", "speed"]);
 	});
 });

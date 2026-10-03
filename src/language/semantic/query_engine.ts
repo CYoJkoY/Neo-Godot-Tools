@@ -127,7 +127,7 @@ export class SemanticQueryEngine {
 		if (!binding) return { confidence: "unknown" };
 		const references = this.bindings.findReferences(binding.id).filter((reference) => {
 			if (includeDeclaration) return true;
-			return reference.uri !== binding.uri || reference.range.start.offset !== binding.declarationRange.start.offset;
+			return reference.uri !== binding.uri || reference.range.start.offset !== binding.nameOffset;
 		});
 		return { value: references, confidence: "exact" };
 	}
@@ -221,6 +221,17 @@ export class SemanticQueryEngine {
 		return undefined;
 	}
 
+	/** Member `name` of a resolved receiver type, honouring its kind. */
+	private memberOf(receiver: ResolvedType, name: string): IndexedSymbol | undefined {
+		if (receiver.symbol?.kind === "enum") return this.types.getMember(receiver, name);
+		const uri = receiver.uri;
+		if (!uri) return undefined;
+		if (receiver.symbol?.kind === "class") {
+			return this.inheritedMembers.resolveInClass(uri, receiver.symbol, name) ?? this.types.getMember(receiver, name);
+		}
+		return this.inheritedMembers.resolve(uri, name) ?? this.types.getMember(receiver, name);
+	}
+
 	private captureFile(target: Map<string, string>, uri: string): void {
 		target.set(uri, this.snapshot(uri));
 	}
@@ -254,18 +265,12 @@ export class SemanticQueryEngine {
 			if (parent) return { confidence: "partial" };
 		}
 
-		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
-		const shorthandMember = !memberMatch && prefix.endsWith(".");
-		if (memberMatch || shorthandMember) {
-			const receiverName = memberMatch?.[1] ?? "super";
-			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
-			const member = receiver
-				? receiver.symbol?.kind === "enum"
-					? this.types.getMember(receiver, word.name)
-					: receiver.symbol?.kind === "class"
-						? this.inheritedMembers.resolveInClass(receiver.uri ?? "", receiver.symbol, word.name)
-						: this.inheritedMembers.resolve(receiver.uri ?? "", word.name)
-				: undefined;
+		// `receiver.member`: the receiver may be an identifier, a class name, a
+		// nested class (`Outer.Inner.mode`) or the result of a call
+		// (`Worker.new().run()`), so the receiver is resolved as an expression.
+		if (this.types.hasMemberAccessAt(uri, word.start)) {
+			const receiver = this.types.resolveReceiverExpression(uri, word.start);
+			const member = receiver ? this.memberOf(receiver, word.name) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (receiver) return { confidence: "partial" };
 		}
@@ -289,18 +294,8 @@ export class SemanticQueryEngine {
 		const word = wordAt(source, position.offset);
 		const wordStart = word?.start ?? position.offset;
 		const prefix = source.slice(0, wordStart);
-		const memberMatch = prefix.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.$/);
-		if (memberMatch) {
-			const receiver = this.types.resolveReceiver(uri, wordStart, memberMatch[1]);
-			if (!receiver || receiver.builtin) return { confidence: "unknown" };
-			const members = this.types.getMembers(receiver);
-			if (!members.length) return { confidence: "unknown" };
-			const memberPrefix = word?.name ?? "";
-			const filtered = members.filter((member) => member.name.startsWith(memberPrefix));
-			return { value: filtered.map((member, index) => completionFromSymbol(member, index)), confidence: "exact" };
-		}
-		if (prefix.endsWith(".")) {
-			const receiver = this.types.resolveReceiver(uri, wordStart, "super");
+		if (this.types.hasReceiverBeforeDot(uri, wordStart)) {
+			const receiver = this.types.resolveReceiverBeforeDot(uri, wordStart);
 			if (!receiver || receiver.builtin) return { confidence: "unknown" };
 			const members = this.types.getMembers(receiver);
 			if (!members.length) return { confidence: "unknown" };

@@ -1,9 +1,11 @@
-import { GDScriptConstant, GDScriptDeclaration, GDScriptFunction, GDScriptToken, GDScriptVariable, lexGDScript } from "../analyzer/index.js";
+import { GDScriptConstant, GDScriptDeclaration, GDScriptFunction, GDScriptToken, GDScriptVariable } from "../analyzer/index.js";
 import { Binding, BindingIndex } from "./bindings.js";
 import { collectControlFlowAssignments } from "./control_flow.js";
+import { ChainLink, dotBefore, memberAccessDot, parseChainEndingAt, startsStatement } from "./expression.js";
 import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
 import { SymbolIndex } from "./symbol_index.js";
+import { tokensFor } from "./token_cache.js";
 
 export interface ResolvedType { name: string; uri?: string; symbol?: IndexedSymbol; builtin: boolean; }
 
@@ -109,9 +111,8 @@ function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 	const expressionTokens = tokens.slice(equalsIndex + 1);
 	return { kind: "assignment", name: name.value, expression: expressionTokens.length ? tokenText(expressionTokens) : undefined, expressionOffset: expressionTokens[0]?.start, offset: name.start };
 }
-function collectBodyStatements(source: string, bodyRange: GDScriptFunction["bodyRange"]): LocalStatement[] {
+function collectBodyStatements(tokens: readonly GDScriptToken[], bodyRange: GDScriptFunction["bodyRange"]): LocalStatement[] {
 	if (!bodyRange) return [];
-	const tokens = lexGDScript(source);
 	const result: LocalStatement[] = [];
 	let lineTokens: GDScriptToken[] = [];
 	let currentLine = -1;
@@ -145,6 +146,8 @@ export class TypeResolutionIndex {
 
 	resolveName(name: string): ResolvedType | undefined {
 		const normalized = name.trim().replace(/^const\s+/, "");
+		// `Outer.Inner` / `A.B.C`: a type reached through members of another type.
+		if (normalized.includes(".")) return this.resolveQualifiedName(normalized);
 		if (BUILTIN_TYPES.has(normalized)) return { name: normalized, builtin: true };
 		const matches = this.symbols.find(normalized).filter((symbol) => symbol.kind === "class_name" || symbol.kind === "class" || (symbol.kind === "enum" && !symbol.containerName));
 		const signature = matches.map((symbol) => `${symbol.uri}:${symbol.range.start.offset}:${symbol.range.end.offset}`).join("|");
@@ -157,8 +160,8 @@ export class TypeResolutionIndex {
 	}
 	resolveBinding(binding: Binding, offset = binding.declarationRange.start.offset): ResolvedType | undefined {
 		if (binding.kind === "enum") return this.resolveEnumBinding(binding);
-		if (binding.type) return this.resolveName(binding.type);
-		if (binding.kind === "function") return binding.returnType ? this.resolveName(binding.returnType) : this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
+		if (binding.type) return this.resolveTypeReference(binding.type);
+		if (binding.kind === "function") return binding.returnType ? this.resolveTypeReference(binding.returnType) : this.resolveFunctionReturnType(binding.uri, binding.name, new Set<string>());
 		return this.resolveInitializerType(binding.uri, binding.name, offset, new Set<string>());
 	}
 	resolveReceiver(uri: string, offset: number, name: string): ResolvedType | undefined {
@@ -208,8 +211,12 @@ export class TypeResolutionIndex {
 	resolveMemberReturnType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
 		// The value of `EnumName.Member` is the enum itself.
 		if (member.kind === "enum_member") return type.name === member.containerName ? type : this.resolveEnumMemberType(member) ?? type;
-		if (member.returnType) return this.resolveName(member.returnType);
-		if (member.type) return this.resolveName(member.type);
+		// Nested classes and named enums are types, not values with a declared type.
+		if (member.kind === "class" || member.kind === "class_name" || member.kind === "enum") {
+			return { name: member.name, uri: member.uri, symbol: member, builtin: false };
+		}
+		if (member.returnType) return this.resolveTypeReference(member.returnType);
+		if (member.type) return this.resolveTypeReference(member.type);
 		if (member.kind !== "function") return undefined;
 		// Resolve the declaration the symbol points at, not the first function
 		// with that name: two inner classes may both define `run()`.
@@ -226,6 +233,141 @@ export class TypeResolutionIndex {
 			if (!best || symbol.range.start.offset > best.range.start.offset) best = symbol;
 		}
 		return best ? { name: best.name, uri, symbol: best, builtin: false } : undefined;
+	}
+
+	/**
+	 * Type of the expression in front of the `.` that precedes `offset`.
+	 *
+	 * `offset` is the offset of the member name being resolved, which makes this
+	 * the entry point for every `receiver.member` lookup: `self.run()`,
+	 * `Worker.new().run()`, `get_player().health`, `Outer.Inner.mode`.
+	 */
+	/** True when the identifier at `offset` is accessed through a `.`. */
+	hasMemberAccessAt(uri: string, offset: number): boolean {
+		return memberAccessDot(this.tokens(uri), offset) !== undefined;
+	}
+
+	/** True when the token immediately before `offset` is a member-access dot. */
+	hasReceiverBeforeDot(uri: string, offset: number): boolean {
+		return dotBefore(this.tokens(uri), offset) !== undefined;
+	}
+
+	resolveReceiverExpression(uri: string, offset: number): ResolvedType | undefined {
+		const tokens = this.tokens(uri);
+		const dot = memberAccessDot(tokens, offset);
+		if (dot === undefined) return undefined;
+		const receiver = this.resolveExpressionAt(uri, dot);
+		if (receiver) return receiver;
+		// A statement starting with `.member` is GDScript shorthand for `self`.
+		return startsStatement(tokens, dot) ? this.resolveReceiver(uri, offset, "self") : undefined;
+	}
+
+	/** Receiver type of the `.` directly in front of `offset` (`Worker.`). */
+	resolveReceiverBeforeDot(uri: string, offset: number): ResolvedType | undefined {
+		const tokens = this.tokens(uri);
+		const dot = dotBefore(tokens, offset);
+		if (!dot) return undefined;
+		const receiver = this.resolveExpressionAt(uri, dot.start);
+		if (receiver) return receiver;
+		return startsStatement(tokens, dot.start) ? this.resolveReceiver(uri, offset, "self") : undefined;
+	}
+
+	/**
+	 * Type of the access chain that ends exactly at `endOffset`.
+	 *
+	 * Used both for member receivers and for initializers such as
+	 * `var w := Worker.new()`.
+	 */
+	resolveExpressionAt(uri: string, endOffset: number): ResolvedType | undefined {
+		const file = this.files.get(uri);
+		if (!file) return undefined;
+		const chain = parseChainEndingAt(this.tokens(uri), endOffset);
+		if (!chain) return undefined;
+		return this.resolveChain(uri, endOffset, chain);
+	}
+
+	/** Lexed tokens of a file, shared through the token cache. */
+	private tokens(uri: string): readonly GDScriptToken[] {
+		const file = this.files.get(uri);
+		return file ? tokensFor(uri, file.source, file.sourceFingerprint) : [];
+	}
+
+	/**
+	 * Resolves a type reference, including qualified ones (`Outer.Inner`).
+	 *
+	 * Type annotations, `extends` clauses and member types all funnel through
+	 * here so a nested class is addressable wherever GDScript accepts one.
+	 */
+	resolveTypeReference(reference: string): ResolvedType | undefined {
+		const trimmed = reference.trim();
+		if (!trimmed) return undefined;
+		return this.resolveName(trimmed);
+	}
+
+	/** `A.B`, `A.B.C`: walks the members of `A` until the last name. */
+	private resolveQualifiedName(reference: string): ResolvedType | undefined {
+		const parts = reference.split(".").filter(Boolean);
+		if (parts.length < 2) return undefined;
+		let current = this.resolveName(parts[0]);
+		for (let index = 1; index < parts.length && current; index++) {
+			const member = this.getMember(current, parts[index]);
+			if (!member) return undefined;
+			current = this.memberType(current, member);
+		}
+		return current;
+	}
+
+	/**
+	 * Walks an access chain (`Worker` → `new()` → `run()`) and returns the type
+	 * of its result. A link that cannot be resolved ends the walk, which is the
+	 * difference between "unknown" and "the wrong symbol".
+	 */
+	private resolveChain(uri: string, offset: number, chain: readonly ChainLink[]): ResolvedType | undefined {
+		let current: ResolvedType | undefined;
+		for (let index = 0; index < chain.length; index++) {
+			const link = chain[index];
+			if (index === 0) {
+				current = link.call
+					? this.resolveCallResult(uri, offset, link.name)
+					: this.resolveReceiver(uri, offset, link.name);
+				if (!current) return undefined;
+				continue;
+			}
+			if (!current) return undefined;
+			// `Type.new(...)` constructs the type itself rather than a member.
+			if (link.call && link.name === "new" && this.isClassLike(current)) continue;
+			const member = this.getMember(current, link.name);
+			if (!member) return undefined;
+			current = link.call ? this.resolveMemberReturnType(current, member) : this.memberType(current, member);
+		}
+		return current;
+	}
+
+	/** Result type of `name(...)`, resolving both functions and constructors. */
+	private resolveCallResult(uri: string, offset: number, name: string): ResolvedType | undefined {
+		const binding = this.bindings.getBinding(uri, offset, name);
+		if (binding) {
+			const type = this.resolveBinding(binding, offset);
+			if (type) return type;
+		}
+		const named = this.resolveName(name);
+		if (named) return named;
+		const functions = this.symbols.find(name).filter((symbol) => symbol.kind === "function");
+		if (functions.length !== 1) return undefined;
+		const fn = functions[0];
+		return fn.returnType ? this.resolveTypeReference(fn.returnType) : this.resolveFunctionReturnType(fn.uri, fn.name, new Set<string>());
+	}
+
+	private isClassLike(type: ResolvedType): boolean {
+		return type.symbol?.kind === "class" || type.symbol?.kind === "class_name" || type.builtin;
+	}
+
+	/** Value or type carried by a member access (`A.B`, `A.b`, `A.B()`). */
+	private memberType(type: ResolvedType, member: IndexedSymbol): ResolvedType | undefined {
+		if (member.kind === "class" || member.kind === "class_name" || member.kind === "enum") {
+			return { name: member.name, uri: member.uri, symbol: member, builtin: false };
+		}
+		return this.resolveMemberReturnType(type, member);
 	}
 	/** Members declared directly on an inner class, plus the inherited ones. */
 	getClassMembers(uri: string, classSymbol: IndexedSymbol): IndexedSymbol[] {
@@ -309,7 +451,7 @@ export class TypeResolutionIndex {
 		const symbol = this.symbols.find(binding.name).find((candidate) =>
 			candidate.kind === "enum" &&
 			candidate.uri === binding.uri &&
-			candidate.range.start.offset === binding.declarationRange.start.offset,
+			(candidate.nameOffset ?? candidate.range.start.offset) === binding.nameOffset,
 		);
 		if (symbol) return { name: binding.name, uri: binding.uri, symbol, builtin: false };
 		return this.resolveName(binding.name);
@@ -363,7 +505,7 @@ export class TypeResolutionIndex {
 		const key = `${uri}:function:${fn.bodyRange.start.offset}:${fn.bodyRange.end.offset}`;
 		const cached = this.statementCache.get(key);
 		if (cached?.fingerprint === file.sourceFingerprint) return cached.statements;
-		const statements = collectBodyStatements(file.source, fn.bodyRange);
+		const statements = collectBodyStatements(tokensFor(uri, file.source, file.sourceFingerprint), fn.bodyRange);
 		this.statementCache.set(key, { fingerprint: file.sourceFingerprint, statements });
 		return statements;
 	}
@@ -405,7 +547,7 @@ export class TypeResolutionIndex {
 		if (call) {
 			if (CONSTRUCTOR_TYPES.has(call.name)) return this.resolveName(call.name) ?? { name: call.name, builtin: true };
 			const functions = this.symbols.find(call.name).filter((symbol) => symbol.kind === "function");
-			if (functions.length === 1) { const fn = functions[0]; return fn.returnType ? this.resolveName(fn.returnType) : this.resolveFunctionReturnType(fn.uri, fn.name, visited); }
+			if (functions.length === 1) { const fn = functions[0]; return fn.returnType ? this.resolveTypeReference(fn.returnType) : this.resolveFunctionReturnType(fn.uri, fn.name, visited); }
 		}
 		const binding = this.bindings.getBinding(uri, offset, value);
 		if (binding) return this.resolveBinding(binding, offset);
@@ -418,7 +560,7 @@ export class TypeResolutionIndex {
 		const file = this.files.get(uri);
 		if (!file) return undefined;
 		const declaration = findDeclaration(file, name);
-		if (declaration?.type) return this.resolveName(declaration.type);
+		if (declaration?.type) return this.resolveTypeReference(declaration.type);
 		if (declaration?.value) { const result = this.resolveExpressionType(uri, declaration.value, declaration.range.start.offset, visited); if (result) return result; }
 		const functionDeclaration = findContainingFunction(file.ast.declarations, offset);
 		if (!functionDeclaration) return undefined;
@@ -445,7 +587,7 @@ export class TypeResolutionIndex {
 		if (!file) return undefined;
 		const declaration = findFunctionAt(file.ast.declarations, member.range.start.offset);
 		if (!declaration) return this.resolveFunctionReturnType(member.uri, member.name, visited);
-		if (declaration.returnType) return this.resolveName(declaration.returnType);
+		if (declaration.returnType) return this.resolveTypeReference(declaration.returnType);
 		const returns = this.getBodyStatements(member.uri, declaration).filter((statement) => statement.kind === "return");
 		if (!returns.length) return undefined;
 		let resolved: ResolvedType | undefined;
@@ -466,7 +608,7 @@ export class TypeResolutionIndex {
 		const functions = findFunctions(file.ast.declarations, name);
 		if (functions.length !== 1) return undefined;
 		const fn = functions[0];
-		if (fn.returnType) return this.resolveName(fn.returnType);
+		if (fn.returnType) return this.resolveTypeReference(fn.returnType);
 		const returns = this.getBodyStatements(uri, fn).filter((statement): statement is Extract<LocalStatement, { kind: "return" }> => statement.kind === "return");
 		if (!returns.length) return undefined;
 		let resolved: ResolvedType | undefined;

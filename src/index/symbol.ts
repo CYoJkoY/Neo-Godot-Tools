@@ -28,6 +28,8 @@ export interface IndexedSymbol {
 	kind: IndexedSymbolKind;
 	uri: string;
 	range: SourceRange;
+	/** Offset of the declaring identifier inside `range`. */
+	nameOffset?: number;
 	containerName?: string;
 	/** Range of the enclosing class declaration, for nested declarations. */
 	containerRange?: SourceRange;
@@ -92,6 +94,7 @@ export function declarationToSymbol(
 		kind: declaration.kind,
 		uri,
 		range: declaration.range,
+		nameOffset: declaration.nameOffset,
 		containerName,
 		containerRange,
 	};
@@ -136,6 +139,7 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 						kind: "enum_member",
 						uri,
 						range: member.range,
+						nameOffset: member.range.start.offset,
 						containerName: declaration.name ?? containerName,
 						containerRange,
 						type: declaration.name,

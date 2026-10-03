@@ -106,11 +106,23 @@ export class LanguageService implements vscode.Disposable {
 	getWorkspaceSymbols(query: string): IndexedSymbol[] { return this.symbols.workspaceSymbols(query); }
 
 	async getDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Definition | undefined> {
-		if (token.isCancellationRequested) return undefined;
-		const result = languageProfiler.measure("semantic.definition", () => this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }));
-		if (result.value && isSafeLocalConfidence(result.confidence)) return this.toLocation(result.value);
+		const local = this.getLocalDefinition(document, position);
+		if (local) return local;
 		if (token.isCancellationRequested) return undefined;
 		return languageProfiler.measureAsync("lsp.fallback.definition", () => this.definitionFallback.provide(document, position, token));
+	}
+
+	/**
+	 * Definition from the local semantic index alone.
+	 *
+	 * Providers call this before consulting engine documentation so that a
+	 * project symbol (an inner class method that shares its name with a builtin,
+	 * for example) always wins over the engine's own catalog.
+	 */
+	getLocalDefinition(document: vscode.TextDocument, position: vscode.Position): vscode.Location | undefined {
+		const result = languageProfiler.measure("semantic.definition", () => this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }));
+		if (result.value && isSafeLocalConfidence(result.confidence)) return this.toLocation(result.value);
+		return undefined;
 	}
 
 	async getReferences(document: vscode.TextDocument, position: vscode.Position, includeDeclaration: boolean, token: vscode.CancellationToken): Promise<vscode.Location[] | undefined> {
@@ -249,7 +261,7 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private symbolForBinding(binding: Binding): IndexedSymbol | undefined {
-		return this.files.get(binding.uri)?.symbols.find((symbol) => symbol.range.start.offset === binding.declarationRange.start.offset);
+		return this.files.get(binding.uri)?.symbols.find((symbol) => (symbol.nameOffset ?? symbol.range.start.offset) === binding.nameOffset);
 	}
 
 	private symbolLabel(symbol: IndexedSymbol): string {

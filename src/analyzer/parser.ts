@@ -95,7 +95,7 @@ class Parser {
 		const name = this.consumeIdentifier("Expected class name.");
 		if (!name) return undefined;
 		this.skipToLineEnd();
-		return { kind: "class_name", name: name.value, range: this.range(start.start, this.lineEndOffset(start.line)) };
+		return { kind: "class_name", name: name.value, nameOffset: name.start, range: this.range(start.start, this.lineEndOffset(start.line)) };
 	}
 
 	private parseExtends(): GDScriptExtends | undefined {
@@ -124,6 +124,7 @@ class Parser {
 		return {
 			kind: "signal",
 			name: name.value,
+			nameOffset: name.start,
 			parameters,
 			range: this.range(start.start, this.lineEndOffset(start.line)),
 		};
@@ -152,7 +153,7 @@ class Parser {
 			}
 			if (this.atValue("}")) this.advance();
 		} else this.skipToLineEnd();
-		return { kind: "enum", name: nameToken?.value, members, range: this.range(start.start, this.previous().end) };
+		return { kind: "enum", name: nameToken?.value, nameOffset: nameToken?.start, members, range: this.range(start.start, this.previous().end) };
 	}
 
 	private parseConstant(): GDScriptConstant | undefined {
@@ -173,6 +174,7 @@ class Parser {
 		return {
 			kind: "constant",
 			name: name.value,
+			nameOffset: name.start,
 			type,
 			value,
 			range: this.range(start.start, this.lineEndOffset(start.line)),
@@ -197,6 +199,7 @@ class Parser {
 		return {
 			kind: "variable",
 			name: name.value,
+			nameOffset: name.start,
 			type,
 			value,
 			range: this.range(start.start, this.lineEndOffset(start.line)),
@@ -225,6 +228,7 @@ class Parser {
 		return {
 			kind: "function",
 			name: name.value,
+			nameOffset: name.start,
 			parameters,
 			returnType,
 			static: isStatic,
@@ -264,7 +268,7 @@ class Parser {
 		const end = declarations.length
 			? declarations[declarations.length - 1].range.end.offset
 			: this.lineEndOffset(start.line);
-		return { kind: "class", name: name.value, extendsName, declarations, range: this.range(start.start, end) };
+		return { kind: "class", name: name.value, nameOffset: name.start, extendsName, declarations, range: this.range(start.start, end) };
 	}
 
 	private parseParameterList(): GDScriptParameter[] {

@@ -60,7 +60,24 @@ export class InheritedMemberResolver {
 		}
 		const sameFile = file.symbols.filter((symbol) => symbol.kind === "class" && symbol.name === reference);
 		if (sameFile.length === 1) return this.resolveInClassHierarchy(uri, sameFile[0], name, visited);
+		// `class Worker extends Base` where `Base` is a `class_name` script in
+		// another file: inherited members live in that script.
+		const base = this.resolveNamedClass(reference);
+		if (base) {
+			return base.symbol.kind === "class"
+				? this.resolveInClassHierarchy(base.uri, base.symbol, name, visited)
+				: this.resolveInHierarchy(base.uri, name, new Set<string>());
+		}
 		return this.resolve(uri, name);
+	}
+
+	/** Top-level `class_name`/script class declaration named `reference`. */
+	private resolveNamedClass(reference: string): { uri: string; symbol: IndexedSymbol } | undefined {
+		const matches = this.symbols.find(reference).filter((symbol) =>
+			(symbol.kind === "class_name" || symbol.kind === "class") && !symbol.containerName,
+		);
+		if (matches.length !== 1) return undefined;
+		return { uri: matches[0].uri, symbol: matches[0] };
 	}
 
 	private belongsToClass(symbol: IndexedSymbol, classSymbol: IndexedSymbol): boolean {
