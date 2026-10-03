@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-import { format_document_async, type FormatterOptions } from "./textmate";
+import { type FormatterOptions, format_document_async } from "./textmate";
 
 import { expect } from "chai";
 
@@ -25,7 +25,7 @@ function set_content(content: string) {
 		.openTextDocument()
 		.then((doc) => vscode.window.showTextDocument(doc))
 		.then((editor) => {
-			const editBuilder = (textEdit) => {
+			const editBuilder = (textEdit: vscode.TextEditorEdit) => {
 				textEdit.insert(new vscode.Position(0, 0), String(content));
 			};
 
@@ -51,7 +51,7 @@ class TestLines {
 	in: string[] = [];
 	out: string[] = [];
 
-	parse(_config) {
+	parse(_config?: Partial<FormatterOptions>) {
 		const config = { ...defaultOptions, ..._config, ...build_config(this.config) };
 
 		const test: Test = {

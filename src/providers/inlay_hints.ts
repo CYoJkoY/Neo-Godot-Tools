@@ -70,7 +70,7 @@ export class GDInlayHintsProvider implements InlayHintsProvider {
 		return this._onDidChangeInlayHints.event;
 	}
 
-	constructor(private context: ExtensionContext) {
+	constructor(context: ExtensionContext) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },

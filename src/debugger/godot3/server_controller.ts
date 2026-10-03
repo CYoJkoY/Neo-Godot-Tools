@@ -1,10 +1,12 @@
-import { StoppedEvent, TerminatedEvent } from "@vscode/debugadapter";
-import { DebugProtocol } from "@vscode/debugprotocol";
 import * as fs from "node:fs";
 import * as net from "node:net";
+import { StoppedEvent, TerminatedEvent } from "@vscode/debugadapter";
+import { DebugProtocol } from "@vscode/debugprotocol";
 import { debug, window } from "vscode";
 
+import BBCodeToAnsi from "bbcode-to-ansi";
 import {
+	VERIFY_RESULT,
 	ansi,
 	convert_resource_path_to_uri,
 	createLogger,
@@ -12,7 +14,6 @@ import {
 	get_free_port,
 	get_project_version,
 	verify_godot_version,
-	VERIFY_RESULT,
 } from "../../utils";
 import { prompt_for_godot_executable } from "../../utils/prompts";
 import { killSubProcesses, subProcess } from "../../utils/subspawn";
@@ -23,7 +24,6 @@ import { build_sub_values, parse_next_scene_node, split_buffers } from "./helper
 import { VariantDecoder } from "./variables/variant_decoder";
 import { VariantEncoder } from "./variables/variant_encoder";
 import { RawObject } from "./variables/variants";
-import BBCodeToAnsi from "bbcode-to-ansi";
 
 const log = createLogger("debugger.controller", { output: "Godot Debugger" });
 const socketLog = createLogger("debugger.socket");
@@ -49,7 +49,6 @@ export class ServerController {
 	private steppingOut = false;
 	private currentCommand?: Command;
 	private didFirstOutput = false;
-	private connectedVersion = "";
 
 	public constructor(public session: GodotDebugSession) {}
 
@@ -170,8 +169,6 @@ export class ServerController {
 			}
 		}
 
-		this.connectedVersion = result.version || "";
-
 		let command = `"${godotPath}" --path "${args.project}"`;
 		const address = args.address.replace("tcp://", "");
 		command += ` --remote-debug "${address}:${args.port}"`;
@@ -240,9 +237,10 @@ export class ServerController {
 		log.info(`Launching game process using command: '${command}'`);
 		const debugProcess = subProcess("debug", command, { shell: true, detached: true });
 
-		debugProcess.stdout.on("data", (data) => {});
-		debugProcess.stderr.on("data", (data) => {});
-		debugProcess.on("close", (code) => {});
+		// The listeners keep the child process from blocking on a full pipe.
+		debugProcess.stdout.on("data", () => {});
+		debugProcess.stderr.on("data", () => {});
+		debugProcess.on("close", () => {});
 	}
 
 	private stash?: Buffer;
@@ -273,7 +271,7 @@ export class ServerController {
 
 			socket.on("data", this.on_data.bind(this));
 
-			socket.on("close", (had_error) => {
+			socket.on("close", () => {
 				// log.debug("socket close");
 				this.abort();
 			});
@@ -283,7 +281,7 @@ export class ServerController {
 				this.abort();
 			});
 
-			socket.on("error", (error) => {
+			socket.on("error", () => {
 				// log.debug("socket error");
 				// this.session.sendEvent(new TerminatedEvent());
 				// this.stop();
@@ -314,7 +312,7 @@ export class ServerController {
 
 			socket.on("data", this.on_data.bind(this));
 
-			socket.on("close", (had_error) => {
+			socket.on("close", () => {
 				// log.debug("socket close");
 				// this.session.sendEvent(new TerminatedEvent());
 				// this.stop();
@@ -326,7 +324,7 @@ export class ServerController {
 				// this.stop();
 			});
 
-			socket.on("error", (error) => {
+			socket.on("error", () => {
 				// log.error("socket error", error);
 			});
 
@@ -388,7 +386,7 @@ export class ServerController {
 				break;
 			case "message:scene_tree": {
 				const tree = parse_next_scene_node(command.parameters);
-				this.session.sceneTree.fill_tree(tree);
+				this.session.sceneTree?.fill_tree(tree);
 				break;
 			}
 			case "message:inspect_object": {
@@ -574,11 +572,13 @@ export class ServerController {
 				if (this.session.debug_data.stack_count > 1) {
 					continueStepping = this.session.debug_data.stack_count === stackCount;
 				} else {
-					const fileSame = stackFrames[0].file === this.session.debug_data.last_frame.file;
-					const funcSame = stackFrames[0].function === this.session.debug_data.last_frame.function;
-					const lineGreater = stackFrames[0].line >= this.session.debug_data.last_frame.line;
-
-					continueStepping = fileSame && funcSame && lineGreater;
+					const last = this.session.debug_data.last_frame;
+					continueStepping = Boolean(
+						last &&
+							stackFrames[0].file === last.file &&
+							stackFrames[0].function === last.function &&
+							stackFrames[0].line >= last.line,
+					);
 				}
 			}
 		}

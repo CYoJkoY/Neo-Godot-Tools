@@ -1,28 +1,24 @@
-import * as vscode from "vscode";
-import { SymbolKind } from "vscode-languageclient";
+import { marked } from "marked";
 import * as Prism from "prismjs";
 import * as csharp from "prismjs/components/prism-csharp";
-import { marked } from "marked";
-import type { GodotNativeSymbol } from "./documentation_types";
+import * as vscode from "vscode";
+import { SymbolKind } from "vscode-languageclient";
 import { createLogger, get_extension_uri } from "../utils";
 import { doc_symbol_anchor } from "../utils/doc_anchor";
+import type { GodotNativeSymbol } from "./documentation_types";
 import yabbcode = require("ya-bbcode");
 
 const log = createLogger("providers.docs_builder");
 const parser = new yabbcode();
 
-//! I do not understand why this is necessary
-//! if you don't touch this csharp object, it's not imported or something, idk
-const wtf = csharp;
+// The C# grammar is only registered with Prism once its module has been touched.
+void csharp;
 
 marked.setOptions({
 	highlight: (code, lang) => {
-		if (lang === "gdscript") {
-			return Prism.highlight(code, GDScriptGrammar, lang);
-		}
-		if (lang === "csharp") {
-			return Prism.highlight(code, Prism.languages.csharp, lang);
-		}
+		if (lang === "gdscript") return Prism.highlight(code, GDScriptGrammar, lang);
+		if (lang === "csharp") return Prism.highlight(code, Prism.languages.csharp, lang);
+		return code;
 	},
 });
 
@@ -119,16 +115,24 @@ export const DOC_FOCUS_FUNCTION = `function ngdtFocus(target){
 function symbol_doc_kind(kind: SymbolKind | undefined): string {
 	switch (kind) {
 		case SymbolKind.Method:
-		case SymbolKind.Function: return "method";
-		case SymbolKind.Constructor: return "constructor";
-		case SymbolKind.Operator: return "operator";
+		case SymbolKind.Function:
+			return "method";
+		case SymbolKind.Constructor:
+			return "constructor";
+		case SymbolKind.Operator:
+			return "operator";
 		case SymbolKind.Property:
-		case SymbolKind.Variable: return "property";
+		case SymbolKind.Variable:
+			return "property";
 		case SymbolKind.Constant:
-		case SymbolKind.EnumMember: return "constant";
-		case SymbolKind.Event: return "signal";
-		case SymbolKind.Enum: return "enum";
-		default: return "method";
+		case SymbolKind.EnumMember:
+			return "constant";
+		case SymbolKind.Event:
+			return "signal";
+		case SymbolKind.Enum:
+			return "enum";
+		default:
+			return "method";
 	}
 }
 
@@ -399,20 +403,19 @@ export function make_symbol_document(symbol: GodotNativeSymbol): string {
 function element<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
 	content: string,
-	props = {},
+	props: Record<string, string | number | undefined> = {},
 	new_line?: boolean,
 	indent?: string,
 ) {
-	let props_str = "";
-	for (const key in props) {
-		if (Object.prototype.hasOwnProperty.call(props, key)) {
-			props_str += ` ${key}="${props[key]}"`;
-		}
-	}
+	// Attribute order follows insertion order, which keeps the generated HTML
+	// stable between runs (the panel is a cache key for the webview).
+	const attributes = Object.entries(props).filter(([, value]) => value !== undefined);
+	const props_str = attributes.map(([key, value]) => ` ${key}="${value}"`).join("");
 	return `${indent || ""}<${tag} ${props_str}>${content}</${tag}>${new_line ? "\n" : ""}`;
 }
 
-function make_link(classname: string, symbol: string | undefined) {
+function make_link(classname: string | undefined, symbol: string | undefined) {
+	if (!classname) return "";
 	if (!symbol || symbol === classname) {
 		return element("a", classname, {
 			onclick: `inspect('${classname}')`,
@@ -432,9 +435,9 @@ function make_codeblock(code: string, language: string) {
 	return marked.parse(`\`\`\`${language}\n${_code}\n\`\`\``);
 }
 
-function format_documentation(bbcode: string, classname: string) {
+function format_documentation(bbcode: string | undefined, classname: string | undefined) {
 	// ya-bbcode doesn't parse [code skip-lint] as a [code] tag
-	const _bbcode = bbcode.replaceAll("[code skip-lint]", "[code]");
+	const _bbcode = (bbcode ?? "").replaceAll("[code skip-lint]", "[code]");
 	let html = parser.parse(_bbcode.trim());
 
 	html = html.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "");

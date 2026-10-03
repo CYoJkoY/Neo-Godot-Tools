@@ -1,7 +1,7 @@
 import { GodotVariable } from "../debug_runtime";
 import { SceneNode } from "../scene_tree_provider";
 import { VariablesManager } from "./variables/variables_manager";
-import { ObjectId, StringName } from "./variables/variants";
+import { ObjectId } from "./variables/variants";
 
 export function parse_next_scene_node(params: any[], ofs: { offset: number } = { offset: 0 }): SceneNode {
 	const childCount: number = params[ofs.offset++];
@@ -46,7 +46,8 @@ export async function get_sub_values(value: any, variables_manager: VariablesMan
 			subValues = [];
 			for (const [key, val] of value.entries()) {
 				let key_name = "";
-				if (typeof key?.get_rendered_value === "function") { //  (key instanceof ObjectId), (key instanceof StringName)
+				if (typeof key?.get_rendered_value === "function") {
+					//  (key instanceof ObjectId), (key instanceof StringName)
 					key_name = await key.get_rendered_value(variables_manager);
 				} else {
 					key_name =
@@ -58,7 +59,7 @@ export async function get_sub_values(value: any, variables_manager: VariablesMan
 				subValues.push({ id: godot_id, name: key_name, value: val } as GodotVariable);
 			}
 		} else if (typeof value.sub_values === "function") {
-			subValues = value.sub_values()?.map((sva) => {
+			subValues = value.sub_values()?.map((sva: GodotVariable) => {
 				return { name: sva.name, value: sva.value } as GodotVariable;
 			});
 		}

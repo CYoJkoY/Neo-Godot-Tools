@@ -9,17 +9,15 @@ import type {
 	WebviewPanel,
 } from "vscode";
 import type { NotificationMessage } from "vscode-jsonrpc";
-import type {
-	NativeSymbolInspectParams,
-	GodotNativeSymbol,
-	GodotNativeClassInfo,
-	GodotCapabilities,
-} from "./documentation_types";
-import { make_html_content } from "./documentation_builder";
-import { createLogger, get_configuration, get_extension_uri, make_docs_uri } from "../utils";
 import { globals } from "../extension";
-
-const log = createLogger("providers.docs");
+import { get_configuration, get_extension_uri, make_docs_uri } from "../utils";
+import { make_html_content } from "./documentation_builder";
+import type {
+	GodotCapabilities,
+	GodotNativeClassInfo,
+	GodotNativeSymbol,
+	NativeSymbolInspectParams,
+} from "./documentation_types";
 
 export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 	public classInfo = new Map<string, GodotNativeClassInfo>();
@@ -28,7 +26,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 
 	private ready = false;
 
-	constructor(private context: ExtensionContext) {
+	constructor(context: ExtensionContext) {
 		const options = {
 			webviewOptions: {
 				enableScripts: true,
@@ -75,8 +73,8 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 
 	public openCustomDocument(
 		uri: Uri,
-		openContext: CustomDocumentOpenContext,
-		token: CancellationToken,
+		_openContext: CustomDocumentOpenContext,
+		_token: CancellationToken,
 	): CustomDocument {
 		return { uri: uri, dispose: () => {} };
 	}
@@ -84,7 +82,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 	public async resolveCustomEditor(
 		document: CustomDocument,
 		panel: WebviewPanel,
-		token: CancellationToken,
+		_token: CancellationToken,
 	): Promise<void> {
 		const className = document.uri.path.split(".")[0];
 		const target = document.uri.fragment;

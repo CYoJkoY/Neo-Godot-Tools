@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { LspClientLike } from "../lsp/types";
 import { LruCache } from "../utils/lru_cache";
 import { withTimeout } from "../utils/scheduling.js";
 import { validateResourceDocument } from "./diagnostics.js";
@@ -99,7 +100,7 @@ export interface WorkspaceResourceItem {
 }
 
 export interface ResourceInspectorOptions {
-	lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined;
+	lspClient?: () => LspClientLike | undefined;
 	/** Upper bound for language-server metadata requests. */
 	lspTimeoutMs?: number;
 }

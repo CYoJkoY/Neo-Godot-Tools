@@ -10,7 +10,6 @@ import {
 import { DebugProtocol } from "@vscode/debugprotocol";
 import { Subject } from "await-notify";
 import { debug } from "vscode";
-import { createLogger } from "../../utils";
 import { GodotDebugData, GodotStackVars, GodotVariable } from "../debug_runtime";
 import { AttachRequestArguments, LaunchRequestArguments } from "../debugger";
 import { InspectorProvider } from "../inspector_provider";
@@ -19,20 +18,20 @@ import { is_variable_built_in_type, parse_variable } from "./helpers";
 import { ServerController } from "./server_controller";
 import { ObjectId } from "./variables/variants";
 
-const log = createLogger("debugger.session", { output: "Godot Debugger" });
-
 interface Variable {
 	variable: GodotVariable | undefined;
 	index: number | undefined;
-	object_id: number | undefined;
+	/** Godot object id, a 64 bit value. */
+	object_id: bigint | undefined;
 }
 
 export class GodotDebugSession extends LoggingDebugSession {
-	private all_scopes: (GodotVariable | undefined)[];
+	private all_scopes: (GodotVariable | undefined)[] = [];
 	public controller = new ServerController(this);
 	public debug_data = new GodotDebugData(this);
-	public sceneTree: SceneTreeProvider;
-	public inspector: InspectorProvider;
+	/** Injected by `GodotDebugger` when the session is created. */
+	public sceneTree?: SceneTreeProvider;
+	public inspector?: InspectorProvider;
 	private got_scope: Subject = new Subject();
 	private ongoing_inspections: bigint[] = [];
 	private previous_inspections: bigint[] = [];
@@ -47,13 +46,13 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.setDebuggerColumnsStartAt1(false);
 	}
 
-	public dispose() {
+	public override dispose() {
 		this.controller.stop();
 	}
 
-	protected initializeRequest(
+	protected override initializeRequest(
 		response: DebugProtocol.InitializeResponse,
-		args: DebugProtocol.InitializeRequestArguments,
+		_args: DebugProtocol.InitializeRequestArguments,
 	) {
 		response.body = response.body || {};
 
@@ -82,7 +81,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendEvent(new InitializedEvent());
 	}
 
-	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments) {
+	protected override async launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments) {
 		await this.configuration_done.wait(1000);
 
 		this.mode = "launch";
@@ -93,7 +92,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected async attachRequest(response: DebugProtocol.AttachResponse, args: AttachRequestArguments) {
+	protected override async attachRequest(response: DebugProtocol.AttachResponse, args: AttachRequestArguments) {
 		await this.configuration_done.wait(1000);
 
 		this.mode = "attach";
@@ -103,21 +102,27 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	public configurationDoneRequest(
+	public override configurationDoneRequest(
 		response: DebugProtocol.ConfigurationDoneResponse,
-		args: DebugProtocol.ConfigurationDoneArguments,
+		_args: DebugProtocol.ConfigurationDoneArguments,
 	) {
 		this.configuration_done.notify();
 		this.sendResponse(response);
 	}
 
-	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments) {
+	protected override continueRequest(
+		response: DebugProtocol.ContinueResponse,
+		_args: DebugProtocol.ContinueArguments,
+	) {
 		response.body = { allThreadsContinued: true };
 		this.controller.continue();
 		this.sendResponse(response);
 	}
 
-	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments) {
+	protected override async evaluateRequest(
+		response: DebugProtocol.EvaluateResponse,
+		args: DebugProtocol.EvaluateArguments,
+	) {
 		await debug.activeDebugSession?.customRequest("scopes", { frameId: 0 });
 
 		if (this.all_scopes) {
@@ -146,17 +151,20 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments) {
+	protected override nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments) {
 		this.controller.next();
 		this.sendResponse(response);
 	}
 
-	protected pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments) {
+	protected override pauseRequest(response: DebugProtocol.PauseResponse, _args: DebugProtocol.PauseArguments) {
 		this.controller.break();
 		this.sendResponse(response);
 	}
 
-	protected async scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments) {
+	protected override async scopesRequest(
+		response: DebugProtocol.ScopesResponse,
+		args: DebugProtocol.ScopesArguments,
+	) {
 		this.controller.request_stack_frame_vars(args.frameId);
 		await this.got_scope.wait(2000);
 
@@ -170,7 +178,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected setBreakPointsRequest(
+	protected override setBreakPointsRequest(
 		response: DebugProtocol.SetBreakpointsResponse,
 		args: DebugProtocol.SetBreakpointsArguments,
 	) {
@@ -209,7 +217,10 @@ export class GodotDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	protected stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments) {
+	protected override stackTraceRequest(
+		response: DebugProtocol.StackTraceResponse,
+		_args: DebugProtocol.StackTraceArguments,
+	) {
 		if (this.debug_data.last_frame) {
 			response.body = {
 				totalFrames: this.debug_data.last_frames.length,
@@ -227,17 +238,20 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments) {
+	protected override stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments) {
 		this.controller.step();
 		this.sendResponse(response);
 	}
 
-	protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments) {
+	protected override stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments) {
 		this.controller.step_out();
 		this.sendResponse(response);
 	}
 
-	protected terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments) {
+	protected override terminateRequest(
+		response: DebugProtocol.TerminateResponse,
+		_args: DebugProtocol.TerminateArguments,
+	) {
 		if (this.mode === "launch") {
 			this.controller.stop();
 			this.sendEvent(new TerminatedEvent());
@@ -245,12 +259,12 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected threadsRequest(response: DebugProtocol.ThreadsResponse) {
+	protected override threadsRequest(response: DebugProtocol.ThreadsResponse) {
 		response.body = { threads: [new Thread(0, "thread_1")] };
 		this.sendResponse(response);
 	}
 
-	protected async variablesRequest(
+	protected override async variablesRequest(
 		response: DebugProtocol.VariablesResponse,
 		args: DebugProtocol.VariablesArguments,
 	) {
@@ -268,22 +282,25 @@ export class GodotDebugSession extends LoggingDebugSession {
 		if (!reference || !reference.sub_values) {
 			variables = [];
 		} else {
-			variables = reference.sub_values.map((va): DebugProtocol.Variable | undefined => {
-				const sva = this.all_scopes.find(
-					(sva) => sva && sva.scope_path === va.scope_path && sva.name === va.name,
-				);
-				if (sva) {
-					return parse_variable(
-						sva,
-						this.all_scopes.findIndex(
-							(va_idx) =>
-								va_idx &&
-								va_idx.scope_path === `${reference.scope_path}.${reference.name}` &&
-								va_idx.name === va.name,
-						),
+			variables = reference.sub_values
+				.map((va): DebugProtocol.Variable | undefined => {
+					const sva = this.all_scopes.find(
+						(sva) => sva && sva.scope_path === va.scope_path && sva.name === va.name,
 					);
-				}
-			}).filter((v): v is DebugProtocol.Variable => v !== undefined);
+					if (sva) {
+						return parse_variable(
+							sva,
+							this.all_scopes.findIndex(
+								(va_idx) =>
+									va_idx &&
+									va_idx.scope_path === `${reference.scope_path}.${reference.name}` &&
+									va_idx.name === va.name,
+							),
+						);
+					}
+					return undefined;
+				})
+				.filter((v): v is DebugProtocol.Variable => v !== undefined);
 		}
 
 		response.body = {
@@ -381,12 +398,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	protected get_variable(
-		expression: string,
-		root?: GodotVariable,
-		index = 0,
-		object_id?: number,
-	): Variable {
+	protected get_variable(expression: string, root?: GodotVariable, index = 0, object_id?: bigint): Variable {
 		let result: Variable = {
 			variable: undefined,
 			index: undefined,
@@ -398,9 +410,9 @@ export class GodotDebugSession extends LoggingDebugSession {
 				expression = `self.${expression}`;
 			}
 
-			root = this.all_scopes.find((x) => x && x.name === "self");
-			const idVar = this.all_scopes.find((x) => x && x.name === "id" && x.scope_path === "@.member.self");
-			object_id = idVar ? idVar.value : undefined;
+			root = this.all_scopes.find((x) => x?.name === "self");
+			const idVar = this.all_scopes.find((x) => x?.name === "id" && x.scope_path === "@.member.self");
+			object_id = idVar?.value instanceof ObjectId ? idVar.value.id : undefined;
 		}
 
 		if (!root) {
@@ -482,23 +494,28 @@ export class GodotDebugSession extends LoggingDebugSession {
 			throw new Error(`Could not find: ${propertyName}`);
 		}
 
-		if (root.value && typeof root.value.entries === "function") {
-			if (result.variable && result.variable.name === "self") {
-				const idVar = this.all_scopes.find(
-					(x) => x && x.name === "id" && x.scope_path === "@.member.self",
-				);
-				result.object_id = idVar ? idVar.value : undefined;
-			} else if (key) {
-				const collection = path.split(".")[path.split(".").length - 1];
-				const collection_items = Array.from((root.value as any).entries()).find(
-					(x: any) => x && x[0].split("Members/").join("").split("Locals/").join("") === collection,
-				)?.[1];
-				result.object_id = collection_items.get ? collection_items.get(key)?.id : collection_items[key]?.id;
-			} else {
-				const item = Array.from(root.value.entries()).find(
-					(x: any) => x && x[0].split("Members/").join("").split("Locals/").join("") === propertyName,
-				);
-				result.object_id = (item as any)?.[1].id;
+		// `root.value` holds the sanitized scopes: a Map of scope path to the
+		// collection behind it (Godot 3 answers with plain objects for members).
+		if (root.value instanceof Map) {
+			const entries = [...root.value.entries()];
+			const scopeName = (name: unknown) =>
+				typeof name === "string" ? name.split("Members/").join("").split("Locals/").join("") : "";
+			const idOf = (value: unknown) => (value instanceof ObjectId ? value.id : undefined);
+			if (result.variable.name === "self") {
+				const idVar = this.all_scopes.find((x) => x?.name === "id" && x.scope_path === "@.member.self");
+				result.object_id = idVar?.value instanceof ObjectId ? idVar.value.id : undefined;
+				return result;
+			}
+			const container = entries.find(
+				([name]) => scopeName(name) === (key ? path.split(".").at(-1) : propertyName),
+			)?.[1];
+			if (!key) {
+				result.object_id = idOf(container);
+				return result;
+			}
+			if (container instanceof Map) result.object_id = idOf(container.get(key));
+			else if (typeof container === "object" && container !== null) {
+				result.object_id = idOf((container as Record<string, unknown>)[key]);
 			}
 		}
 

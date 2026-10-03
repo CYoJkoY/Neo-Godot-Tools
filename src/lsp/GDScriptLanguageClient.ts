@@ -1,11 +1,11 @@
-import { performance } from "node:perf_hooks";
 import EventEmitter from "node:events";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
 import {
 	LanguageClient,
-	MessageSignature,
 	type LanguageClientOptions,
+	MessageSignature,
 	type NotificationMessage,
 	type RequestMessage,
 	type ResponseMessage,
@@ -13,8 +13,9 @@ import {
 } from "vscode-languageclient/node";
 
 import { globals } from "../extension";
-import { createLogger, get_configuration, get_project_dir } from "../utils";
 import { languageProfiler } from "../performance/profiler";
+import { createLogger, get_configuration, get_project_dir } from "../utils";
+import { LruCache } from "../utils/lru_cache";
 import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
@@ -48,12 +49,12 @@ type HoverResult = {
 	};
 	range: {
 		end: {
-		character: number;
-		line: number;
+			character: number;
+			line: number;
 		};
 		start: {
-		character: number;
-		line: number;
+			character: number;
+			line: number;
 		};
 	};
 };
@@ -98,13 +99,23 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 	public port = -1;
 	public lastPortTried = -1;
-	public sentMessages = new Map();
-	private readonly requestStarts = new Map<string | number, number>();
+	/**
+	 * In-flight requests, keyed by request id.
+	 *
+	 * Bounded: a request that never receives a response (a disconnected or
+	 * wedged server) would otherwise be retained for the whole session.
+	 */
+	public sentMessages = new LruCache<string | number, RequestMessage>({ capacity: 512 });
+	private readonly requestStarts = new LruCache<string | number, number>({ capacity: 512 });
 	private rejected = false;
 
 	events = new EventEmitter();
 
-	private _status: ClientStatus;
+	private _status: ClientStatus = ClientStatus.PENDING;
+
+	get status(): ClientStatus {
+		return this._status;
+	}
 
 	public set status(v: ClientStatus) {
 		this._status = v;
@@ -120,9 +131,9 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 		const clientOptions: LanguageClientOptions = {
 			documentSelector: [
-			{ scheme: "file", language: "gdscript" },
-			{ scheme: "untitled", language: "gdscript" },
-		],
+				{ scheme: "file", language: "gdscript" },
+				{ scheme: "untitled", language: "gdscript" },
+			],
 			middleware: {
 				// The extension registers its own interactive providers so that local semantic
 				// results are authoritative and the Godot LSP is used only as a fallback.
@@ -163,14 +174,17 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		this.io.connect(host, port);
 	}
 
-	handleFailedRequest<T>(
+	override handleFailedRequest<T>(
 		type: MessageSignature,
 		token: vscode.CancellationToken | undefined,
 		error: any,
 		defaultValue: T,
 		showNotification?: boolean,
 	): T {
-		if (type.method === "textDocument/documentSymbol" && error.message.includes("selectionRange must be contained in fullRange")) {
+		if (
+			type.method === "textDocument/documentSymbol" &&
+			error.message.includes("selectionRange must be contained in fullRange")
+		) {
 			log.warn(`Request failed for method "${type.method}", suppressing notification - see issue #820`);
 			return super.handleFailedRequest(type, token, error, defaultValue, false);
 		}
@@ -185,13 +199,14 @@ export default class GDScriptLanguageClient extends LanguageClient {
 
 		if (message.method === "workspace/didChangeWatchedFiles" || message.method === "workspace/symbol") return false;
 
+		if (message.id === null) return message;
 		this.sentMessages.set(message.id, message);
-		if (message.id !== null) this.requestStarts.set(message.id, performance.now());
+		this.requestStarts.set(message.id, performance.now());
 		return message;
 	}
 
 	private response_filter(message: ResponseMessage) {
-		const sentMessage = this.sentMessages.get(message.id);
+		const sentMessage = message.id === null ? undefined : this.sentMessages.get(message.id);
 		if (message.id !== null) {
 			const startedAt = this.requestStarts.get(message.id);
 			if (sentMessage && startedAt !== undefined) {
@@ -236,7 +251,8 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	}
 
 	private notification_filter(message: NotificationMessage) {
-		if (message.method === "gdscript_client/changeWorkspace") this.check_workspace(message as ChangeWorkspaceNotification);
+		if (message.method === "gdscript_client/changeWorkspace")
+			this.check_workspace(message as ChangeWorkspaceNotification);
 		if (message.method === "gdscript/capabilities") globals.docsProvider?.register_capabilities(message);
 		return message;
 	}

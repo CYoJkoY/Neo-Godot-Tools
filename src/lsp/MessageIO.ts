@@ -1,18 +1,18 @@
+import { Socket } from "net";
+import { EventEmitter } from "node:events";
 import {
 	AbstractMessageReader,
-	type MessageReader,
+	AbstractMessageWriter,
 	type DataCallback,
 	type Disposable,
+	type MessageReader,
+	type MessageWriter,
+	type NotificationMessage,
 	type RequestMessage,
 	type ResponseMessage,
-	type NotificationMessage,
-	AbstractMessageWriter,
-	type MessageWriter,
 } from "vscode-jsonrpc";
-import { EventEmitter } from "node:events";
-import { Socket } from "net";
-import MessageBuffer from "./MessageBuffer";
 import { createLogger } from "../utils";
+import MessageBuffer, { type MessageBufferListener } from "./MessageBuffer";
 
 const log = createLogger("lsp.io", { output: "Godot LSP" });
 
@@ -31,7 +31,7 @@ export class MessageIO extends EventEmitter {
 
 	async connect(host: string, port: number): Promise<void> {
 		log.debug(`connecting to ${host}:${port}`);
-		return new Promise((resolve, reject) => {
+		return new Promise((resolve, _reject) => {
 			this.socket = undefined;
 
 			const socket = new Socket();
@@ -73,12 +73,18 @@ export class MessageIO extends EventEmitter {
 	}
 }
 
-export class MessageIOReader extends AbstractMessageReader implements MessageReader {
-	callback: DataCallback;
+export class MessageIOReader extends AbstractMessageReader implements MessageReader, MessageBufferListener {
+	/** Set by `listen`; the reader delivers every complete message through it. */
+	private callback: DataCallback = () => {};
 	private buffer = new MessageBuffer(this);
 
 	constructor(public io: MessageIO) {
 		super();
+	}
+
+	/** Forwards a stalled message to the jsonrpc listener (see `MessageBufferListener`). */
+	notifyPartialMessage(message: { messageToken: number; waitingTime: number }): void {
+		this.firePartialMessage(message);
 	}
 
 	listen(callback: DataCallback): Disposable {
@@ -94,34 +100,19 @@ export class MessageIOReader extends AbstractMessageReader implements MessageRea
 
 	private on_data(data: Buffer | string): void {
 		this.buffer.append(data);
-		while (true) {
-			const msg = this.buffer.ready();
-			if (!msg) {
-				return;
-			}
-			const json = JSON.parse(msg);
-			// allow message to be modified
-			let modified: ResponseMessage | NotificationMessage | false = false;
-			if ("id" in json) {
-				modified = this.io.responseFilter(json);
-			} else if ("method" in json) {
-				modified = this.io.notificationFilter(json);
-			} else {
-				log.warn("rx [unhandled]:", json);
-			}
-
-			if (modified === false) {
-				log.debug("rx [discarded]:", json);
-				return;
-			}
+		for (let message = this.buffer.ready(); message !== undefined; message = this.buffer.ready()) {
+			const json: Message = JSON.parse(message);
+			// Both filters may rewrite a message before it reaches the client.
+			const modified = "id" in json ? this.io.responseFilter(json) : this.io.notificationFilter(json);
+			if (modified === false) continue;
 			log.debug("rx:", modified);
-			this.callback(json);
+			this.callback(modified);
 		}
 	}
 }
 
 export class MessageIOWriter extends AbstractMessageWriter implements MessageWriter {
-	private errorCount: number;
+	private errorCount = 0;
 
 	constructor(public io: MessageIO) {
 		super();

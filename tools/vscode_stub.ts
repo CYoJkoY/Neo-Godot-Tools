@@ -6,7 +6,10 @@
  * loadable. Only the surface used by the local semantic pipeline and the
  * resource tooling is implemented; everything else is a deliberate no-op.
  *
- * `tools/vscode_stub_register.ts` makes `require("vscode")` resolve here.
+ * The classes declare the members the extension actually reads or writes, plus
+ * an `unknown` index signature so a test may attach extra fields without
+ * falling back to `any`. `tools/vscode_stub_register.ts` makes
+ * `require("vscode")` resolve here.
  */
 
 import * as fs from "node:fs";
@@ -21,9 +24,23 @@ import * as path from "node:path";
  */
 const EXTENSION_ROOT = process.env.NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT || path.resolve(__dirname, "..", "..");
 
+interface UriComponents {
+	scheme?: string;
+	authority?: string;
+	path?: string;
+	query?: string;
+	fragment?: string;
+}
+
 class Uri {
-	[key: string]: any;
-	constructor(scheme, authority, uriPath, query, fragment) {
+	[key: string]: unknown;
+	scheme: string;
+	authority: string;
+	path: string;
+	query: string;
+	fragment: string;
+
+	constructor(scheme?: string, authority?: string, uriPath?: string, query?: string, fragment?: string) {
 		this.scheme = scheme || "";
 		this.authority = authority || "";
 		this.path = uriPath || "";
@@ -31,40 +48,46 @@ class Uri {
 		this.fragment = fragment || "";
 	}
 
-	static file(value) {
+	/** File system path of a `file:` uri; other schemes keep their path. */
+	get fsPath(): string {
+		return this.path;
+	}
+
+	static file(value: string): Uri {
 		return new Uri("file", "", value.replace(/\\/g, "/"), "", "");
 	}
 
-	static parse(value) {
+	static parse(value: string | { toString(): string }): Uri {
 		const [rest, fragment] = splitOnce(String(value), "#");
 		const schemeMatch = rest.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
-		if (schemeMatch) {
-			const withoutScheme = rest.slice(schemeMatch[0].length);
-			const slash = withoutScheme.indexOf("/");
-			const authority = slash === -1 ? withoutScheme : withoutScheme.slice(0, slash);
-			const uriPath = slash === -1 ? "" : withoutScheme.slice(slash);
-			return new Uri(schemeMatch[1], authority, uriPath, "", fragment);
-		}
-		return new Uri("file", "", rest, "", fragment);
+		if (!schemeMatch) return new Uri("file", "", rest, "", fragment);
+		const withoutScheme = rest.slice(schemeMatch[0].length);
+		const slash = withoutScheme.indexOf("/");
+		return new Uri(
+			schemeMatch[1],
+			slash === -1 ? withoutScheme : withoutScheme.slice(0, slash),
+			slash === -1 ? "" : withoutScheme.slice(slash),
+			"",
+			fragment,
+		);
 	}
 
-	static from(components) {
-		// `fsPath` is derived from `path` by the prototype getter below.
+	static from(components: UriComponents): Uri {
 		return new Uri(components.scheme, components.authority, components.path, components.query, components.fragment);
 	}
 
-	static joinPath(base, ...segments) {
-		return Uri.file(path.join(base.fsPath ?? base.path, ...segments));
+	static joinPath(base: Uri, ...segments: string[]): Uri {
+		return Uri.file(path.join(base.path, ...segments));
 	}
 
-	toString() {
+	toString(): string {
 		const authority = this.authority ? `//${this.authority}` : "";
 		const fragment = this.fragment ? `#${this.fragment}` : "";
 		if (this.scheme === "file") return `file://${this.path}${fragment}`;
 		return `${this.scheme}:${authority}${this.path}${fragment}`;
 	}
 
-	with(change) {
+	with(change: UriComponents): Uri {
 		return new Uri(
 			change.scheme ?? this.scheme,
 			change.authority ?? this.authority,
@@ -75,35 +98,36 @@ class Uri {
 	}
 }
 
-Object.defineProperty(Uri.prototype, "fsPath", {
-	get() {
-		return this.path;
-	},
-	configurable: true,
-});
-
-function splitOnce(value, separator) {
+function splitOnce(value: string, separator: string): [string, string] {
 	const index = value.indexOf(separator);
 	return index === -1 ? [value, ""] : [value.slice(0, index), value.slice(index + 1)];
 }
 
 class Position {
-	[key: string]: any;
-	constructor(line, character) {
-		this.line = line;
-		this.character = character;
-	}
+	[key: string]: unknown;
+	constructor(
+		public line: number,
+		public character: number,
+	) {}
 }
 
 class Range {
-	[key: string]: any;
-	constructor(startOrStartLine, startCharacterOrEnd, endLine = 0, endCharacter = 0) {
+	[key: string]: unknown;
+	start: Position;
+	end: Position;
+
+	constructor(
+		startOrStartLine: Position | number,
+		startCharacterOrEnd: Position | number,
+		endLine = 0,
+		endCharacter = 0,
+	) {
 		if (typeof startOrStartLine === "number") {
-			this.start = new Position(startOrStartLine, startCharacterOrEnd);
+			this.start = new Position(startOrStartLine, Number(startCharacterOrEnd));
 			this.end = new Position(endLine, endCharacter);
 		} else {
 			this.start = startOrStartLine;
-			this.end = startCharacterOrEnd;
+			this.end = startCharacterOrEnd as Position;
 		}
 	}
 }
@@ -111,8 +135,11 @@ class Range {
 class Selection extends Range {}
 
 class Location {
-	[key: string]: any;
-	constructor(uri, rangeOrPosition) {
+	[key: string]: unknown;
+	uri: Uri;
+	range: Range;
+
+	constructor(uri: Uri, rangeOrPosition: Range | Position) {
 		this.uri = uri;
 		this.range =
 			rangeOrPosition instanceof Position ? new Range(rangeOrPosition, rangeOrPosition) : rangeOrPosition;
@@ -120,175 +147,232 @@ class Location {
 }
 
 class MarkdownString {
-	[key: string]: any;
+	[key: string]: unknown;
+	value: string;
+	isTrusted = false;
+	supportHtml = false;
+
 	constructor(value = "") {
 		this.value = value;
-		this.isTrusted = false;
-		this.supportHtml = false;
 	}
 
-	appendMarkdown(value) {
+	appendMarkdown(value: string): this {
 		this.value += value;
 		return this;
 	}
 
-	appendCodeblock(value, language) {
+	appendCodeblock(value: string, language?: string): this {
 		this.value += `\`\`\`${language}\n${value}\n\`\`\`\n`;
 		return this;
 	}
 
-	appendText(value) {
+	appendText(value: string): this {
 		this.value += value;
 		return this;
 	}
 }
 
 class Hover {
-	[key: string]: any;
-	constructor(contents, range) {
+	[key: string]: unknown;
+	contents: MarkdownString[];
+	range?: Range;
+
+	constructor(contents: MarkdownString | MarkdownString[], range?: Range) {
 		this.contents = Array.isArray(contents) ? contents : [contents];
 		this.range = range;
 	}
 }
 
 class CompletionItem {
-	[key: string]: any;
-	constructor(label, kind) {
+	[key: string]: unknown;
+	label: string;
+	kind?: number;
+	detail?: string;
+	documentation?: MarkdownString | string;
+	insertText?: string;
+	sortText?: string;
+	filterText?: string;
+	preselect?: boolean;
+	textEdit?: unknown;
+	additionalTextEdits?: unknown;
+	commitCharacters?: string[];
+
+	constructor(label: string, kind?: number) {
 		this.label = label;
 		this.kind = kind;
 	}
 }
 
 class CompletionList {
-	[key: string]: any;
-	constructor(items, isIncomplete) {
-		this.items = items ?? [];
-		this.isIncomplete = !!isIncomplete;
+	[key: string]: unknown;
+	items: CompletionItem[];
+	isIncomplete: boolean;
+
+	constructor(items: CompletionItem[] = [], isIncomplete = false) {
+		this.items = items;
+		this.isIncomplete = isIncomplete;
 	}
 }
 
 class SignatureInformation {
-	[key: string]: any;
-	constructor(label, documentation) {
-		this.label = label;
-		this.documentation = documentation;
-		this.parameters = [];
-	}
+	[key: string]: unknown;
+	parameters: ParameterInformation[] = [];
+
+	constructor(
+		public label: string,
+		public documentation?: MarkdownString | string,
+	) {}
 }
 
 class ParameterInformation {
-	[key: string]: any;
-	constructor(label, documentation) {
-		this.label = label;
-		this.documentation = documentation;
-	}
+	[key: string]: unknown;
+	constructor(
+		public label: string | [number, number],
+		public documentation?: MarkdownString | string,
+	) {}
 }
 
 class SignatureHelp {
-	[key: string]: any;
-	constructor() {
-		this.signatures = [];
-		this.activeSignature = 0;
-		this.activeParameter = 0;
-	}
+	[key: string]: unknown;
+	signatures: SignatureInformation[] = [];
+	activeSignature = 0;
+	activeParameter = 0;
 }
 
 class SymbolInformation {
-	[key: string]: any;
-	constructor(name, kind, rangeOrLocation, uri, containerName) {
+	[key: string]: unknown;
+	name: string;
+	kind: number;
+	location: Location;
+	containerName?: string;
+
+	constructor(name: string, kind: number, rangeOrLocation: Range | Location, uri?: Uri, containerName?: string) {
 		this.name = name;
 		this.kind = kind;
-		this.location = uri ? new Location(uri, rangeOrLocation) : rangeOrLocation;
+		this.location = uri ? new Location(uri, rangeOrLocation as Range) : (rangeOrLocation as Location);
 		this.containerName = containerName;
 	}
 }
 
 class TreeItem {
-	[key: string]: any;
-	constructor(label, collapsibleState) {
+	[key: string]: unknown;
+	label: string;
+	collapsibleState?: number;
+	contextValue = "";
+	description?: string;
+	tooltip?: MarkdownString | string;
+	iconPath?: unknown;
+	id?: string;
+
+	constructor(label: string, collapsibleState?: number) {
 		this.label = label;
 		this.collapsibleState = collapsibleState;
-		this.contextValue = "";
 	}
 }
 
-class EventEmitter {
-	[key: string]: any;
-	constructor() {
-		this.listeners = [];
-		this.event = (listener) => {
-			this.listeners.push(listener);
-			return { dispose: () => {} };
-		};
-	}
+interface StubDisposable {
+	dispose(): void;
+}
 
-	fire(value) {
+class EventEmitter<T = unknown> {
+	[key: string]: unknown;
+	private listeners: Array<(value: T) => void> = [];
+
+	event = (listener: (value: T) => void): StubDisposable => {
+		this.listeners.push(listener);
+		return { dispose: () => {} };
+	};
+
+	fire(value: T): void {
 		for (const listener of this.listeners) listener(value);
 	}
 
-	dispose() {}
+	dispose(): void {
+		this.listeners = [];
+	}
 }
 
 class Disposable {
-	[key: string]: any;
-	static from(...disposables) {
+	[key: string]: unknown;
+	static from(...disposables: Array<{ dispose(): void } | undefined>): StubDisposable {
 		return {
 			dispose: () => {
-				for (const disposable of disposables) disposable?.dispose?.();
+				for (const disposable of disposables) disposable?.dispose();
 			},
 		};
 	}
 
-	dispose() {}
+	dispose(): void {}
 }
 
 class WorkspaceEdit {
-	[key: string]: any;
-	constructor() {
-		this.edits = [];
-	}
+	[key: string]: unknown;
+	edits: Array<{ uri: Uri; range?: Range; newText?: string; edits?: unknown }> = [];
 
-	replace(uri, range, newText) {
+	replace(uri: Uri, range: Range, newText: string): void {
 		this.edits.push({ uri, range, newText });
 	}
 
-	set(uri, edits) {
+	set(uri: Uri, edits: unknown): void {
 		this.edits.push({ uri, edits });
 	}
 }
 
 class RelativePattern {
-	[key: string]: any;
-	constructor(base, pattern) {
-		this.base = base;
-		this.pattern = pattern;
-	}
+	[key: string]: unknown;
+	constructor(
+		public base: string,
+		public pattern: string,
+	) {}
 }
 
 class ThemeColor {
-	[key: string]: any;
-	constructor(id) {
-		this.id = id;
-	}
+	[key: string]: unknown;
+	constructor(public id: string) {}
 }
 
-const event = (_listener) => ({ dispose: () => {} });
+class Diagnostic {
+	[key: string]: unknown;
+	constructor(
+		public range: Range,
+		public message: string,
+		public severity?: number,
+	) {}
+}
 
-// Tests can seed this with `vscode.__configuration["neoGodotTools.some.setting"]`.
-const configuration = {};
+const event = (_listener: (...args: unknown[]) => unknown): StubDisposable => ({ dispose: () => {} });
+
+/** Seed with `vscode.__configuration["neoGodotTools.some.setting"]` from a test. */
+const configuration: Record<string, unknown> = {};
+
+interface StubTextDocument {
+	uri: Uri;
+	languageId: string;
+	version: number;
+	getText(range?: Range): string;
+	lineAt(lineOrPosition: number | Position): { text: string; lineNumber: number; range: Range };
+	offsetAt(position: Position): number;
+	positionAt(offset: number): Position;
+	getWordRangeAtPosition(position: Position, regex?: RegExp): Range | undefined;
+	position: Position;
+	fileName: string;
+	isUntitled: boolean;
+	isDirty: boolean;
+	isClosed: boolean;
+}
 
 const workspace = {
-	textDocuments: [],
-	workspaceFolders: [],
-	getConfiguration: (section) => ({
-		get: (key, fallback) => {
+	textDocuments: [] as StubTextDocument[],
+	workspaceFolders: [] as unknown[],
+	getConfiguration: (section: string) => ({
+		get: (key: string, fallback?: unknown): unknown => {
 			const scoped = `${section}.${key}`;
 			if (Object.prototype.hasOwnProperty.call(configuration, scoped)) return configuration[scoped];
 			if (Object.prototype.hasOwnProperty.call(configuration, key)) return configuration[key];
 			return fallback;
 		},
-		update: async () => {},
-		has: () => false,
+		update: async (): Promise<void> => {},
+		has: (): boolean => false,
 	}),
 	onDidOpenTextDocument: event,
 	onDidChangeTextDocument: event,
@@ -302,41 +386,49 @@ const workspace = {
 		onDidDelete: event,
 		dispose: () => {},
 	}),
-	findFiles: async () => [],
-	openTextDocument: async (uri) => ({
-		uri: typeof uri === "string" ? Uri.file(uri) : uri,
-		languageId: "gdscript",
-		version: 1,
-		getText: () => "",
-		lineAt: () => ({ text: "", lineNumber: 0 }),
-		offsetAt: () => 0,
-		positionAt: () => new Position(0, 0),
-		getWordRangeAtPosition: () => undefined,
-	}),
-	applyEdit: async () => true,
-	getWorkspaceFolder: () => undefined,
-	asRelativePath: (value) => String(value),
+	findFiles: async (_include: string, _exclude?: string | null): Promise<Uri[]> => [],
+	openTextDocument: async (uri: string | Uri): Promise<StubTextDocument> => {
+		const resolved = typeof uri === "string" ? Uri.file(uri) : uri;
+		return {
+			uri: resolved,
+			languageId: "gdscript",
+			version: 1,
+			getText: () => "",
+			lineAt: () => ({ text: "", lineNumber: 0, range: new Range(0, 0) }),
+			offsetAt: () => 0,
+			positionAt: () => new Position(0, 0),
+			getWordRangeAtPosition: () => undefined,
+			position: new Position(0, 0),
+			fileName: resolved.fsPath,
+			isUntitled: false,
+			isDirty: false,
+			isClosed: false,
+		};
+	},
+	applyEdit: async (_edit: WorkspaceEdit): Promise<boolean> => true,
+	getWorkspaceFolder: (_uri: Uri) => undefined,
+	asRelativePath: (value: string | Uri): string => String(value),
 	fs: {
-		readFile: async (uri) => fs.promises.readFile(uri.fsPath ?? uri.path),
-		writeFile: async (uri, content) => fs.promises.writeFile(uri.fsPath ?? uri.path, content),
-		stat: async (uri) => fs.promises.stat(uri.fsPath ?? uri.path),
+		readFile: async (uri: Uri): Promise<Uint8Array> => fs.promises.readFile(uri.fsPath),
+		writeFile: async (uri: Uri, content: Uint8Array): Promise<void> => fs.promises.writeFile(uri.fsPath, content),
+		stat: async (uri: Uri): Promise<fs.Stats> => fs.promises.stat(uri.fsPath),
 	},
 };
 
 const window = {
-	activeTextEditor: undefined,
+	activeTextEditor: undefined as unknown,
 	activeColorTheme: { kind: 1 },
-	showInformationMessage: async () => undefined,
-	showWarningMessage: async () => undefined,
-	showErrorMessage: async () => undefined,
-	showQuickPick: async () => undefined,
-	showInputBox: async () => undefined,
-	showOpenDialog: async () => undefined,
-	showTextDocument: async () => undefined,
+	showInformationMessage: async (_message: string, ..._items: string[]): Promise<string | undefined> => undefined,
+	showWarningMessage: async (_message: string, ..._items: string[]): Promise<string | undefined> => undefined,
+	showErrorMessage: async (_message: string, ..._items: string[]): Promise<string | undefined> => undefined,
+	showQuickPick: async (_items: unknown, _options?: unknown): Promise<unknown> => undefined,
+	showInputBox: async (_options?: unknown): Promise<string | undefined> => undefined,
+	showOpenDialog: async (_options?: unknown): Promise<Uri[] | undefined> => undefined,
+	showTextDocument: async (_uri: Uri, _options?: unknown): Promise<unknown> => undefined,
 	registerCustomEditorProvider: () => ({ dispose: () => {} }),
 	registerWebviewViewProvider: () => ({ dispose: () => {} }),
 	registerWebviewPanelSerializer: () => ({ dispose: () => {} }),
-	createWebviewPanel: () => ({
+	createWebviewPanel: (_type: string, _title: string, _column?: number) => ({
 		webview: { html: "", onDidReceiveMessage: event, postMessage: async () => true },
 		onDidDispose: event,
 		dispose: () => {},
@@ -344,35 +436,51 @@ const window = {
 	onDidChangeActiveTextEditor: event,
 	onDidChangeVisibleTextEditors: event,
 	onDidChangeActiveColorTheme: event,
-	createOutputChannel: () => ({ appendLine: () => {}, append: () => {}, show: () => {}, dispose: () => {} }),
-	createStatusBarItem: () => ({
+	createOutputChannel: (_name: string, _options?: unknown) => ({
+		appendLine: () => {},
+		append: () => {},
+		debug: () => {},
+		info: () => {},
+		warn: () => {},
+		error: () => {},
+		trace: () => {},
+		show: () => {},
+		dispose: () => {},
+	}),
+	createStatusBarItem: (_alignment?: number, _priority?: number) => ({
 		show: () => {},
 		hide: () => {},
 		dispose: () => {},
 		text: "",
-		command: undefined,
-		tooltip: undefined,
+		command: undefined as string | undefined,
+		tooltip: undefined as string | undefined,
 	}),
-	withProgress: async (_options, task) => task({ report: () => {} }, { isCancellationRequested: false }),
-	visibleTextEditors: [],
+	withProgress: async (_options: unknown, task: (progress: unknown, token: unknown) => Promise<unknown>) =>
+		task({ report: () => {} }, { isCancellationRequested: false }),
+	visibleTextEditors: [] as unknown[],
 };
 
 const commands = {
-	registerCommand: () => ({ dispose: () => {} }),
-	executeCommand: async () => undefined,
-	getCommands: async () => [],
+	/** Registered handlers are kept so tests can invoke a command by id. */
+	handlers: new Map<string, (...args: unknown[]) => unknown>(),
+	registerCommand: (id: string, handler: (...args: unknown[]) => unknown) => {
+		commands.handlers.set(id, handler);
+		return { dispose: () => commands.handlers.delete(id) };
+	},
+	executeCommand: async (_command: string, ..._args: unknown[]): Promise<unknown> => undefined,
+	getCommands: async (_filterInternal?: boolean): Promise<string[]> => [],
 };
 
 const languages = {
-	createDiagnosticCollection: (name) => {
-		const entries = new Map();
+	createDiagnosticCollection: (name?: string) => {
+		const entries = new Map<string, unknown>();
 		return {
 			name,
-			set: (uri, diagnostics) => entries.set(String(uri), diagnostics),
-			get: (uri) => entries.get(String(uri)),
-			delete: (uri) => entries.delete(String(uri)),
+			set: (uri: Uri | string, diagnostics: unknown) => entries.set(String(uri), diagnostics),
+			get: (uri: Uri | string) => entries.get(String(uri)),
+			delete: (uri: Uri | string) => entries.delete(String(uri)),
 			clear: () => entries.clear(),
-			forEach: (callback) => entries.forEach(callback),
+			forEach: (callback: (diagnostics: unknown, uri: string) => void) => entries.forEach(callback),
 			dispose: () => entries.clear(),
 			__entries: entries,
 		};
@@ -391,36 +499,36 @@ const languages = {
 	registerDocumentRangeFormattingEditProvider: () => ({ dispose: () => {} }),
 	registerDocumentSemanticTokensProvider: () => ({ dispose: () => {} }),
 	registerInlayHintsProvider: () => ({ dispose: () => {} }),
-	match: () => 0,
+	match: (_selector: unknown, _document: unknown): number => 0,
 	setLanguageConfiguration: () => ({ dispose: () => {} }),
 };
 
 const extensions = {
-	getExtension: (id) => ({
+	getExtension: (id: string) => ({
 		id,
 		extensionUri: Uri.file(EXTENSION_ROOT),
 		extensionPath: EXTENSION_ROOT,
 		isActive: true,
-		exports: undefined,
-		activate: async () => undefined,
+		exports: undefined as unknown,
+		activate: async (): Promise<unknown> => undefined,
 	}),
-	all: [],
+	all: [] as unknown[],
 };
 
 const env = {
 	appName: "VS Code",
 	language: "en",
-	clipboard: { writeText: async () => {}, readText: async () => "" },
-	openExternal: async () => true,
+	clipboard: { writeText: async (_value: string): Promise<void> => {}, readText: async (): Promise<string> => "" },
+	openExternal: async (_uri: Uri): Promise<boolean> => true,
 };
 
 const debug = {
-	activeDebugSession: undefined,
-	activeStackItem: undefined,
+	activeDebugSession: undefined as unknown,
+	activeStackItem: undefined as unknown,
 	onDidChangeActiveStackItem: event,
 	onDidChangeActiveDebugSession: event,
 	onDidReceiveDebugSessionCustomEvent: event,
-	startDebugging: async () => true,
+	startDebugging: async (_folder: unknown, _nameOrConfig: unknown): Promise<boolean> => true,
 	registerDebugAdapterDescriptorFactory: () => ({ dispose: () => {} }),
 	registerDebugConfigurationProvider: () => ({ dispose: () => {} }),
 };
@@ -502,15 +610,6 @@ const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 };
 
 const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 
-class Diagnostic {
-	[key: string]: any;
-	constructor(range, message, severity) {
-		this.range = range;
-		this.message = message;
-		this.severity = severity;
-	}
-}
-
 const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 };
 
 const UIKind = { Desktop: 1, Web: 2 };
@@ -564,3 +663,4 @@ export {
 	__stub,
 	__configuration,
 };
+export type { StubDisposable, StubTextDocument, UriComponents };

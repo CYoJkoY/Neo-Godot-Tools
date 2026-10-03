@@ -3,7 +3,7 @@ import { GodotVariable } from "../../debug_runtime";
 import { ServerController } from "../server_controller";
 import { GodotIdToVscodeIdMapper, GodotIdWithPath } from "./godot_id_to_vscode_id_mapper";
 import { GodotObject, GodotObjectPromise } from "./godot_object_promise";
-import { ObjectId, StringName } from "./variants";
+import { ObjectId } from "./variants";
 
 export interface VsCodeScopeIDs {
 	Locals: number;
@@ -57,7 +57,7 @@ export class VariablesManager {
 			this.godot_object_promises.delete(godot_id);
 
 			// check if member scopes also need to be refreshed:
-			for (const [stack_frame_id, scopes] of this.frame_id_to_scopes_map) {
+			for (const scopes of this.frame_id_to_scopes_map.values()) {
 				const members_godot_id = this.godot_id_to_vscode_id_mapper.get_godot_id_with_path(scopes.Members);
 				const scopes_object = await this.get_godot_object(members_godot_id.godot_id);
 				const self = scopes_object.sub_values.find((sv) => sv.name === "self");
@@ -198,12 +198,7 @@ export class VariablesManager {
 		if (!variable || parent_id === undefined) {
 			throw new Error(`Variable ${variable_name} or its parent_id is undefined`);
 		}
-		const parsed_variable = await this.parse_variable(
-			variable,
-			parent_id,
-			[],
-			this.godot_id_to_vscode_id_mapper,
-		);
+		const parsed_variable = await this.parse_variable(variable, parent_id, [], this.godot_id_to_vscode_id_mapper);
 
 		return parsed_variable;
 	}
@@ -241,23 +236,21 @@ export class VariablesManager {
 					}
 					return v;
 				};
-				const top_rendered_vals = await Promise.all(value.slice(0, 10).map(v => stringify_if_can(v)));
+				const top_rendered_vals = await Promise.all(value.slice(0, 10).map((v) => stringify_if_can(v)));
 				rendered_value = `(${value.length}) [${top_rendered_vals.join(", ")}]`;
 				reference = mapper.get_or_create_vscode_id(
 					new GodotIdWithPath(parent_godot_id, [...relative_path, va.name]),
 				);
 			} else if (value instanceof Map) {
-				// biome-ignore lint/complexity/useLiteralKeys: <explanation>
-				rendered_value = value["class_name"] ?? `Dictionary(${value.size})`;
+				rendered_value = (value as { class_name?: string }).class_name ?? `Dictionary(${value.size})`;
 				reference = mapper.get_or_create_vscode_id(
 					new GodotIdWithPath(parent_godot_id, [...relative_path, va.name]),
 				);
-			} else if (typeof value?.get_rendered_value === "function") { // (key instanceof ObjectId), (key instanceof StringName)
+			} else if (typeof value?.get_rendered_value === "function") {
+				// (key instanceof ObjectId), (key instanceof StringName)
 				rendered_value = await value.get_rendered_value(this);
 				if (value instanceof ObjectId) {
-					reference = mapper.get_or_create_vscode_id(
-						new GodotIdWithPath(value.id, []),
-					);
+					reference = mapper.get_or_create_vscode_id(new GodotIdWithPath(value.id, []));
 				}
 			} else {
 				try {

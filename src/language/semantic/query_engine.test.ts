@@ -46,7 +46,6 @@ var health: int = 100
 func heal(amount: int) -> void:
 	health += amount
 `;
-const SOURCE_URI = "file:///workspace/player.gd";
 
 describe("SemanticQueryEngine", () => {
 	it("resolves a declared member to its declaration", () => {
@@ -59,7 +58,12 @@ describe("SemanticQueryEngine", () => {
 
 	it("returns unknown confidence for a name that is not in the project", () => {
 		const { engine } = createEngine("class_name Player\nfunc heal():\n\tnot_a_symbol\n");
-		assert.equal(engine.getDefinition(URI, { offset: wordOffset("class_name Player\nfunc heal():\n\tnot_a_symbol\n", "not_a_symbol") }).confidence, "unknown");
+		assert.equal(
+			engine.getDefinition(URI, {
+				offset: wordOffset("class_name Player\nfunc heal():\n\tnot_a_symbol\n", "not_a_symbol"),
+			}).confidence,
+			"unknown",
+		);
 	});
 
 	it("returns partial confidence when a name is ambiguous in the workspace", () => {
@@ -111,9 +115,12 @@ describe("SemanticQueryEngine", () => {
 	});
 
 	it("completes members of a receiver expression", () => {
-		const source = "class_name Player\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
+		const source =
+			"class_name Player\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
 		const { engine } = createEngine(source);
-		const result = engine.getCompletions(URI, { offset: source.lastIndexOf("Worker.new().") + "Worker.new().".length });
+		const result = engine.getCompletions(URI, {
+			offset: source.lastIndexOf("Worker.new().") + "Worker.new().".length,
+		});
 		assert.equal(result.confidence, "exact");
 		assert.deepEqual(result.value?.map((item) => item.name).sort(), ["run", "speed"]);
 	});
@@ -135,7 +142,10 @@ describe("SemanticQueryEngine", () => {
 		const second = engine.getCompletions(URI, { offset });
 		assert.notEqual(second, first);
 		assert.ok(second.value?.some((item) => item.name === "player_score"));
-		assert.equal(second.value?.some((item) => item.name === "player_count"), false);
+		assert.equal(
+			second.value?.some((item) => item.name === "player_count"),
+			false,
+		);
 	});
 });
 
@@ -145,10 +155,16 @@ describe("SemanticQueryEngine references", () => {
 		const { engine } = createEngine(source);
 		const all = engine.getReferences(URI, { offset: wordOffset(source, "health", 1) }, true);
 		assert.equal(all.confidence, "exact");
-		assert.deepEqual(all.value?.map((reference) => reference.range.start.line), [1, 3]);
+		assert.deepEqual(
+			all.value?.map((reference) => reference.range.start.line),
+			[1, 3],
+		);
 
 		const uses = engine.getReferences(URI, { offset: wordOffset(source, "health", 1) }, false);
-		assert.deepEqual(uses.value?.map((reference) => reference.range.start.line), [3]);
+		assert.deepEqual(
+			uses.value?.map((reference) => reference.range.start.line),
+			[3],
+		);
 	});
 });
 

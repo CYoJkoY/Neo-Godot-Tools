@@ -20,10 +20,10 @@ import { GodotStackFrame, GodotVariable } from "../debug_runtime";
 import { AttachRequestArguments, LaunchRequestArguments, pinnedScene } from "../debugger";
 import { GodotDebugSession } from "./debug_session";
 import { get_sub_values, parse_next_scene_node, split_buffers } from "./helpers";
+import { VariablesManager } from "./variables/variables_manager";
 import { DecodedVariant, VariantDecoder } from "./variables/variant_decoder";
 import { VariantEncoder } from "./variables/variant_encoder";
 import { RawObject } from "./variables/variants";
-import { VariablesManager } from "./variables/variables_manager";
 
 const log = createLogger("debugger.controller", { output: "Godot Debugger" });
 const socketLog = createLogger("debugger.socket");
@@ -42,11 +42,9 @@ class GodotPartialStackVars {
 	Locals: GodotVariable[] = [];
 	Members: GodotVariable[] = [];
 	Globals: GodotVariable[] = [];
-	public remaining: number;
-	public stack_frame_id: number;
-	constructor(stack_frame_id: number) {
-		this.stack_frame_id = stack_frame_id;
-	}
+	public remaining = 0;
+
+	constructor(public stack_frame_id: number) {}
 
 	public reset(remaining: number) {
 		this.remaining = remaining;
@@ -56,8 +54,7 @@ class GodotPartialStackVars {
 	}
 
 	public append(name: string, godotScopeIndex: 0 | 1 | 2, type: number, value: any, sub_values?: GodotVariable[]) {
-		const scopeName = ["Locals", "Members", "Globals"][godotScopeIndex];
-		const scope = this[scopeName];
+		const scope = [this.Locals, this.Members, this.Globals][godotScopeIndex];
 		// const objectId = value instanceof ObjectId ? value : undefined; // won't work, unless the value is re-created through new ObjectId(godot_id)
 		const godot_id = type === 24 ? value?.id : undefined;
 		scope.push({ id: godot_id, name, value, type, sub_values } as GodotVariable);
@@ -71,15 +68,16 @@ export class ServerController {
 	private decoder = new VariantDecoder();
 	private draining = false;
 	private exception = "";
-	private threadId: number;
+	private threadId = 0;
 	private server?: net.Server;
 	private socket?: net.Socket;
 	private steppingOut = false;
 	private didFirstOutput = false;
 	private partialStackVars?: GodotPartialStackVars;
-	private projectVersionMajor: number;
-	private projectVersionMinor: number;
-	private projectVersionPoint: number;
+	/** Major and point are reported by the development server; only minor gates behaviour. */
+	public projectVersionMajor = 0;
+	private projectVersionMinor = 0;
+	public projectVersionPoint = 0;
 
 	public constructor(public session: GodotDebugSession) {}
 
@@ -142,7 +140,7 @@ export class ServerController {
 		this.send_command("get_stack_frame_vars", [stack_frame_id]);
 	}
 
-	public set_object_property(objectId: bigint, label: string, newParsedValue) {
+	public set_object_property(objectId: bigint, label: string, newParsedValue: unknown) {
 		this.send_command("scene:set_object_property", [objectId, label, newParsedValue]);
 	}
 
@@ -288,9 +286,10 @@ export class ServerController {
 		log.info(`Launching game process using command: '${command}'`);
 		const debugProcess = subProcess("debug", command, { shell: true, detached: true });
 
-		debugProcess.stdout.on("data", (data) => {});
-		debugProcess.stderr.on("data", (data) => {});
-		debugProcess.on("close", (code) => {});
+		// The listeners keep the child process from blocking on a full pipe.
+		debugProcess.stdout.on("data", () => {});
+		debugProcess.stderr.on("data", () => {});
+		debugProcess.on("close", () => {});
 	}
 
 	private stash?: Buffer;
@@ -324,7 +323,7 @@ export class ServerController {
 
 			socket.on("data", this.on_data.bind(this));
 
-			socket.on("close", (had_error) => {
+			socket.on("close", () => {
 				// log.debug("socket close");
 				this.abort();
 			});
@@ -334,7 +333,7 @@ export class ServerController {
 				this.abort();
 			});
 
-			socket.on("error", (error) => {
+			socket.on("error", () => {
 				// log.debug("socket error");
 				// this.session.sendEvent(new TerminatedEvent());
 				// this.stop();
@@ -365,7 +364,7 @@ export class ServerController {
 
 			socket.on("data", this.on_data.bind(this));
 
-			socket.on("close", (had_error) => {
+			socket.on("close", () => {
 				// log.debug("socket close");
 				// this.session.sendEvent(new TerminatedEvent());
 				// this.stop();
@@ -377,7 +376,7 @@ export class ServerController {
 				// this.stop();
 			});
 
-			socket.on("error", (error) => {
+			socket.on("error", () => {
 				// log.error("socket error", error);
 			});
 
@@ -432,17 +431,26 @@ export class ServerController {
 				break;
 			case "scene:scene_tree": {
 				const tree = parse_next_scene_node(command.parameters);
-				this.session.sceneTree.fill_tree(tree);
+				this.session.sceneTree?.fill_tree(tree);
 				break;
 			}
 			case "scene:inspect_object": {
 				if (this.session.variables_manager === undefined) {
-					log.error("Unexpected 'scene:inspect_object' received. Should be inside 'debug_enter' / 'debug_exit'.");
+					log.error(
+						"Unexpected 'scene:inspect_object' received. Should be inside 'debug_enter' / 'debug_exit'.",
+					);
 					return;
 				}
 				let godot_id = BigInt(command.parameters[0] as number);
 				const className: string = command.parameters[1] as string;
-				const properties: [string, string, number, string, number, any][] = command.parameters[2] as [string, string, number, string, number, any][];
+				const properties: [string, string, number, string, number, any][] = command.parameters[2] as [
+					string,
+					string,
+					number,
+					string,
+					number,
+					any,
+				][];
 
 				// message:inspect_object returns the id as an unsigned 64 bit integer, but it is decoded as a signed 64 bit integer,
 				// thus we need to convert it to its equivalent unsigned value here.
@@ -463,7 +471,7 @@ export class ServerController {
 				const rawObject = new RawObject(className);
 				let category = "";
 				for (const prop of properties) {
-					const [name, class_name, hint, hint_string, usage, value, ...tail]: [string, string, number, string, number, any] = prop;
+					const [name, , , , usage, value]: [string, string, number, string, number, unknown] = prop;
 					if (usage === 128) {
 						category = name;
 						continue; // not a variable - just a category grouping element for UI for subsequent items
@@ -478,8 +486,11 @@ export class ServerController {
 							var_name = name.slice("Constants/".length);
 						} else if (name.includes("/")) {
 							var_name = name;
-						} else { // extra check for potential override values:
-							log.error(`Unknown property name: '${name}'. Expected it to start with "Members/" or "Constants/" or contain "/"`);
+						} else {
+							// extra check for potential override values:
+							log.error(
+								`Unknown property name: '${name}'. Expected it to start with "Members/" or "Constants/" or contain "/"`,
+							);
 							var_name = name;
 						}
 					}
@@ -598,7 +609,7 @@ export class ServerController {
 				const console = debug.activeDebugConsole;
 				const params = command.parameters[0] as DecodedVariant[];
 				for (const output of params) {
-					for (const line of (output as string || "").split("\n")) {
+					for (const line of ((output as string) || "").split("\n")) {
 						console.appendLine(bbcodeParser.parse(line));
 					}
 				}
@@ -629,7 +640,7 @@ export class ServerController {
 			warning: params[9] as boolean,
 			stack: [] as { msg: string; extras: any }[],
 		};
-		const stackCount = params[10] as number ?? 0;
+		const stackCount = (params[10] as number) ?? 0;
 		for (let i = 0; i < stackCount; i += 3) {
 			const file = params[11 + i] as string;
 			const func = params[12 + i] as string;
@@ -737,11 +748,13 @@ export class ServerController {
 				if (this.session.debug_data.stack_count > 1) {
 					continueStepping = this.session.debug_data.stack_count === stackCount;
 				} else {
-					const fileSame = stackFrames[0].file === this.session.debug_data.last_frame.file;
-					const funcSame = stackFrames[0].function === this.session.debug_data.last_frame.function;
-					const lineGreater = stackFrames[0].line >= this.session.debug_data.last_frame.line;
-
-					continueStepping = fileSame && funcSame && lineGreater;
+					const last = this.session.debug_data.last_frame;
+					continueStepping = Boolean(
+						last &&
+							stackFrames[0].file === last.file &&
+							stackFrames[0].function === last.function &&
+							stackFrames[0].line >= last.line,
+					);
 				}
 			}
 		}

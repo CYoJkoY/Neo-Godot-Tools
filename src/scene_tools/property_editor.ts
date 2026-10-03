@@ -10,8 +10,8 @@
  */
 
 import * as vscode from "vscode";
+import type { LspClientLike } from "../lsp/types";
 import {
-	LspPropertyInfo,
 	PropertyMetadata,
 	enumOptions,
 	parseScriptExports,
@@ -29,7 +29,7 @@ const log = createLogger("scenes.properties");
 const LSP_METADATA_TIMEOUT_MS = 4_000;
 
 export interface NodePropertyOptions {
-	lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined;
+	lspClient?: () => LspClientLike | undefined;
 	lspTimeoutMs?: number;
 }
 

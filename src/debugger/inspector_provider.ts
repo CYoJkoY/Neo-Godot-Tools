@@ -122,9 +122,10 @@ export class InspectorProvider implements TreeDataProvider<RemoteProperty> {
 				});
 			}
 
-			child_props = sub_variables?.map((va: any) => {
-				return this.parse_variable(va, object_id);
-			}) || [];
+			child_props =
+				sub_variables?.map((va: any) => {
+					return this.parse_variable(va, object_id);
+				}) || [];
 		}
 
 		const out_prop = new RemoteProperty(
@@ -165,11 +166,11 @@ export class RemoteProperty extends TreeItem {
 	public parent?: RemoteProperty;
 
 	constructor(
-		public label: string,
+		public override label: string,
 		public value: any,
 		public object_id: number | undefined,
 		public properties: RemoteProperty[],
-		public collapsibleState?: TreeItemCollapsibleState,
+		public override collapsibleState?: TreeItemCollapsibleState,
 	) {
 		super(label, collapsibleState);
 	}

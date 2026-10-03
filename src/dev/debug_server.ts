@@ -22,6 +22,28 @@ import { is_debug_mode } from "../utils";
  * interactive dev session call any internal API directly.
  */
 
+/**
+ * Private debugger state that only this development server inspects.
+ *
+ * Peeking at internals is the point of this tool; the cast happens once here
+ * instead of string-indexing every field, which keeps the rest of the program
+ * under `strict`.
+ */
+interface DebuggerInternals {
+	session?: {
+		controller?: {
+			socket?: unknown;
+			threadId?: number;
+			projectVersionMajor?: number;
+			projectVersionMinor?: number;
+			projectVersionPoint?: number;
+		};
+		variables_manager?: unknown;
+	};
+	sceneTree?: { root?: { label?: string } };
+	inspector?: { root?: unknown };
+}
+
 const DEFAULT_PORT = 7331;
 
 let outputChannel: vscode.OutputChannel | undefined;
@@ -179,35 +201,38 @@ export class DebugServer {
 
 	private debugger_state() {
 		return safe(() => {
-			const dbg = globals.debug;
+			const dbg = globals.debug as DebuggerInternals | undefined;
 			if (!dbg) return { error: "debugger not initialized" };
 			const session = dbg.session;
+			const controller = session?.controller;
+			const version =
+				controller?.projectVersionMajor === undefined
+					? undefined
+					: `${controller.projectVersionMajor}.${controller.projectVersionMinor}.${controller.projectVersionPoint}`;
 			return {
 				hasSession: !!session,
 				sessionType: session?.constructor?.name,
 				sceneTree: safe(() => ({
 					hasRoot: !!dbg.sceneTree,
-					rootLabel: dbg.sceneTree?.["root"]?.label,
+					rootLabel: dbg.sceneTree?.root?.label,
 				})),
 				inspector: safe(() => ({
 					hasRoot: !!dbg.inspector,
 				})),
 				controller: safe(() => ({
-					className: session?.["controller"]?.constructor?.name,
-					hasSocket: !!session?.["controller"]?.["socket"],
-					threadId: session?.["controller"]?.["threadId"],
-					projectVersion: session?.["controller"]?.["projectVersionMajor"] != null
-						? `${session["controller"]["projectVersionMajor"]}.${session["controller"]["projectVersionMinor"]}.${session["controller"]["projectVersionPoint"]}`
-						: undefined,
+					className: controller?.constructor?.name,
+					hasSocket: !!controller?.socket,
+					threadId: controller?.threadId,
+					projectVersion: version,
 				})),
-				variablesManager: safe(() => !!session?.["variables_manager"]),
+				variablesManager: safe(() => !!session?.variables_manager),
 			};
 		});
 	}
 
 	private scene_tree() {
 		return safe(() => {
-			const root = globals.debug?.sceneTree?.["root"];
+			const root = (globals.debug as DebuggerInternals | undefined)?.sceneTree?.root;
 			if (!root) return { error: "no scene tree available" };
 			return serialize(root);
 		});
@@ -215,7 +240,7 @@ export class DebugServer {
 
 	private inspector() {
 		return safe(() => {
-			const root = globals.debug?.inspector?.["root"];
+			const root = (globals.debug as DebuggerInternals | undefined)?.inspector?.root;
 			if (!root) return { error: "no inspector available" };
 			return serialize(root);
 		});
@@ -223,9 +248,9 @@ export class DebugServer {
 
 	private variables(query: URLSearchParams) {
 		return safe(() => {
-			const session = globals.debug?.session;
+			const session = (globals.debug as DebuggerInternals | undefined)?.session;
 			if (!session) return { error: "no debug session" };
-			const vm = session["variables_manager"];
+			const vm = session.variables_manager;
 			if (!vm) return { error: "no variables manager (not at a breakpoint?)" };
 			const frame = Number(query.get("frame") ?? 0);
 			const scope = query.get("scope"); // "locals" | "members" | "globals"
@@ -237,7 +262,7 @@ export class DebugServer {
 		});
 	}
 
-	private reload(res: http.ServerResponse) {
+	private reload(_res: http.ServerResponse) {
 		require("vscode").commands.executeCommand("workbench.action.reloadWindow");
 	}
 

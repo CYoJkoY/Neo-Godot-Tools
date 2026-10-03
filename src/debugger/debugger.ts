@@ -68,13 +68,12 @@ class GDFileDecorationProvider implements FileDecorationProvider {
 		this.emitter.fire(uri);
 	}
 
-	provideFileDecoration(uri: Uri, token: CancellationToken): FileDecoration | undefined {
+	provideFileDecoration(uri: Uri, _token: CancellationToken): FileDecoration | undefined {
 		if (uri.scheme !== "file") return undefined;
 		if (pinnedScene !== undefined && uri.fsPath === pinnedScene.fsPath) {
-			return {
-				badge: "🖈",
-			};
+			return { badge: "🖈" };
 		}
+		return undefined;
 	}
 }
 
@@ -108,7 +107,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 		);
 	}
 
-	public async createDebugAdapterDescriptor(session: DebugSession): Promise<DebugAdapterDescriptor> {
+	public async createDebugAdapterDescriptor(_session: DebugSession): Promise<DebugAdapterDescriptor> {
 		log.info("Creating debug session");
 		const projectVersion = await get_project_version();
 		log.info(`Project version identified as ${projectVersion}`);
@@ -130,9 +129,9 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 	}
 
 	public resolveDebugConfiguration(
-		folder: WorkspaceFolder | undefined,
+		_folder: WorkspaceFolder | undefined,
 		config: DebugConfiguration,
-		token?: CancellationToken,
+		_token?: CancellationToken,
 	): ProviderResult<DebugConfiguration> {
 		// request is actually a required field according to vscode
 		// however, setting it here lets us catch a possible misconfiguration
@@ -167,9 +166,8 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public debug_current_file() {
 		log.info("Attempting to debug current file");
-		const configs: DebugConfiguration[] = workspace
-			.getConfiguration("launch", window.activeTextEditor?.document.uri)
-			.get("configurations") || [];
+		const configs: DebugConfiguration[] =
+			workspace.getConfiguration("launch", window.activeTextEditor?.document.uri).get("configurations") || [];
 		const launches = configs.filter((c) => c.request === "launch");
 		const currents = configs.filter((c) => c.scene === "current");
 
@@ -201,7 +199,8 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public debug_pinned_file() {
 		log.info("Attempting to debug pinned scene");
-		const configs: DebugConfiguration[] = workspace.getConfiguration("launch", pinnedScene).get("configurations") || [];
+		const configs: DebugConfiguration[] =
+			workspace.getConfiguration("launch", pinnedScene).get("configurations") || [];
 		const launches = configs.filter((c) => c.request === "launch");
 		const currents = configs.filter((c) => c.scene === "pinned");
 
@@ -253,7 +252,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 		this.fileDecorations.update(_uri);
 	}
 
-	public unpinFile(uri: Uri) {
+	public unpinFile(_uri: Uri) {
 		log.info(`Unpinning debug target file: '${pinnedScene}'`);
 		set_context("pinnedScene", []);
 		const previousPinnedScene = pinnedScene;

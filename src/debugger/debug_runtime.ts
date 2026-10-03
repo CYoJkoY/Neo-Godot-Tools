@@ -1,9 +1,6 @@
 import * as path from "node:path";
 
-import { createLogger } from "../utils";
 import { SceneTreeProvider } from "./scene_tree_provider";
-
-const log = createLogger("debugger.runtime");
 
 export interface GodotBreakpoint {
 	file: string;
@@ -34,7 +31,7 @@ export class GodotStackVars {
 		this.remaining = count;
 	}
 
-	public forEach(callbackfn: (value: GodotVariable, index: number, array: GodotVariable[]) => void, thisArg?: any) {
+	public forEach(callbackfn: (value: GodotVariable, index: number, array: GodotVariable[]) => void) {
 		this.locals.forEach(callbackfn);
 		this.members.forEach(callbackfn);
 		this.globals.forEach(callbackfn);
@@ -78,21 +75,27 @@ export class ObjectId implements GDObject {
 	}
 }
 
+/** The parts of a debug session that the runtime data needs. */
+export interface DebugSessionController {
+	controller: {
+		set_breakpoint(file: string, line: number): void;
+		remove_breakpoint(file: string, line: number): void;
+	};
+}
+
 export class GodotDebugData {
 	private breakpoint_id = 0;
 	private breakpoints: Map<string, GodotBreakpoint[]> = new Map();
 
-	public last_frame: GodotStackFrame;
+	/** Top frame of the last stack trace, `undefined` until the first stop. */
+	public last_frame?: GodotStackFrame;
 	public last_frames: GodotStackFrame[] = [];
-	public projectPath: string;
+	public projectPath = "";
 	public scene_tree?: SceneTreeProvider;
 	public stack_count = 0;
 	public stack_files: string[] = [];
-	public session;
 
-	public constructor(session) {
-		this.session = session;
-	}
+	public constructor(public session: DebugSessionController) {}
 
 	public set_breakpoint(path_to: string, line: number) {
 		const bp = {

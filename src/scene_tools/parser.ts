@@ -160,11 +160,13 @@ export class SceneParser {
 		if (existing && existing.mtime === stats.mtimeMs && existing.sourceFingerprint === sourceFingerprint)
 			return existing;
 
-		const scene = new Scene();
-		scene.path = filePath;
-		scene.mtime = stats.mtimeMs;
-		scene.sourceFingerprint = sourceFingerprint;
-		scene.title = basename(filePath);
+		const scene = new Scene({
+			path: filePath,
+			title: basename(filePath),
+			mtime: stats.mtimeMs,
+			source: text,
+			fingerprint: sourceFingerprint,
+		});
 		this.scenes.set(filePath, scene);
 
 		let lastResource: SceneResource | undefined;
@@ -255,14 +257,17 @@ export class SceneParser {
 			const inheritedType = this.resolve_inherited_node_type(parentNode, nodePath, nodes);
 			const type = explicitType || inheritedType || instanceScene?.root?.className || "Node";
 
-			const node = new SceneNode(name, type);
+			const node = new SceneNode({
+				label: name,
+				className: type,
+				path: nodePath,
+				relativePath,
+				parent,
+				text: line,
+				position: index,
+			});
 			node.explicitType = explicitType;
-			node.path = nodePath;
 			node.description = type;
-			node.relativePath = relativePath;
-			node.parent = parent;
-			node.text = line;
-			node.position = index;
 			node.instanceScene = instanceScene;
 			node.resourceUri = Uri.from({ scheme: "godot", path: nodePath });
 			scene.nodes.set(nodePath, node);
@@ -292,7 +297,6 @@ export class SceneParser {
 			if (node.position < 0 || node.bodyEnd < 0) continue;
 			node.properties = parseNodeProperties(text, node.position, node.bodyEnd);
 		}
-		scene.source = text;
 		return scene;
 	}
 
@@ -366,12 +370,15 @@ export class SceneParser {
 	}
 
 	private clone_instanced_node(source: SceneNode, parent: SceneNode, targetPath: string): SceneNode {
-		const imported = new SceneNode(source.label, source.className);
-		imported.path = targetPath;
-		imported.relativePath = targetPath.slice(parent.path.length + 1);
-		imported.parent = parent.path;
-		imported.text = source.text;
-		imported.position = -1;
+		const imported = new SceneNode({
+			label: source.label,
+			className: source.className,
+			path: targetPath,
+			relativePath: targetPath.slice(parent.path.length + 1),
+			parent: parent.path,
+			text: source.text,
+			position: -1,
+		});
 		imported.body = source.body;
 		imported.unique = source.unique;
 		imported.hasScript = source.hasScript;

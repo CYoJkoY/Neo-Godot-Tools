@@ -1,36 +1,24 @@
 import {
-	GDScriptTypes,
-	BufferModel,
-	Vector3,
-	Vector2,
-	Basis,
 	AABB,
+	Basis,
+	BufferModel,
 	Color,
+	GDScriptTypes,
 	Plane,
 	Quat,
 	Rect2,
 	Transform,
 	Transform2D,
+	Vector2,
+	Vector3,
 } from "./variants";
 
 export class VariantEncoder {
 	public encode_variant(
-		value:
-			| number
-			| bigint
-			| boolean
-			| string
-			| Map<any, any>
-			| Array<any>
-			| object
-			| undefined,
-		model?: BufferModel
+		value: number | bigint | boolean | string | Map<any, any> | Array<any> | object | undefined,
+		model?: BufferModel,
 	) {
-		if (
-			typeof value === "number" &&
-			Number.isInteger(value) &&
-			(value > 2147483647 || value < -2147483648)
-		) {
+		if (typeof value === "number" && Number.isInteger(value) && (value > 2147483647 || value < -2147483648)) {
 			value = BigInt(value);
 		}
 
@@ -160,11 +148,6 @@ export class VariantEncoder {
 		});
 	}
 
-	private encode_Double(value: number, model: BufferModel) {
-		model.buffer.writeDoubleLE(value, model.offset);
-		model.offset += 8;
-	}
-
 	private encode_Float(value: number, model: BufferModel) {
 		model.buffer.writeFloatLE(value, model.offset);
 		model.offset += 4;
@@ -278,22 +261,11 @@ export class VariantEncoder {
 	}
 
 	private size_variant(
-		value:
-			| number
-			| bigint
-			| boolean
-			| string
-			| Map<any, any>
-			| any[]
-			| object
-			| undefined
+		value: number | bigint | boolean | string | Map<any, any> | any[] | object | undefined,
 	): number {
 		let size = 4;
 
-		if (
-			typeof value === "number" &&
-			(value > 2147483647 || value < -2147483648)
-		) {
+		if (typeof value === "number" && (value > 2147483647 || value < -2147483648)) {
 			value = BigInt(value);
 		}
 
@@ -320,8 +292,9 @@ export class VariantEncoder {
 					size += this.size_Dictionary(value);
 					break;
 				} else {
-					// biome-ignore lint/complexity/useLiteralKeys: <explanation>
-					switch (value["__type__"]) {
+					// Non-native variants arrive as tagged objects
+					// (`{ __type__: "Vector2", x, y }`); the tag picks the wire layout.
+					switch ("__type__" in value ? value.__type__ : undefined) {
 						case "Vector2":
 							size += this.size_UInt32() * 2;
 							break;

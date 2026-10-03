@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { LogOutputChannel, window } from "vscode";
 import { is_debug_mode } from ".";
 
@@ -54,7 +55,7 @@ export class Logger {
 		}
 	}
 
-	private log(level: LOG_LEVEL, ...messages) {
+	private log(level: LOG_LEVEL, ...messages: readonly unknown[]) {
 		if (is_debug_mode()) {
 			let prefix = "";
 			if (this.show_time) {
@@ -70,59 +71,57 @@ export class Logger {
 			console.log(prefix, ...messages);
 		}
 
-		if (this.output) {
-			switch (level) {
-				case LOG_LEVEL.ERROR:
-					this.output.error(messages[0]);
-					break;
-				case LOG_LEVEL.WARNING:
-					this.output.warn(messages[0]);
-					break;
-				case LOG_LEVEL.INFO:
-					this.output.info(messages[0]);
-					break;
-				case LOG_LEVEL.DEBUG:
-					this.output.debug(messages[0], ...messages.slice(1));
-					break;
-				case LOG_LEVEL.TRACE:
-					this.output.trace(messages[0]);
-					break;
-				default:
-					break;
-			}
+		const output = this.output;
+		if (!output) return;
+		const [first = "", ...rest] = messages.map(to_text);
+		switch (level) {
+			case LOG_LEVEL.ERROR:
+				output.error(first, ...rest);
+				return;
+			case LOG_LEVEL.WARNING:
+				output.warn(first, ...rest);
+				return;
+			case LOG_LEVEL.INFO:
+				output.info(first, ...rest);
+				return;
+			case LOG_LEVEL.DEBUG:
+				output.debug(first, ...rest);
+				return;
+			case LOG_LEVEL.TRACE:
+				output.trace(first, ...rest);
+				return;
+			default:
+				return;
 		}
 	}
 
-	error(...messages) {
-		if (LOG_LEVEL.ERROR <= this.level) {
-			this.log(LOG_LEVEL.ERROR, ...messages);
-		}
+	error(...messages: readonly unknown[]): void {
+		if (LOG_LEVEL.ERROR <= this.level) this.log(LOG_LEVEL.ERROR, ...messages);
 	}
-	warn(...messages) {
-		if (LOG_LEVEL.WARNING <= this.level) {
-			this.log(LOG_LEVEL.WARNING, ...messages);
-		}
+	warn(...messages: readonly unknown[]): void {
+		if (LOG_LEVEL.WARNING <= this.level) this.log(LOG_LEVEL.WARNING, ...messages);
 	}
-	info(...messages) {
-		if (LOG_LEVEL.INFO <= this.level) {
-			this.log(LOG_LEVEL.INFO, ...messages);
-		}
+	info(...messages: readonly unknown[]): void {
+		if (LOG_LEVEL.INFO <= this.level) this.log(LOG_LEVEL.INFO, ...messages);
 	}
-	debug(...messages) {
-		if (LOG_LEVEL.DEBUG <= this.level) {
-			this.log(LOG_LEVEL.DEBUG, ...messages);
-		}
+	debug(...messages: readonly unknown[]): void {
+		if (LOG_LEVEL.DEBUG <= this.level) this.log(LOG_LEVEL.DEBUG, ...messages);
 	}
-	trace(...messages) {
-		if (LOG_LEVEL.TRACE <= this.level) {
-			this.log(LOG_LEVEL.TRACE, ...messages);
-		}
+	trace(...messages: readonly unknown[]): void {
+		if (LOG_LEVEL.TRACE <= this.level) this.log(LOG_LEVEL.TRACE, ...messages);
 	}
+}
+
+/** Output channels are plain text, so structured values are inspected, not dropped. */
+function to_text(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (value instanceof Error) return value.stack ?? value.message;
+	return inspect(value, { depth: 3, breakLength: 160 });
 }
 
 const loggers: Map<string, Logger> = new Map();
 
-export function createLogger(tag, options?: LoggerOptions) {
+export function createLogger(tag: string, options?: LoggerOptions): Logger {
 	const logger = new Logger(tag, options);
 	loggers.set(tag, logger);
 	return logger;

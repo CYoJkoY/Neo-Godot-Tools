@@ -9,11 +9,15 @@
 		"lib": ["es2022", "dom"],
 		"sourceMap": true,
 		"rootDir": "src",
-		"strict": false,
+		"strict": true,
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true,
+		"noImplicitOverride": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"useUnknownInCatchVariables": true,
 		"skipLibCheck": true,
-		"allowJs": false,
-		"strictBindCallApply": true,
-		"strictNullChecks": true
+		"allowJs": false
 	},
 	"exclude": ["node_modules", "out", "tools", "media", "**/*.test.ts"]
 }

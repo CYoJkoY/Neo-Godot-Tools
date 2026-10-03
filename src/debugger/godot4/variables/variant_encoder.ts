@@ -1,44 +1,32 @@
 import {
-	GDScriptTypes,
-	BufferModel,
-	Vector3,
-	Vector2,
-	Basis,
 	AABB,
+	Basis,
+	BufferModel,
 	Color,
+	ENCODE_FLAG_64,
+	GDScriptTypes,
 	Plane,
+	Projection,
 	Quat,
 	Rect2,
-	Transform3D,
-	Transform2D,
-	Vector3i,
-	Vector2i,
 	Rect2i,
-	Vector4i,
-	Vector4,
 	StringName,
-	Projection,
-	ENCODE_FLAG_64,
+	Transform2D,
+	Transform3D,
+	Vector2,
+	Vector2i,
+	Vector3,
+	Vector3i,
+	Vector4,
+	Vector4i,
 } from "./variants";
 
 export class VariantEncoder {
 	public encode_variant(
-		value:
-			| number
-			| bigint
-			| boolean
-			| string
-			| Map<any, any>
-			| Array<any>
-			| object
-			| undefined,
-		model?: BufferModel
+		value: number | bigint | boolean | string | Map<any, any> | Array<any> | object | undefined,
+		model?: BufferModel,
 	) {
-		if (
-			typeof value === "number" &&
-			Number.isInteger(value) &&
-			(value > 2147483647 || value < -2147483648)
-		) {
+		if (typeof value === "number" && Number.isInteger(value) && (value > 2147483647 || value < -2147483648)) {
 			value = BigInt(value);
 		}
 
@@ -187,11 +175,6 @@ export class VariantEncoder {
 			this.encode_variant(key, model);
 			this.encode_variant(value, model);
 		});
-	}
-
-	private encode_Float64(value: number, model: BufferModel) {
-		model.buffer.writeDoubleLE(value, model.offset);
-		model.offset += 8;
 	}
 
 	private encode_Float32(value: number, model: BufferModel) {
@@ -353,22 +336,11 @@ export class VariantEncoder {
 	}
 
 	private size_variant(
-		value:
-			| number
-			| bigint
-			| boolean
-			| string
-			| Map<any, any>
-			| any[]
-			| object
-			| undefined
+		value: number | bigint | boolean | string | Map<any, any> | any[] | object | undefined,
 	): number {
 		let size = 4;
 
-		if (
-			typeof value === "number" &&
-			(value > 2147483647 || value < -2147483648)
-		) {
+		if (typeof value === "number" && (value > 2147483647 || value < -2147483648)) {
 			value = BigInt(value);
 		}
 
@@ -399,8 +371,9 @@ export class VariantEncoder {
 					size += this.size_String(value.value);
 					break;
 				} else {
-					// biome-ignore lint/complexity/useLiteralKeys: <explanation>
-					switch (value["__type__"]) {
+					// Non-native variants arrive as tagged objects
+					// (`{ __type__: "Vector2", x, y }`); the tag picks the wire layout.
+					switch ("__type__" in value ? value.__type__ : undefined) {
 						case "Vector2":
 						case "Vector2i":
 							size += this.size_UInt32() * 2;

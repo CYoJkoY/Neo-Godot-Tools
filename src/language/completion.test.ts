@@ -85,14 +85,16 @@ describe("completion ordering", () => {
 		const service = createService();
 		index(service, otherUri, otherSource);
 		index(service, mainUri, mainSource);
-		const document = documentFor(mainUri, mainSource);
 		const result = service.semantic.getCompletions(mainUri, { offset: mainSource.indexOf("\tbox.") });
 		const items = result.value ?? [];
 		const zulu = items.find((item) => item.name === "zulu");
 		const workspace = items.find((item) => item.name === "AlphaThing");
 		const builtin = items.find((item) => item.name === "abs");
 		assert.ok(zulu && workspace && builtin);
-		assert.ok(zulu.priority < workspace.priority, "locals precede workspace symbols even when labels sort differently");
+		assert.ok(
+			zulu.priority < workspace.priority,
+			"locals precede workspace symbols even when labels sort differently",
+		);
 		assert.ok(workspace.priority < builtin.priority, "workspace symbols precede builtins");
 		service.dispose();
 	});

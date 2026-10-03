@@ -3,7 +3,6 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import * as vscode from "vscode";
 import {
 	type CancellationToken,
-	type Event,
 	EventEmitter,
 	type ExtensionContext,
 	type FileDecoration,
@@ -16,6 +15,7 @@ import {
 	window,
 	workspace,
 } from "vscode";
+import type { LspClientLike } from "../lsp/types";
 import {
 	convert_resource_path_to_uri,
 	createLogger,
@@ -67,7 +67,7 @@ export class ScenePreviewProvider
 
 	constructor(
 		private context: ExtensionContext,
-		options: { lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined } = {},
+		options: { lspClient?: () => LspClientLike | undefined } = {},
 	) {
 		this.tree = vscode.window.createTreeView("neoGodotTools.scenePreview", {
 			treeDataProvider: this,
@@ -137,7 +137,7 @@ export class ScenePreviewProvider
 	public handleDrag(
 		source: readonly SceneNode[],
 		data: vscode.DataTransfer,
-		token: vscode.CancellationToken,
+		_token: vscode.CancellationToken,
 	): void | Thenable<void> {
 		if (source.length === 0) return;
 		data.set("godot/scene", new vscode.DataTransferItem(this.currentScene));
@@ -284,14 +284,14 @@ export class ScenePreviewProvider
 	}
 
 	private copy_resource_path(item: SceneNode) {
-		vscode.env.clipboard.writeText(item.resourcePath);
+		if (!item.resourcePath) return;
+		void vscode.env.clipboard.writeText(item.resourcePath);
 	}
 
 	private async open_scene(item: SceneNode) {
+		if (!item.resourcePath) return;
 		const uri = await convert_resource_path_to_uri(item.resourcePath);
-		if (uri) {
-			vscode.window.showTextDocument(uri, { preview: true });
-		}
+		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
 	private async open_script(item: SceneNode) {
@@ -601,15 +601,10 @@ class UniqueDecorationProvider implements vscode.FileDecorationProvider {
 
 	constructor(private previewer: ScenePreviewProvider) {}
 
-	provideFileDecoration(uri: Uri, token: CancellationToken): FileDecoration | undefined {
+	provideFileDecoration(uri: Uri, _token: CancellationToken): FileDecoration | undefined {
 		if (uri.scheme !== "godot") return undefined;
-
 		const node = this.previewer.scene?.nodes.get(uri.path);
-		if (node?.unique) {
-			return {
-				badge: "%",
-			};
-		}
+		return node?.unique ? { badge: "%" } : undefined;
 	}
 }
 
@@ -623,14 +618,9 @@ class ScriptDecorationProvider implements vscode.FileDecorationProvider {
 
 	constructor(private previewer: ScenePreviewProvider) {}
 
-	provideFileDecoration(uri: Uri, token: CancellationToken): FileDecoration | undefined {
+	provideFileDecoration(uri: Uri, _token: CancellationToken): FileDecoration | undefined {
 		if (uri.scheme !== "godot") return undefined;
-
 		const node = this.previewer.scene?.nodes.get(uri.path);
-		if (node?.hasScript) {
-			return {
-				badge: "S",
-			};
-		}
+		return node?.hasScript ? { badge: "S" } : undefined;
 	}
 }

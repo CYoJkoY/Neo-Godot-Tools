@@ -1,30 +1,19 @@
 import * as vscode from "vscode";
 import {
-	Uri,
-	Position,
-	Range,
-	TextDocument,
 	CancellationToken,
-	ExtensionContext,
 	DocumentSemanticTokensProvider,
+	ExtensionContext,
+	Range,
 	SemanticTokens,
-	SemanticTokensLegend,
 	SemanticTokensBuilder,
+	SemanticTokensLegend,
+	TextDocument,
 } from "vscode";
-import { createLogger } from "../utils";
-
-const log = createLogger("providers.tokens");
 
 export class GDSemanticTokensProvider implements DocumentSemanticTokensProvider {
-	private legend = new SemanticTokensLegend(
-		[
-			"nodePath",
-			"%",
-		],
-		["test"],
-	);
+	private legend = new SemanticTokensLegend(["nodePath", "%"], ["test"]);
 
-	constructor(private context: ExtensionContext) {
+	constructor(context: ExtensionContext) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },
@@ -36,12 +25,12 @@ export class GDSemanticTokensProvider implements DocumentSemanticTokensProvider 
 		);
 	}
 
-	async provideDocumentSemanticTokens(document: TextDocument, token: CancellationToken): Promise<SemanticTokens> {
-		log.debug("provideDocumentSemanticTokens");
+	async provideDocumentSemanticTokens(document: TextDocument, _token: CancellationToken): Promise<SemanticTokens> {
 		const builder = new SemanticTokensBuilder(this.legend);
 		const text = document.getText();
 
-		const pattern = /(?<=(?:get_node|has_node|find_node|get_node_or_null|has_node_and_resource)\(\s?)(("|')((?!\2).)*\2)(?=\s?\))/g;
+		const pattern =
+			/(?<=(?:get_node|has_node|find_node|get_node_or_null|has_node_and_resource)\(\s?)(("|')((?!\2).)*\2)(?=\s?\))/g;
 		for (const match of text.matchAll(pattern)) {
 			const r = this.create_range(document, match);
 			builder.push(r, "nodePath", []);
