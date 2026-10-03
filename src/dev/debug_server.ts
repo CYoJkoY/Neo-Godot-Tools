@@ -60,7 +60,7 @@ function get_log(): (msg: string) => void {
 }
 
 function get_port(): number {
-	const env = process.env.GODOT_TOOLS_DEBUG_PORT;
+	const env = process.env["GODOT_TOOLS_DEBUG_PORT"];
 	if (env) {
 		const n = Number(env);
 		if (Number.isInteger(n) && n > 0 && n < 65536) return n;

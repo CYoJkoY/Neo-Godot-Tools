@@ -291,7 +291,9 @@ export class VariantEncoder {
 					// Non-native variants arrive as tagged objects
 					// (`{ __type__: "Vector2", x, y }`); the tag picks the wire layout.
 					switch (
-						typeof value === "object" && value !== null && "__type__" in value ? value.__type__ : undefined
+						typeof value === "object" && value !== null && "__type__" in value
+							? value["__type__"]
+							: undefined
 					) {
 						case "Vector2":
 							size += this.size_UInt32() * 2;

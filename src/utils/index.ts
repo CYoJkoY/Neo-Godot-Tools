@@ -9,7 +9,7 @@ export * from "./settings_updater";
 export * from "./vscode_utils";
 
 export function is_debug_mode(): boolean {
-	return process.env.VSCODE_DEBUG_MODE === "true";
+	return process.env["VSCODE_DEBUG_MODE"] === "true";
 }
 
 export async function find_file(file: string): Promise<vscode.Uri | null> {

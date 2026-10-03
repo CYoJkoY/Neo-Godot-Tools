@@ -1,13 +1,19 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { PerformanceProfiler } from "./profiler.js";
+import { type LanguageMetric, PerformanceProfiler, type PerformanceSnapshot } from "./profiler.js";
+
+function sampleFor(snapshot: PerformanceSnapshot, metric: LanguageMetric) {
+	const sample = snapshot[metric];
+	assert.ok(sample, `expected a '${metric}' sample`);
+	return sample;
+}
 
 test("PerformanceProfiler records aggregate and percentile latency", () => {
 	const profiler = new PerformanceProfiler();
 	profiler.record("parse", 2);
 	profiler.record("parse", 3);
 
-	const sample = profiler.getSnapshot().parse;
+	const sample = sampleFor(profiler.getSnapshot(), "parse");
 	assert.equal(sample.count, 2);
 	assert.equal(sample.totalMs, 5);
 	assert.equal(sample.maxMs, 3);
@@ -22,7 +28,7 @@ test("PerformanceProfiler bounds retained latency samples", () => {
 
 	// The profiler keeps the 512 most recent samples (1..512) and uses the
 	// nearest-rank definition, so p95 maps to index 486 of the retained window.
-	const sample = profiler.getSnapshot().parse;
+	const sample = sampleFor(profiler.getSnapshot(), "parse");
 	assert.equal(sample.count, 513);
 	assert.equal(sample.maxMs, 512);
 	assert.equal(sample.p50Ms, 256);
@@ -38,7 +44,7 @@ test("FileIndex profiling is observable through the shared profiler", async () =
 	new FileIndex().update("file:///profile.gd", "class_name Profile\nfunc run() -> void:\n\tpass\n");
 	const snapshot = languageProfiler.getSnapshot();
 
-	assert.ok(snapshot.parse.count >= 1);
-	assert.ok(snapshot.parse.totalMs >= 0);
-	assert.ok(snapshot.collectSymbols.count >= 1);
+	assert.ok(sampleFor(snapshot, "parse").count >= 1);
+	assert.ok(sampleFor(snapshot, "parse").totalMs >= 0);
+	assert.ok(sampleFor(snapshot, "collectSymbols").count >= 1);
 });

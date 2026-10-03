@@ -6,7 +6,32 @@
  * comments elsewhere in the file survive untouched.
  */
 
-import { parseVariant, VariantValue } from "./values.js";
+import { VariantValue, parseVariant } from "./values.js";
+
+/** Attributes a `[...]` section header may carry. */
+export interface SectionAttributes {
+	id?: string;
+	type?: string;
+	path?: string;
+	uid?: string;
+	format?: string;
+	load_steps?: string;
+	script_class?: string;
+}
+
+const SECTION_ATTRIBUTE_NAMES = new Set<keyof SectionAttributes>([
+	"id",
+	"type",
+	"path",
+	"uid",
+	"format",
+	"load_steps",
+	"script_class",
+]);
+
+function is_section_attribute(name: string): name is keyof SectionAttributes {
+	return SECTION_ATTRIBUTE_NAMES.has(name as keyof SectionAttributes);
+}
 
 export interface PropertyEntry {
 	name: string;
@@ -59,10 +84,12 @@ function unquote(value: string | undefined): string | undefined {
 	return value;
 }
 
-function parseAttributes(text: string): Record<string, string> {
-	const attributes: Record<string, string> = {};
+function parseAttributes(text: string): SectionAttributes {
+	const attributes: SectionAttributes = {};
 	for (const match of text.matchAll(ATTRIBUTE_RE)) {
-		attributes[match[1]] = unquote(match[2]) ?? match[2];
+		const name = match[1];
+		if (!is_section_attribute(name)) continue;
+		attributes[name] = unquote(match[2]) ?? match[2];
 	}
 	return attributes;
 }
@@ -80,7 +107,10 @@ function assignmentEndLine(lines: string[], start: number): number {
 				else if (char === quoted) quoted = undefined;
 				continue;
 			}
-			if (char === '"' || char === "'") { quoted = char; continue; }
+			if (char === '"' || char === "'") {
+				quoted = char;
+				continue;
+			}
 			if (char === "(" || char === "[" || char === "{") depth++;
 			else if (char === ")" || char === "]" || char === "}") depth--;
 		}
@@ -101,7 +131,11 @@ function parseProperties(lines: string[], start: number, end: number): PropertyE
 		const match = lines[line].match(PROPERTY_RE);
 		if (!match) continue;
 		const endLine = assignmentEndLine(lines, line);
-		const valueText = lines.slice(line, endLine + 1).map((text, index) => (index === 0 ? text.slice(text.indexOf("=") + 1) : text)).join("\n").trim();
+		const valueText = lines
+			.slice(line, endLine + 1)
+			.map((text, index) => (index === 0 ? text.slice(text.indexOf("=") + 1) : text))
+			.join("\n")
+			.trim();
 		properties.push({ name: match[1], valueText, line, endLine, value: parseVariant(valueText).value });
 		line = endLine;
 	}
@@ -224,9 +258,7 @@ export function uniqueExtResourceId(existing: readonly string[], format?: string
 
 /** Godot 3 references use unquoted numeric IDs; Godot 4 uses strings. */
 export function resourceReference(kind: "Ext" | "Sub", id: string, format?: string): string {
-	return format === "2" && /^\d+$/.test(id)
-		? `${kind}Resource( ${id} )`
-		: `${kind}Resource(${JSON.stringify(id)})`;
+	return format === "2" && /^\d+$/.test(id) ? `${kind}Resource( ${id} )` : `${kind}Resource(${JSON.stringify(id)})`;
 }
 
 function indentOf(line: string): string {
@@ -297,13 +329,18 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 				if (edit.kind === "revertProperty" && value === undefined) {
 					// No known default: drop the explicit value so Godot falls back to it.
 					replaceRange(lines, property.line, property.endLine, []);
-					if (lines[property.line]?.trim() === "" && lines[property.line - 1]?.trim() === "") replaceRange(lines, property.line, property.line, []);
+					if (lines[property.line]?.trim() === "" && lines[property.line - 1]?.trim() === "")
+						replaceRange(lines, property.line, property.line, []);
 				} else {
-					replaceRange(lines, property.line, property.endLine, [`${indentOf(lines[property.line])}${edit.name} = ${value}`]);
+					replaceRange(lines, property.line, property.endLine, [
+						`${indentOf(lines[property.line])}${edit.name} = ${value}`,
+					]);
 				}
 			} else if (value !== undefined) {
 				if (owner) {
-					const anchor = owner.properties.length ? owner.properties[owner.properties.length - 1].endLine + 1 : owner.line + 1;
+					const anchor = owner.properties.length
+						? owner.properties[owner.properties.length - 1].endLine + 1
+						: owner.line + 1;
 					insertLine(lines, anchor, `${edit.name} = ${value}`);
 				} else {
 					let resourceIndex = lines.findIndex((line) => /^\s*\[resource\]/.test(line));
@@ -321,11 +358,17 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 				}
 			}
 		} else if (edit.kind === "addSubResource") {
-			const id = uniqueSubResourceId(edit.type, document.subResources.map((entry) => entry.id));
+			const id = uniqueSubResourceId(
+				edit.type,
+				document.subResources.map((entry) => entry.id),
+			);
 			insertSubResource(lines, edit.type, id, edit.properties ?? {});
 			createdIds.push(id);
 		} else if (edit.kind === "addExtResource") {
-			const id = uniqueExtResourceId(document.extResources.map((entry) => entry.id), document.format);
+			const id = uniqueExtResourceId(
+				document.extResources.map((entry) => entry.id),
+				document.format,
+			);
 			const attributes = [`type=${JSON.stringify(edit.type)}`];
 			if (edit.uid) attributes.push(`uid=${JSON.stringify(edit.uid)}`);
 			attributes.push(`path=${JSON.stringify(edit.path)}`);
@@ -341,13 +384,17 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 			const source = document.extResources.find((entry) => entry.id === edit.id);
 			if (!source) continue;
 			replaceRange(lines, source.line, source.endLine, []);
-			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "") replaceRange(lines, source.line, source.line, []);
+			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "")
+				replaceRange(lines, source.line, source.line, []);
 			current = dropReferences(lines.join(document.lineEnding), edit.id, "Ext");
 			continue;
 		} else if (edit.kind === "duplicateSubResource") {
 			const source = document.subResources.find((entry) => entry.id === edit.id);
 			if (!source) continue;
-			const id = uniqueSubResourceId(source.type, document.subResources.map((entry) => entry.id));
+			const id = uniqueSubResourceId(
+				source.type,
+				document.subResources.map((entry) => entry.id),
+			);
 			const body = lines.slice(source.line + 1, source.endLine + 1).join("\n");
 			const insert = [`[sub_resource type="${source.type}" id="${id}"]`];
 			if (body.trim()) insert.push(body);
@@ -367,7 +414,8 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 			const source = document.subResources.find((entry) => entry.id === edit.id);
 			if (!source) continue;
 			replaceRange(lines, source.line, source.endLine, []);
-			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "") replaceRange(lines, source.line, source.line, []);
+			if (lines[source.line]?.trim() === "" && lines[source.line - 1]?.trim() === "")
+				replaceRange(lines, source.line, source.line, []);
 			current = dropReferences(lines.join(document.lineEnding), edit.id, "Sub");
 			continue;
 		}
@@ -375,7 +423,18 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 	}
 	// Resource additions/removals change the number of load steps too. Do not
 	// rewrite the header for ordinary property edits (or ignored commands).
-	if (current !== text && edits.some((edit) => ["addExtResource", "deleteExtResource", "addSubResource", "duplicateSubResource", "deleteSubResource"].includes(edit.kind))) {
+	if (
+		current !== text &&
+		edits.some((edit) =>
+			[
+				"addExtResource",
+				"deleteExtResource",
+				"addSubResource",
+				"duplicateSubResource",
+				"deleteSubResource",
+			].includes(edit.kind),
+		)
+	) {
 		const document = parseResourceDocument(current);
 		if (document.headerLine >= 0) {
 			const lines = current.split(/\r?\n/);

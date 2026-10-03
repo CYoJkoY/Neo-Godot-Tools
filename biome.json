@@ -18,6 +18,9 @@
 	},
 	"linter": {
 		"rules": {
+			"complexity": {
+				"useLiteralKeys": "off"
+			},
 			"style": {
 				"noUselessElse": "off",
 				"useImportType": "off",

@@ -37,6 +37,13 @@ interface TestElement {
 	appendChild(child: TestElement): TestElement;
 }
 
+/** Payloads the panel script posts back to the extension host. */
+interface WebviewMessage {
+	command: string;
+	target?: string;
+	name?: string;
+}
+
 interface WebviewSandbox {
 	listForm(raw: string): { name: string; body: string; wrapped: boolean };
 	parseList(raw: string): string[];
@@ -53,7 +60,7 @@ interface WebviewSandbox {
 	): TestElement;
 	render(model: unknown): void;
 	document: { body: TestElement; activeElement?: TestElement; getElementById(id: string): TestElement };
-	messages: Array<{ command: string; [key: string]: unknown }>;
+	messages: WebviewMessage[];
 }
 
 function loadWebview(): WebviewSandbox {
@@ -162,6 +169,13 @@ function loadWebview(): WebviewSandbox {
 	return sandbox as unknown as WebviewSandbox;
 }
 
+/** Invokes the listener the panel script registered for `type`. */
+function fire(element: TestElement, type: string, event?: unknown): void {
+	const listener = element.listeners[type];
+	assert.ok(listener, `expected a '${type}' listener`);
+	listener(event);
+}
+
 function descendants(root: TestElement, predicate: (el: TestElement) => boolean): TestElement[] {
 	return [root, ...root.children.flatMap((child) => descendants(child, predicate))].filter(predicate);
 }
@@ -182,7 +196,7 @@ describe("resource inspector webview", () => {
 			(...args) => edits.push(args),
 			() => {},
 		);
-		row.children[1].listeners?.change?.({ target: { value: "0.8" } });
+		fire(row.children[1], "change", { target: { value: "0.8" } });
 		assert.deepEqual(edits[0], ["roughness", "0.8", "StandardMaterial3D_1"]);
 	});
 
@@ -215,7 +229,7 @@ describe("resource inspector webview", () => {
 		assert.equal(fields[0].value, 'ExtResource("7_script")');
 		assert.equal(fields[0].children.length, 2, "only None and the compatible script");
 		fields[0].value = "null";
-		fields[0].listeners.change();
+		fire(fields[0], "change");
 		assert.deepEqual(edits[0], ["script", "null", undefined]);
 	});
 
@@ -236,7 +250,7 @@ describe("resource inspector webview", () => {
 		);
 		const picker = descendants(row, (el) => el.tagName === "select")[0];
 		assert.equal(picker.value, "ExtResource( 7 )");
-		picker.listeners.change();
+		fire(picker, "change");
 		assert.equal(edits[0][1], "ExtResource( 7 )");
 		const missing = webview.propertyRow(
 			{ ...property, raw: 'ExtResource("missing")' },
@@ -253,19 +267,19 @@ describe("resource inspector webview", () => {
 		const input = webview.numberInput("2", { min: 0, max: 1, step: 0.01 }, (value) => values.push(value));
 		assert.equal(input.value, "2", "rendering an out-of-range value must not edit the document");
 		input.value = "3.5";
-		input.listeners.change();
+		fire(input, "change");
 		input.value = "-0.1";
-		input.listeners.change();
+		fire(input, "change");
 		input.value = "0.254";
-		input.listeners.change();
+		fire(input, "change");
 		input.value = "";
-		input.listeners.change();
+		fire(input, "change");
 		assert.deepEqual(values, ["1", "0", "0.25"]);
 		assert.equal(input.value, "0.25", "invalid typing restores the last accepted value");
 		assert.equal(webview.normalizeNumericValue("Infinity", {}), undefined);
 		assert.equal(webview.normalizeNumericValue("9.7", { integer: true, min: 0, max: 10 }), 10);
 		const unbounded = webview.numberInput(0.5, {}, () => {});
-		assert.equal(unbounded.attributes.step, "any", "HTML's implicit step=1 must not reject fractions");
+		assert.equal(unbounded.getAttribute("step"), "any", "HTML's implicit step=1 must not reject fractions");
 		assert.equal(webview.normalizeNumericValue("2.5", { min: 0, max: 1, step: 0.1, allowGreater: true }), 2.5);
 		assert.equal(webview.normalizeNumericValue("-2", { min: 0, max: 1, allowLesser: true }), -2);
 	});
@@ -283,13 +297,13 @@ describe("resource inspector webview", () => {
 		assert.equal(inputs.length, 2);
 		const slider = inputs[1];
 		slider.value = "0.73";
-		slider.listeners.input();
+		fire(slider, "input");
 		assert.equal(inputs[0].value, "0.73");
 		assert.equal(edits.length, 0);
-		slider.listeners.change();
+		fire(slider, "change");
 		assert.deepEqual(edits[0], ["roughness", "0.73", undefined]);
 		inputs[0].value = "0.4";
-		inputs[0].listeners.change();
+		fire(inputs[0], "change");
 		assert.equal(slider.value, "0.4");
 		const hiddenSlider = webview.propertyRow(
 			{ name: "gain", raw: "0.5", widget: { kind: "number", min: 0, max: 1, hideSlider: true } },
@@ -313,7 +327,7 @@ describe("resource inspector webview", () => {
 		assert.equal(inputs[0].value, "0.001");
 		assert.equal(inputs[1].value, "-2.5");
 		inputs[0].value = "3.25";
-		inputs[0].listeners.change();
+		fire(inputs[0], "change");
 		assert.equal(edits[0][1], "Vector2(3.25, -2.5)");
 		const integerRow = webview.propertyRow(
 			{ name: "position", raw: "Vector2i(1, 2)", widget: { kind: "vector", components: 2, integer: true } },
@@ -323,7 +337,7 @@ describe("resource inspector webview", () => {
 		);
 		const integerInput = descendants(integerRow, (el) => el.tagName === "input")[0];
 		integerInput.value = "3.7";
-		integerInput.listeners.change();
+		fire(integerInput, "change");
 		assert.equal(edits[1][1], "Vector2i(4, 2)");
 	});
 
@@ -346,7 +360,7 @@ describe("resource inspector webview", () => {
 		assert.ok(row.className.includes("modified"));
 		const revert = row.children[2];
 		assert.equal(revert.title, "Remove override");
-		revert.listeners.click();
+		fire(revert, "click");
 		assert.deepEqual(reverts[0], ["custom", undefined, undefined]);
 		const defaultRow = webview.propertyRow(
 			{
@@ -439,7 +453,7 @@ describe("resource inspector webview", () => {
 		});
 		const filter = webview.document.getElementById("modified-filter");
 		filter.focus();
-		filter.listeners.click();
+		fire(filter, "click");
 		assert.equal(webview.document.activeElement, webview.document.getElementById("modified-filter"));
 	});
 
@@ -471,7 +485,7 @@ describe("resource inspector webview", () => {
 		);
 		const checkbox = descendants(flagRow, (el) => el.tagName === "input")[0];
 		checkbox.checked = true;
-		checkbox.listeners.change();
+		fire(checkbox, "change");
 		assert.equal(edits[0][1], "9", "keep unrecognized bit 8 when enabling bit 1");
 	});
 
@@ -493,21 +507,21 @@ describe("resource inspector webview", () => {
 		);
 		const thumbnail = descendants(row, (el) => el.className === "image-thumbnail")[0];
 		const image = thumbnail.children[0];
-		assert.equal(image.attributes.src, preview.uri);
-		row.children[1].listeners.mouseenter();
+		assert.equal(image.getAttribute("src"), preview.uri);
+		fire(row.children[1], "mouseenter");
 		const popup = webview.document.body.children[0];
 		assert.equal(popup.hidden, false);
-		assert.equal(popup.children[0].attributes.src, preview.uri);
+		assert.equal(popup.children[0].getAttribute("src"), preview.uri);
 		assert.equal(popup.children[1].textContent, preview.path);
-		row.children[1].listeners.mouseleave();
+		fire(row.children[1], "mouseleave");
 		assert.equal(popup.hidden, true);
-		thumbnail.listeners.focusin();
+		fire(thumbnail, "focusin");
 		assert.equal(popup.hidden, false);
-		thumbnail.listeners.click();
+		fire(thumbnail, "click");
 		assert.equal(webview.messages.at(-1)?.command, "openImage");
 		assert.equal(webview.messages.at(-1)?.target, "Custom_1");
 		assert.equal(webview.messages.at(-1)?.name, "image_path");
-		popup.children[0].listeners.error();
+		fire(popup.children[0], "error");
 		assert.equal(popup.children.at(-1)?.textContent, "Unable to load image preview.");
 	});
 

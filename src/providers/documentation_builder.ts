@@ -17,7 +17,7 @@ void csharp;
 marked.setOptions({
 	highlight: (code, lang) => {
 		if (lang === "gdscript") return Prism.highlight(code, GDScriptGrammar, lang);
-		if (lang === "csharp") return Prism.highlight(code, Prism.languages.csharp, lang);
+		if (lang === "csharp") return Prism.highlight(code, Prism.languages["csharp"], lang);
 		return code;
 	},
 });

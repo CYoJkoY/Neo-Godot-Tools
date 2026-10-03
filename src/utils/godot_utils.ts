@@ -8,10 +8,10 @@ import { LruCache } from "./lru_cache";
 export function get_editor_data_dir(): string {
 	// from: https://stackoverflow.com/a/26227660
 	const appdata =
-		process.env.APPDATA ||
+		process.env["APPDATA"] ||
 		(process.platform === "darwin"
-			? `${process.env.HOME}/Library/Preferences`
-			: `${process.env.HOME}/.local/share`);
+			? `${process.env["HOME"]}/Library/Preferences`
+			: `${process.env["HOME"]}/.local/share`);
 
 	return path.join(appdata, "Godot");
 }

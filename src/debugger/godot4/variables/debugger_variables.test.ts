@@ -222,7 +222,7 @@ suite("DAP Integration Tests - Variable Scopes", () => {
 		if (vscode.debug.breakpoints) {
 			await vscode.debug.removeBreakpoints(vscode.debug.breakpoints);
 		}
-		this.testStart = performance.now();
+		this["testStart"] = performance.now();
 	});
 
 	teardown(async function () {
@@ -234,7 +234,9 @@ suite("DAP Integration Tests - Variable Scopes", () => {
 			await sleep(1000);
 		}
 		console.log(
-			`⬛ Test '${this.currentTest?.title}' result: ${this.currentTest?.state}, duration: ${this.testStart ? performance.now() - this.testStart : 0}ms`,
+			`⬛ Test '${this.currentTest?.title}' result: ${this.currentTest?.state}, duration: ${
+				typeof this["testStart"] === "number" ? performance.now() - this["testStart"] : 0
+			}ms`,
 		);
 	});
 

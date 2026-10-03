@@ -58,7 +58,7 @@ const result = spawnSync(process.execPath, ["--require", STUB_REGISTER, "--test"
 	stdio: "inherit",
 	env: {
 		...process.env,
-		NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT: process.env.NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT || ROOT,
+		NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT: process.env["NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT"] || ROOT,
 	},
 });
 

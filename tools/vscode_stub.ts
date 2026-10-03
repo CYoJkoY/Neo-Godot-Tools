@@ -22,7 +22,7 @@ import * as path from "node:path";
  * root is two directories up; tests that need fixture paths can override it
  * with `NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT`.
  */
-const EXTENSION_ROOT = process.env.NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT || path.resolve(__dirname, "..", "..");
+const EXTENSION_ROOT = process.env["NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT"] || path.resolve(__dirname, "..", "..");
 
 interface UriComponents {
 	scheme?: string;

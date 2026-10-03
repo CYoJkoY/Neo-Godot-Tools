@@ -13,6 +13,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { LspClientLike } from "../lsp/types";
+
+/** A message posted by the resource inspector webview. */
+interface WebviewMessage {
+	command?: string;
+	uri?: string;
+	id?: string;
+	newId?: string;
+	name?: string;
+	value?: string;
+	target?: string;
+	metaType?: string;
+	subType?: string;
+}
 import { LruCache } from "../utils/lru_cache";
 import { withTimeout } from "../utils/scheduling.js";
 import { validateResourceDocument } from "./diagnostics.js";
@@ -296,7 +309,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		await this.refreshView();
 	}
 
-	private async onViewMessage(message: { command?: string; [key: string]: unknown }): Promise<void> {
+	private async onViewMessage(message: WebviewMessage): Promise<void> {
 		switch (message.command) {
 			case "ready":
 			case "reload":
@@ -494,11 +507,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	// -------------------------------------------------------------- messaging
 
-	private async onMessage(
-		uri: vscode.Uri,
-		message: { command?: string; [key: string]: unknown },
-		panel?: vscode.WebviewPanel,
-	): Promise<void> {
+	private async onMessage(uri: vscode.Uri, message: WebviewMessage, panel?: vscode.WebviewPanel): Promise<void> {
 		switch (message.command) {
 			case "ready":
 			case "reload":
@@ -544,13 +553,11 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				const name = String(message.name ?? "").trim();
 				if (!name) return;
 				const value = String(message.value ?? "");
-				await this.applyEdits(uri, [
-					{ kind: "setProperty", name, value, target: message.target as string | undefined },
-				]);
+				await this.applyEdits(uri, [{ kind: "setProperty", name, value, target: message.target }]);
 				return;
 			}
 			case "addProperty": {
-				const target = message.target as string | undefined;
+				const target = message.target;
 				const inputName = String(message.name ?? "").trim();
 				const name =
 					inputName ||
@@ -586,7 +593,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				// unknown defaults must remove the override instead of writing zero.
 				const document = await vscode.workspace.openTextDocument(uri);
 				const model = await this.buildModel(document);
-				const target = message.target as string | undefined;
+				const target = message.target;
 				const properties = target
 					? model.subResources.find((sub) => sub.id === target)?.properties
 					: model.properties;
@@ -658,7 +665,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				return;
 			}
 			case "pickResource": {
-				await this.pickResource(uri, String(message.name ?? ""), message.target as string | undefined);
+				await this.pickResource(uri, String(message.name ?? ""), message.target);
 				return;
 			}
 			case "createSubResource": {
@@ -666,7 +673,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 					uri,
 					String(message.name ?? ""),
 					String(message.subType ?? message.metaType ?? "Resource"),
-					message.target as string | undefined,
+					message.target,
 				);
 				return;
 			}

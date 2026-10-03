@@ -16,6 +16,7 @@
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 		"useUnknownInCatchVariables": true,
+		"noPropertyAccessFromIndexSignature": true,
 		"skipLibCheck": true,
 		"allowJs": false
 	},

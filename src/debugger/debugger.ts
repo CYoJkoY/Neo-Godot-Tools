@@ -50,6 +50,30 @@ export interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArgum
 	additional_options: string;
 }
 
+/**
+ * A `launch.json` entry as written by the user. Every Godot specific field is
+ * optional: the debugger fills in the defaults before the session starts.
+ */
+export interface GodotDebugConfiguration extends DebugConfiguration {
+	address?: string;
+	port?: number;
+	project?: string;
+	scene?: string;
+	editor_path?: string;
+	additional_options?: string;
+	profiling?: boolean;
+	single_threaded_scene?: boolean;
+	debug_collisions?: boolean;
+	debug_paths?: boolean;
+	debug_navigation?: boolean;
+	debug_avoidance?: boolean;
+	debug_stringnames?: boolean;
+	frame_delay?: number;
+	time_scale?: number;
+	disable_vsync?: boolean;
+	fixed_fps?: number;
+}
+
 export interface AttachRequestArguments extends DebugProtocol.AttachRequestArguments {
 	address: string;
 	port: number;
@@ -130,7 +154,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public resolveDebugConfiguration(
 		_folder: WorkspaceFolder | undefined,
-		config: DebugConfiguration,
+		config: GodotDebugConfiguration,
 		_token?: CancellationToken,
 	): ProviderResult<DebugConfiguration> {
 		// request is actually a required field according to vscode
@@ -156,7 +180,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 			return undefined;
 		}
 
-		if (config.address.includes("://")) {
+		if (config.address?.includes("://")) {
 			window.showErrorMessage("Can't launch debug session: 'address' cannot include a protocol.", "Ok");
 			return undefined;
 		}
@@ -166,7 +190,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public debug_current_file() {
 		log.info("Attempting to debug current file");
-		const configs: DebugConfiguration[] =
+		const configs: GodotDebugConfiguration[] =
 			workspace.getConfiguration("launch", window.activeTextEditor?.document.uri).get("configurations") || [];
 		const launches = configs.filter((c) => c.request === "launch");
 		const currents = configs.filter((c) => c.scene === "current");
@@ -199,7 +223,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public debug_pinned_file() {
 		log.info("Attempting to debug pinned scene");
-		const configs: DebugConfiguration[] =
+		const configs: GodotDebugConfiguration[] =
 			workspace.getConfiguration("launch", pinnedScene).get("configurations") || [];
 		const launches = configs.filter((c) => c.request === "launch");
 		const currents = configs.filter((c) => c.scene === "pinned");
