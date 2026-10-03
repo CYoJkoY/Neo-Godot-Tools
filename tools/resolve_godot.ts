@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 
 /**
  * Resolves the path to a fgvm-managed Godot executable for a given version.
@@ -10,7 +10,7 @@ import * as os from "node:os";
  * We probe both layouts so CI and local fgvm installations use the same resolver.
  */
 function get_fgvm_installations_dirs(): string[] {
-	const env = process.env.FGVM_HOME;
+	const env = process.env["FGVM_HOME"];
 	if (env) {
 		return [path.join(env, "installations"), path.join(env, "fgvm", "installations")];
 	}
@@ -47,10 +47,7 @@ function get_platform_pattern(): { dir: string; glob: string } {
 
 function matches_version(installation: string, version: string): boolean {
 	const normalizedVersion = version.replace(/^v/, "");
-	return (
-		installation.startsWith(`${normalizedVersion}-stable-`) ||
-		installation.startsWith(`${normalizedVersion}.`)
-	);
+	return installation.startsWith(`${normalizedVersion}-stable-`) || installation.startsWith(`${normalizedVersion}.`);
 }
 
 /**
@@ -74,16 +71,11 @@ export function resolve_godot_binary(version: string): string {
 		.map((entry) => entry.name);
 
 	if (candidates.length === 0) {
-		throw new Error(
-			`No fgvm installation found for version "${version}". ` +
-				`Run: fgvm install ${version}`,
-		);
+		throw new Error(`No fgvm installation found for version "${version}". ` + `Run: fgvm install ${version}`);
 	}
 
 	if (candidates.length > 1) {
-		throw new Error(
-			`Multiple installations found for version "${version}": ${candidates.join(", ")}`,
-		);
+		throw new Error(`Multiple installations found for version "${version}": ${candidates.join(", ")}`);
 	}
 
 	const installDir = path.join(installationsDir, candidates[0]);

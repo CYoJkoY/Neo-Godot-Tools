@@ -8,6 +8,7 @@
 		"outDir": "out",
 		"lib": ["es2022", "dom"],
 		"sourceMap": true,
+		"declaration": true,
 		"rootDir": "src",
 		"strict": true,
 		"noImplicitReturns": true,

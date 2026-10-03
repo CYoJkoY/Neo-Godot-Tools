@@ -78,15 +78,15 @@ embedded GDScript and webview JavaScript do not inflate the numbers.
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
 | `class` declarations | 139 | debugger, index, tools, providers |
-| `let` / `var` declarations | 405 | debugger, resource inspector, index, providers |
-| `for` loops | 321 | index, resource inspector, debugger |
+| `let` / `var` declarations | 403 | debugger, resource inspector, index, providers |
+| `for` loops | 318 | index, resource inspector, debugger |
 | `while` / `do` loops | 78 | protocol and settle-wait loops |
 | `} else` branches | 198 | debugger, resource inspector |
 | `throw` statements | 53 | parameter validation and protocol errors |
 | `as` assertions | 59 | narrowing the compiler cannot express |
 | `readonly` annotations | 158 | present, not yet uniform |
 
-Total tracked constructs: 1194 in 167 files; none needs a `// perf:` justification yet.
+Total tracked constructs: 1189 in 167 files; none needs a `// perf:` justification yet.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -118,9 +118,8 @@ Total tracked constructs: 1194 in 167 files; none needs a `// perf:` justificati
 3. **Index and query layers** (`src/index`), then providers and the resource inspector.
 4. **Debugger protocol modules** — functional cores, classes only for the sockets/sessions.
 5. **`noUncheckedIndexedAccess`** enabled last, when it reports zero errors.
-6. **Widen the lint and type-check surface to every tool script.** `npm run lint` lints `src`
-   (biome would also accept `tools`, where `tools/generate_icons.ts` still has 21 diagnostics), and
-   `tsconfig.test.json` type-checks four of the sixteen files in `tools`.
+6. **Keep the tool scripts inside the checked surface** (done 2026-10-04): `npm run lint` lints `src`
+   and `tools`, and `tsconfig.test.json` type-checks every file under `tools`.
 
 ## 7. Verification
 
@@ -128,7 +127,7 @@ Total tracked constructs: 1194 in 167 files; none needs a `// perf:` justificati
 npx tsc -p tsconfig.json --noEmit        # product sources
 npx tsc -p tsconfig.test.json --noEmit   # tests and tools
 npm run test:unit                        # 256 unit tests
-npm run lint                             # biome, 0 errors required
+npm run lint                             # biome over src and tools, 0 errors required
 npm run compile                          # extension build
 npm run check:standards                  # coding standard ratchet (CI)
 ```

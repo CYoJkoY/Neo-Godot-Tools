@@ -16,7 +16,7 @@
   "scripts": {
     "format": "biome format --write --changed src",
     "compile": "tsc -p ./",
-    "lint": "biome lint src",
+    "lint": "biome lint src tools",
     "check:standards": "ts-node tools/check_standards.ts",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",

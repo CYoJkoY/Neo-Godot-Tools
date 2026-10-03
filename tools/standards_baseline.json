@@ -1708,8 +1708,8 @@
 		"counts": {
 			"class": 0,
 			"else": 0,
-			"for": 3,
-			"let": 2,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
 			"while": 0
 		},

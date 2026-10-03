@@ -1,17 +1,26 @@
-import { join, extname } from "path";
-import * as fs from "fs";
-import util from "node:util";
-import * as child_process from "node:child_process";
-const _exec = util.promisify(child_process.exec);
+/**
+ * Regenerates the themed Godot icons under `resources/godot_icons`.
+ *
+ * Godot 3 and Godot 4 ship different icon sets, so the script needs a local
+ * Godot source checkout: it reads the `GDREGISTER_CLASS` / `register_class<>`
+ * registrations of both branches, recolours the matching SVGs and writes the
+ * light and dark variants the extension bundles.
+ *
+ * Usage: `npm run generate-icons -- /path/to/godot`.
+ */
+import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import { extname, join } from "node:path";
 
-const dark_colors = {
+const DARK_COLORS: Readonly<Record<string, string>> = {
 	"#fc7f7f": "#fc9c9c",
 	"#8da5f3": "#a5b7f3",
 	"#e0e0e0": "#e0e0e0",
 	"#c38ef1": "#cea4f1",
 	"#8eef97": "#a5efac",
 };
-const light_colors = {
+
+const LIGHT_COLORS: Readonly<Record<string, string>> = {
 	"#fc7f7f": "#ff5f5f",
 	"#8da5f3": "#6d90ff",
 	"#e0e0e0": "#4f4f4f",
@@ -19,248 +28,179 @@ const light_colors = {
 	"#8eef97": "#29d739",
 };
 
-function replace_colors(colors: object, data: string) {
-	for (const [from, to] of Object.entries(colors)) {
-		data = data.replace(from, to);
-	}
-	return data;
-}
+const ICONS_PATH = "editor/icons";
+const MODULES_PATH = "modules";
+const OUTPUT_PATH = "resources/godot_icons";
+const GODOT_3_CHECKOUT = "3.x";
+const GODOT_4_CHECKOUT = "master";
 
-const iconsPath = "editor/icons";
-const modulesPath = "modules";
-const outputPath = "resources/godot_icons";
-const godotPath = process.argv[2];
+const godot_path = process.argv[2];
 
-async function exec(command) {
-	const { stdout, stderr } = await _exec(command);
-	return stdout;
-}
+/** Runs a git subcommand and resolves with its stdout. */
+const git = (args: readonly string[]): Promise<string> =>
+	new Promise((resolve, reject) => {
+		execFile("git", args, { encoding: "utf8" }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
+	});
 
-const git = {
-	diff: "git diff HEAD",
-	check_branch: "git rev-parse --abbrev-ref HEAD",
-	reset: "git reset --hard",
-	stash_push: "git stash push",
-	stash_pop: "git stash pop",
-	checkout: "git checkout ",
-	checkout_4: "git checkout master",
-	checkout_3: "git checkout 3.x",
+const replace_colors = (colors: Readonly<Record<string, string>>, data: string): string =>
+	Object.entries(colors).reduce((text, [from, to]) => text.replace(from, to), data);
+
+/** `script_create` becomes `ScriptCreate`, matching Godot's icon names. */
+const to_title_case = (name: string): string =>
+	name
+		.split("_")
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+		.join("");
+
+const BASE_ICONS: readonly string[] = [
+	"ArrowDown.svg",
+	"ArrowLeft.svg",
+	"ArrowRight.svg",
+	"ArrowUp.svg",
+	"GuiVisibilityHidden.svg",
+	"GuiVisibilityVisible.svg",
+	"GuiVisibilityXray.svg",
+	"Edit.svg",
+	"Help.svg",
+	"HelpSearch.svg",
+	"ImportCheck.svg",
+	"ImportFail.svg",
+	"Info.svg",
+	"Play.svg",
+	"PlayBackwards.svg",
+	"PlayCustom.svg",
+	"PlayRemote.svg",
+	"PlayScene.svg",
+	"PlayStart.svg",
+	"Progress1.svg",
+	"Progress2.svg",
+	"Progress3.svg",
+	"Progress4.svg",
+	"Progress5.svg",
+	"Progress6.svg",
+	"Progress7.svg",
+	"Progress8.svg",
+	"Progress9.svg",
+	"Reload.svg",
+	"ReloadSmall.svg",
+	"Script.svg",
+	"ScriptCreate.svg",
+	"ScriptRemove.svg",
+	"Search.svg",
+	"Signals.svg",
+	"SignalsAndGroups.svg",
+	"Slot.svg",
+	"Stop.svg",
+	"Lock.svg",
+	"Unlock.svg",
+	"Zoom.svg",
+	"ZoomLess.svg",
+	"ZoomMore.svg",
+	"ZoomReset.svg",
+];
+
+const CLASS_PATTERNS: readonly RegExp[] = [/GDREGISTER_CLASS\((\w*)\)/, /register_class<(\w*)>/];
+
+const get_class_list = (modules: readonly string[]): readonly string[] => {
+	const files = ["scene/register_scene_types.cpp", ...modules.map((module) => join(module, "register_types.cpp"))];
+	const registered = files.flatMap((file) =>
+		fs
+			.readFileSync(file, "utf8")
+			.split("\n")
+			.flatMap((line) =>
+				CLASS_PATTERNS.flatMap((pattern) => {
+					const match = line.match(pattern);
+					return match ? [`${match[1]}.svg`] : [];
+				}),
+			),
+	);
+	return [...BASE_ICONS, ...registered];
 };
 
-function to_title_case(str) {
-	return str.replace(
-		/\w\S*/g,
-		function (txt) {
-			return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
-		}
-	);
-}
-
-function get_class_list(modules) {
-	const classes: string[] = [
-		"ArrowDown.svg",
-		"ArrowLeft.svg",
-		"ArrowRight.svg",
-		"ArrowUp.svg",
-		"GuiVisibilityHidden.svg",
-		"GuiVisibilityVisible.svg",
-		"GuiVisibilityXray.svg",
-		"Edit.svg",
-		"Help.svg",
-		"HelpSearch.svg",
-		"ImportCheck.svg",
-		"ImportFail.svg",
-		"Info.svg",
-		"Play.svg",
-		"PlayBackwards.svg",
-		"PlayCustom.svg",
-		"PlayRemote.svg",
-		"PlayScene.svg",
-		"PlayStart.svg",
-		"Progress1.svg",
-		"Progress2.svg",
-		"Progress3.svg",
-		"Progress4.svg",
-		"Progress5.svg",
-		"Progress6.svg",
-		"Progress7.svg",
-		"Progress8.svg",
-		"Progress9.svg",
-		"Reload.svg",
-		"ReloadSmall.svg",
-		"Script.svg",
-		"ScriptCreate.svg",
-		"ScriptRemove.svg",
-		"Search.svg",
-		"Signals.svg",
-		"SignalsAndGroups.svg",
-		"Slot.svg",
-		"Stop.svg",
-		"Lock.svg",
-		"Unlock.svg",
-		"Zoom.svg",
-		"ZoomLess.svg",
-		"ZoomMore.svg",
-		"ZoomReset.svg",
-	];
-
-	const files = ["scene/register_scene_types.cpp"];
-	modules.forEach(mod => {
-		files.push(join(mod, "register_types.cpp"));
+/** Modules whose directory contains an `icons` subdirectory. */
+const discover_modules = (): readonly string[] =>
+	fs.readdirSync(MODULES_PATH, { withFileTypes: true }).flatMap((entry) => {
+		if (!entry.isDirectory()) return [];
+		const module = join(MODULES_PATH, entry.name);
+		const has_icons = fs
+			.readdirSync(module, { withFileTypes: true })
+			.some((child) => child.isDirectory() && child.name === "icons");
+		return has_icons ? [module] : [];
 	});
-
-	const patterns = [
-		/GDREGISTER_CLASS\((\w*)\)/,
-		/register_class<(\w*)>/,
-	];
-
-	files.forEach(fileName => {
-		const file = fs.readFileSync(fileName, "utf8");
-		file.split("\n").forEach(line => {
-			patterns.forEach(pattern => {
-				const match = line.match(pattern);
-				if (match) {
-					classes.push(match[1] + ".svg");
-				}
-			});
-		});
-	});
-
-
-	return classes;
-}
-
-function discover_modules() {
-	const modules: string[] = [];
-
-	// a valid module is a subdir of modulesPath, and contains a subdir 'icons'
-	fs.readdirSync(modulesPath, { withFileTypes: true }).forEach(mod => {
-		if (mod.isDirectory()) {
-			fs.readdirSync(join(modulesPath, mod.name), { withFileTypes: true }).forEach(child => {
-				if (child.isDirectory() && child.name == "icons") {
-					modules.push(join(modulesPath, mod.name));
-				}
-			});
-		}
-	});
-	return modules;
-}
 
 interface IconData {
-	name: string;
-	contents: string;
+	readonly name: string;
+	readonly contents: string;
 }
 
+const icon_name = (file: string): string => (file.startsWith("icon_") ? to_title_case(file.replace("icon_", "")) : file);
 
-function get_icons(): IconData[] {
+const get_icons = (): readonly IconData[] => {
 	const modules = discover_modules();
 	const classes = get_class_list(modules);
+	return [ICONS_PATH, ...modules.map((module) => join(module, "icons"))].flatMap((searchPath) =>
+		fs
+			.readdirSync(searchPath)
+			.filter((file) => extname(file) === ".svg")
+			.map((file) => ({ path: join(searchPath, file), name: icon_name(file) }))
+			.filter((icon) => classes.includes(icon.name))
+			.map((icon) => ({ name: icon.name, contents: fs.readFileSync(icon.path, "utf8") })),
+	);
+};
 
-	const searchPaths = [iconsPath];
-	modules.forEach(mod => {
-		searchPaths.push(join(mod, "icons"));
-	});
+const ensure_paths = (): void => {
+	[OUTPUT_PATH, join(OUTPUT_PATH, "light"), join(OUTPUT_PATH, "dark")].map((directory) =>
+		fs.mkdirSync(directory, { recursive: true }),
+	);
+};
 
-	const icons: IconData[] = [];
-	searchPaths.forEach(searchPath => {
-		fs.readdirSync(searchPath).forEach(file => {
-			if (extname(file) === ".svg") {
-				let name = file;
-				if (name.startsWith("icon_")) {
-					name = name.replace("icon_", "");
-					let parts = name.split("_");
-					parts = parts.map(to_title_case);
-					name = parts.join("");
-				}
-				if (!classes.includes(name)) {
-					return;
-				}
-				const f = {
-					name: name,
-					contents: fs.readFileSync(join(searchPath, file), "utf8")
-				};
-				icons.push(f);
-			}
-		});
-	});
+const themed_icons = (files: readonly IconData[], colors: Readonly<Record<string, string>>): Record<string, string> =>
+	Object.fromEntries(files.map((file) => [file.name, replace_colors(colors, file.contents)]));
 
-	return icons;
-}
+const write_icons = (theme: string, icons: Readonly<Record<string, string>>): void => {
+	Object.entries(icons).map(([file, contents]) => fs.writeFileSync(join(OUTPUT_PATH, theme, file), contents));
+};
 
-function ensure_paths() {
-	const paths = [
-		outputPath,
-		join(outputPath, "light"),
-		join(outputPath, "dark"),
-	];
-
-	paths.forEach(path => {
-		if (!fs.existsSync(path)) {
-			fs.mkdirSync(path);
-		}
-	});
-}
-
-async function run() {
-	if (godotPath == undefined) {
+const run = async (): Promise<void> => {
+	if (godot_path === undefined) {
 		console.log("Please provide the absolute path to your godot repo");
 		return;
 	}
 
 	const original_cwd = process.cwd();
+	process.chdir(godot_path);
 
-	process.chdir(godotPath);
-
-	const diff = (await exec(git.diff)).trim();
+	const diff = (await git(["diff", "HEAD"])).trim();
 	if (diff) {
 		console.log("There appear to be uncommitted changes in your godot repo");
 		console.log("Revert or stash these changes and try again");
 		return;
 	}
 
-	const branch = (await exec(git.check_branch)).trim();
+	const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
 
 	console.log("Gathering Godot 3 icons...");
-	await exec(git.checkout_3);
-	const g3 = get_icons();
+	await git(["checkout", GODOT_3_CHECKOUT]);
+	const godot_3 = get_icons();
 
 	console.log("Gathering Godot 4 icons...");
-	await exec(git.checkout_4);
-	const g4 = get_icons();
+	await git(["checkout", GODOT_4_CHECKOUT]);
+	const godot_4 = get_icons();
 
-	await exec(git.checkout + branch);
-
+	await git(["checkout", branch]);
 	process.chdir(original_cwd);
 
-	console.log(`Found ${g3.length + g4.length} icons...`);
-
-	const light_icons: Map<string, string> = new Map();
-	const dark_icons: Map<string, string> = new Map();
-
+	console.log(`Found ${godot_3.length + godot_4.length} icons...`);
 	console.log("Generating themed icons...");
-	g3.forEach(file => {
-		light_icons[file.name] = replace_colors(light_colors, file.contents);
-	});
-	g4.forEach(file => {
-		light_icons[file.name] = replace_colors(light_colors, file.contents);
-	});
-	g3.forEach(file => {
-		dark_icons[file.name] = replace_colors(dark_colors, file.contents);
-	});
-	g4.forEach(file => {
-		dark_icons[file.name] = replace_colors(dark_colors, file.contents);
-	});
+	const light_icons = { ...themed_icons(godot_3, LIGHT_COLORS), ...themed_icons(godot_4, LIGHT_COLORS) };
+	const dark_icons = { ...themed_icons(godot_3, DARK_COLORS), ...themed_icons(godot_4, DARK_COLORS) };
 
 	console.log("Ensuring output directory...");
 	ensure_paths();
 
 	console.log("Writing icons to output directory...");
-	for (const [file, contents] of Object.entries(light_icons)) {
-		fs.writeFileSync(join(outputPath, "light", file), contents);
-	}
-	for (const [file, contents] of Object.entries(dark_icons)) {
-		fs.writeFileSync(join(outputPath, "dark", file), contents);
-	}
-}
+	write_icons("light", light_icons);
+	write_icons("dark", dark_icons);
+};
 
-run();
+void run();
