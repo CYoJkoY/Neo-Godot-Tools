@@ -32,11 +32,12 @@ function cached_script_type(scriptPath: string, resolve: () => string | undefine
 }
 
 /**
- * A section header at the start of a line: `[node ...]`, `[sub_resource ...]`,
- * `[ext_resource ...]`. Anchoring to the line keeps bracket text inside values
- * (dictionary keys, strings) out of the section list.
+ * A section header at the start of a line: `[gd_scene ...]`, `[node ...]`,
+ * `[sub_resource ...]`, `[connection ...]`. Anchoring to the line keeps bracket
+ * text inside values (dictionary keys, strings) out of the section list, and
+ * matching every section lets a node body end where the next one begins.
  */
-const SECTION_PATTERN = /^\[(ext_resource|sub_resource|node)\b[^\n]*/gm;
+const SECTION_PATTERN = /^\[([A-Za-z_]\w*)\b[^\n]*/gm;
 
 function section_attributes(line: string) {
 	return {
@@ -210,7 +211,21 @@ export class SceneParser {
 				continue;
 			}
 
-			// node
+			// Any other section (node, connection, editable, gd_scene) ends the
+			// bodies that were open before it, so a node's body and properties
+			// never run into the connection list that follows the last node.
+			if (lastNode) {
+				lastNode.bodyEnd = index;
+				lastNode.body = text.slice(lastNode.position, index);
+				lastNode.parse_body();
+				lastNode = undefined;
+			}
+			if (lastResource) {
+				lastResource.body = text.slice(lastResource.index, index).trimEnd();
+				lastResource = undefined;
+			}
+			if (kind !== "node") continue;
+
 			const name = line.match(/name="([^"]+)"/)?.[1] || "unknown";
 			const explicitType = line.match(/type="([^"]+)"/)?.[1] ?? "";
 			const instance = line.match(/instance=ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];
@@ -230,16 +245,6 @@ export class SceneParser {
 				relativePath = `${parent}/${name}`;
 				parent = `${root}/${parent}`;
 				nodePath = `${parent}/${name}`;
-			}
-
-			if (lastNode) {
-				lastNode.bodyEnd = index;
-				lastNode.body = text.slice(lastNode.position, index);
-				lastNode.parse_body();
-			}
-			if (lastResource) {
-				lastResource.body = text.slice(lastResource.index, index).trimEnd();
-				lastResource = undefined;
 			}
 
 			const parentNode = parent ? nodes[parent] : undefined;
