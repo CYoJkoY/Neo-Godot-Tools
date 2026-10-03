@@ -1,8 +1,9 @@
-import * as vscode from "vscode";
-import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { execFileSync } from "node:child_process";
+import * as path from "node:path";
+import * as vscode from "vscode";
+import { LruCache } from "./lru_cache";
 
 export function get_editor_data_dir(): string {
 	// from: https://stackoverflow.com/a/26227660
@@ -145,7 +146,7 @@ export async function convert_uri_to_resource_path(uri: vscode.Uri): Promise<str
 	return `res://${relative_path}`;
 }
 
-const uidCache: Map<string, vscode.Uri | null> = new Map();
+const uidCache = new LruCache<string, vscode.Uri | null>({ capacity: 256 });
 
 export async function convert_uids_to_uris(uids: string[]): Promise<Map<string, vscode.Uri>> {
 	const not_found_uids: string[] = [];

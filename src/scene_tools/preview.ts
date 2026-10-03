@@ -25,22 +25,24 @@ import {
 	register_command,
 	set_context,
 } from "../utils";
-import { SceneParser } from "./parser";
-import { SceneNode, ScenePropertiesGroup, ScenePropertyItem, type Scene } from "./types";
 import { apply_custom_class_icons, invalidateNodeIconCaches } from "./node_icons";
+import { SceneParser } from "./parser";
+import { findProperty } from "./properties";
 import {
+	NodePropertyMetadata,
 	addableProperties,
 	applyScenePropertyWrite,
-	NodePropertyMetadata,
 	promptPropertyValue,
 } from "./property_editor";
-import { findProperty } from "./properties";
+import { type Scene, SceneNode, ScenePropertiesGroup, ScenePropertyItem } from "./types";
 
 export type SceneTreeElement = SceneNode | ScenePropertiesGroup | ScenePropertyItem;
 
 const log = createLogger("scenes.preview");
 
-export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>, TreeDragAndDropController<SceneNode> {
+export class ScenePreviewProvider
+	implements TreeDataProvider<SceneTreeElement>, TreeDragAndDropController<SceneNode>, vscode.Disposable
+{
 	public dropMimeTypes = [];
 	public dragMimeTypes = [];
 	private tree: TreeView<SceneTreeElement>;
@@ -63,7 +65,10 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 
 	private readonly nodeProperties: NodePropertyMetadata;
 
-	constructor(private context: ExtensionContext, options: { lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined } = {}) {
+	constructor(
+		private context: ExtensionContext,
+		options: { lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined } = {},
+	) {
 		this.tree = vscode.window.createTreeView("neoGodotTools.scenePreview", {
 			treeDataProvider: this,
 			dragAndDropController: this,
@@ -98,9 +103,9 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 			this.scriptWatcher,
 			this.tree.onDidChangeSelection(this.tree_selection_changed),
 			this.tree,
+			{ dispose: () => this.dispose() },
 		);
-		const result: string | undefined =
-			this.context.workspaceState.get("neoGodotTools.scenePreview.lockedScene");
+		const result: string | undefined = this.context.workspaceState.get("neoGodotTools.scenePreview.lockedScene");
 		if (result) {
 			if (fs.existsSync(result)) {
 				set_context("scenePreview.locked", true);
@@ -116,13 +121,25 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 		}
 	}
 
+	/**
+	 * Stops the debounced scene watcher.
+	 *
+	 * The timers keep the provider (and the extension host) busy after the user
+	 * deactivated the extension or closed the window; a pending refresh would
+	 * also try to parse a scene while VS Code is shutting down.
+	 */
+	dispose(): void {
+		for (const timer of this.pendingSceneChanges.values()) clearTimeout(timer);
+		this.pendingSceneChanges.clear();
+		this.nodeProperties.clear();
+	}
+
 	public handleDrag(
 		source: readonly SceneNode[],
 		data: vscode.DataTransfer,
 		token: vscode.CancellationToken,
 	): void | Thenable<void> {
-		if (source.length === 0)
-			return;
+		if (source.length === 0) return;
 		data.set("godot/scene", new vscode.DataTransferItem(this.currentScene));
 		data.set("godot/node", new vscode.DataTransferItem(source[0]));
 		data.set("godot/path", new vscode.DataTransferItem(source[0].path));
@@ -357,9 +374,7 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 
 		if (resourcePath.startsWith("user://")) return undefined;
 
-		const filePath = isAbsolute(resourcePath)
-			? resourcePath
-			: resolve(dirname(scenePath), resourcePath);
+		const filePath = isAbsolute(resourcePath) ? resourcePath : resolve(dirname(scenePath), resourcePath);
 		return fs.existsSync(filePath) ? vscode.Uri.file(filePath) : undefined;
 	}
 
@@ -404,9 +419,10 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 
 	private tree_selection_changed(event: vscode.TreeViewSelectionChangeEvent<SceneTreeElement>) {
 		const item = event.selection.length === 1 ? event.selection[0] : undefined;
-		this.tree.message = item instanceof ScenePropertyItem
-			? `${item.node.path}  ${item.property.name} = ${item.property.raw}`
-			: this.scene?.title ?? "";
+		this.tree.message =
+			item instanceof ScenePropertyItem
+				? `${item.node.path}  ${item.property.name} = ${item.property.raw}`
+				: (this.scene?.title ?? "");
 
 		// The selected node reveals its properties inline, like the inspector of
 		// the editor it mirrors. Only the two affected nodes change, so the
@@ -427,9 +443,7 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 		if (!element) return [this.scene.root];
 
 		const parentPath = element.path;
-		return [...this.scene.nodes.values()].filter(
-			(node) => node !== this.scene?.root && node.parent === parentPath,
-		);
+		return [...this.scene.nodes.values()].filter((node) => node !== this.scene?.root && node.parent === parentPath);
 	}
 
 	public async getChildren(element?: SceneTreeElement): Promise<SceneTreeElement[]> {
@@ -438,7 +452,10 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 		}
 		if (element instanceof ScenePropertyItem) return [];
 		if (!element) return this.get_scene_children();
-		return [...this.get_scene_children(element), ...(this.shows_properties(element) ? [new ScenePropertiesGroup(element)] : [])];
+		return [
+			...this.get_scene_children(element),
+			...(this.shows_properties(element) ? [new ScenePropertiesGroup(element)] : []),
+		];
 	}
 
 	/** Nodes with overrides (and the selected node) expose an editable properties group. */
@@ -448,9 +465,10 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 
 	public getTreeItem(element: SceneTreeElement): TreeItem | Thenable<TreeItem> {
 		if (element instanceof ScenePropertyItem || element instanceof ScenePropertiesGroup) {
-			element.id = element instanceof ScenePropertyItem
-				? `property:${element.node.path}:${element.property.name}`
-				: `properties:${element.node.path}`;
+			element.id =
+				element instanceof ScenePropertyItem
+					? `property:${element.node.path}:${element.property.name}`
+					: `properties:${element.node.path}`;
 			return element;
 		}
 
@@ -486,7 +504,9 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 	 * offsets are absolute character positions: using them on newer text would
 	 * corrupt the file, so the scene is re-parsed whenever the text moved.
 	 */
-	private async editable_node(nodePath: string): Promise<{ document: vscode.TextDocument; scene: Scene; node: SceneNode } | undefined> {
+	private async editable_node(
+		nodePath: string,
+	): Promise<{ document: vscode.TextDocument; scene: Scene; node: SceneNode } | undefined> {
 		const document = await this.scene_document();
 		if (!document) return undefined;
 		let scene = this.scene;
@@ -522,7 +542,12 @@ export class ScenePreviewProvider implements TreeDataProvider<SceneTreeElement>,
 				detail: property.source === "script" ? "script @export" : property.source,
 				property,
 			})),
-			{ label: "$(edit) Custom property...", description: "", detail: "Type a property name", property: undefined },
+			{
+				label: "$(edit) Custom property...",
+				description: "",
+				detail: "Type a property name",
+				property: undefined,
+			},
 		];
 		const picked = await vscode.window.showQuickPick(picks, { title: `Add property to ${item.node.path}` });
 		if (!picked) return;

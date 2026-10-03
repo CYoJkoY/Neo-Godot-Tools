@@ -19,6 +19,7 @@ import {
 } from "../resource_inspector/metadata.js";
 import { parseVariant } from "../resource_inspector/values.js";
 import { convert_resource_path_to_uri, createLogger } from "../utils/index.js";
+import { LruCache } from "../utils/lru_cache.js";
 import { withTimeout } from "../utils/scheduling.js";
 import { findProperty, planPropertyWrite } from "./properties.js";
 import type { Scene, SceneNode } from "./types.js";
@@ -38,7 +39,7 @@ export interface NodePropertyOptions {
  * arbitrarily many classes over a session.
  */
 export class NodePropertyMetadata {
-	private readonly nativeCache = new Map<string, Promise<PropertyMetadata[]>>();
+	private readonly nativeCache = new LruCache<string, Promise<PropertyMetadata[]>>({ capacity: 64 });
 
 	constructor(private readonly options: NodePropertyOptions = {}) {}
 
@@ -147,10 +148,6 @@ export class NodePropertyMetadata {
 			}
 		})();
 		this.nativeCache.set(className, request);
-		if (this.nativeCache.size > 64) {
-			const oldest = this.nativeCache.keys().next();
-			if (!oldest.done) this.nativeCache.delete(oldest.value);
-		}
 		return request;
 	}
 

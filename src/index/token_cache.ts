@@ -1,4 +1,5 @@
 import { GDScriptToken, lexGDScript } from "../analyzer/index.js";
+import { LruCache } from "../utils/lru_cache.js";
 
 /**
  * Lexed tokens of an indexed file, shared by every consumer that needs them.
@@ -16,25 +17,13 @@ interface CachedTokens {
 }
 
 /** Files kept in memory; bounded so long sessions cannot grow without limit. */
-const MAX_CACHED_FILES = 256;
-
-const cache = new Map<string, CachedTokens>();
+const cache = new LruCache<string, CachedTokens>({ capacity: 256 });
 
 export function tokensFor(uri: string, source: string, fingerprint: string): GDScriptToken[] {
 	const cached = cache.get(uri);
-	if (cached && cached.fingerprint === fingerprint) {
-		// Re-insert to keep the map ordered by recency for eviction.
-		cache.delete(uri);
-		cache.set(uri, cached);
-		return cached.tokens;
-	}
+	if (cached && cached.fingerprint === fingerprint) return cached.tokens;
 	const tokens = lexGDScript(source);
 	cache.set(uri, { fingerprint, tokens });
-	while (cache.size > MAX_CACHED_FILES) {
-		const oldest = cache.keys().next();
-		if (oldest.done) break;
-		cache.delete(oldest.value);
-	}
 	return tokens;
 }
 
