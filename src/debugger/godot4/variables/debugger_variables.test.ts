@@ -142,7 +142,6 @@ async function getVariablesForScope(scope: VariableScope, stack_frame_id = 0): P
 }
 
 declare global {
-	// eslint-disable-next-line @typescript-eslint/no-namespace
 	namespace Chai {
 		interface Assertion {
 			unique: Assertion;

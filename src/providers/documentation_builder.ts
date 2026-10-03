@@ -473,12 +473,12 @@ function format_documentation(bbcode: string | undefined, classname: string | un
 	// [<reference>]
 	html = html.replaceAll(
 		/\[(\w+)\]/g,
-		`<a href="" onclick="inspect('$1')">$1</a>`, // eslint-disable-line quotes
+		`<a href="" onclick="inspect('$1')">$1</a>`
 	);
 	// [method <class>.<name>]
 	html = html.replaceAll(
 		/\[\w+\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\.(\w+)\]/g,
-		`<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`, // eslint-disable-line quotes
+		`<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`
 	);
 
 	return html;
