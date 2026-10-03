@@ -16,29 +16,32 @@ import { resolveBuiltinSymbol, type ResolvedBuiltinSymbol } from "../language/se
 import type { NativeSymbolInspectParams } from "./documentation_types";
 import { doc_symbol_anchor } from "../utils/doc_anchor";
 
-
 const BUILTIN_DOCUMENTATION_CLASSES = ["@GDScript", "@GlobalScope"] as const;
 
 function normalizeNativeSymbolName(value: string): string {
-    let normalized = value.trim();
-    normalized = normalized.replace(/\s*->\s*.*$/, "").trim();
-    normalized = normalized.replace(/^func\s+/, "").trim();
-    normalized = normalized.replace(/\s*\([^)]*\)\s*$/, "").trim();
+	let normalized = value.trim();
+	normalized = normalized.replace(/\s*->\s*.*$/, "").trim();
+	normalized = normalized.replace(/^func\s+/, "").trim();
+	normalized = normalized.replace(/\s*\([^)]*\)\s*$/, "").trim();
 
-    const typeMatch = normalized.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(.*)/);
-    if (typeMatch && typeMatch[1] !== "operator") {
-        normalized = typeMatch[2].trim();
-    }
+	const typeMatch = normalized.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(.*)/);
+	if (typeMatch && typeMatch[1] !== "operator") {
+		normalized = typeMatch[2].trim();
+	}
 
-    if (normalized.startsWith(".")) {
-        normalized = normalized.slice(1);
-    }
-    
-    return normalized;
+	if (normalized.startsWith(".")) {
+		normalized = normalized.slice(1);
+	}
+
+	return normalized;
 }
 
 function splitNativeSymbolTarget(value: string): { className?: string; symbolName: string } {
-	const normalized = value.trim().replace(/^func\s+/, "").replace(/\s*->\s*.*$/, "").trim();
+	const normalized = value
+		.trim()
+		.replace(/^func\s+/, "")
+		.replace(/\s*->\s*.*$/, "")
+		.trim();
 	const callable = normalized.match(/^([A-Za-z_][A-Za-z0-9_.]*)\s*\(/);
 	const qualified = callable?.[1] ?? normalized.split(/\s*\(/, 1)[0];
 	const separator = qualified.lastIndexOf(".");
@@ -59,7 +62,10 @@ function hasMemberReceiver(document: TextDocument, range: vscode.Range): boolean
 	return /[A-Za-z_]\w*\.\s*$/.test(before) || /\.\s*$/.test(before);
 }
 
-function memberReceiver(document: TextDocument, range: vscode.Range | undefined): { name: string; range: vscode.Range } | undefined {
+function memberReceiver(
+	document: TextDocument,
+	range: vscode.Range | undefined,
+): { name: string; range: vscode.Range } | undefined {
 	if (!range) return undefined;
 	const before = document.getText().slice(0, document.offsetAt(range.start));
 	const match = before.match(/([A-Za-z_]\w*)\.\s*$/);
@@ -73,7 +79,10 @@ function memberReceiver(document: TextDocument, range: vscode.Range | undefined)
 }
 
 export class GDDefinitionProvider implements DefinitionProvider {
-	constructor(context: ExtensionContext, private readonly languageService: LanguageService) {
+	constructor(
+		context: ExtensionContext,
+		private readonly languageService: LanguageService,
+	) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },
@@ -82,12 +91,17 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		context.subscriptions.push(vscode.languages.registerDefinitionProvider(selector, this));
 	}
 
-	async provideDefinition(document: TextDocument, position: Position, token: CancellationToken): Promise<Definition | undefined> {
+	async provideDefinition(
+		document: TextDocument,
+		position: Position,
+		token: CancellationToken,
+	): Promise<Definition | undefined> {
 		if (["gdresource", "gdscene"].includes(document.languageId)) {
 			const range = document.getWordRangeAtPosition(position, /(\w+)/);
 			if (range) {
 				const word = document.getText(range);
-				if (globals.docsProvider?.classInfo.has(word)) return new Location(make_docs_uri(word), new Position(0, 0));
+				if (globals.docsProvider?.classInfo.has(word))
+					return new Location(make_docs_uri(word), new Position(0, 0));
 
 				let i = 0;
 				let line: TextLine;
@@ -157,7 +171,11 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		if (globals.docsProvider.classInfo.has(receiver.name)) {
 			className = receiver.name;
 		} else {
-			const type = this.languageService.types.resolveReceiver(document.uri.toString(), document.offsetAt(receiver.range.start), receiver.name);
+			const type = this.languageService.types.resolveReceiver(
+				document.uri.toString(),
+				document.offsetAt(receiver.range.start),
+				receiver.name,
+			);
 			if (type?.builtin && globals.docsProvider.classInfo.has(type.name)) className = type.name;
 		}
 
@@ -208,7 +226,11 @@ export class GDDefinitionProvider implements DefinitionProvider {
 			if (globals.docsProvider?.classInfo.has(receiver.name)) {
 				receiverClass = receiver.name;
 			} else {
-				const type = this.languageService.types.resolveReceiver(document.uri.toString(), document.offsetAt(receiver.range.start), receiver.name);
+				const type = this.languageService.types.resolveReceiver(
+					document.uri.toString(),
+					document.offsetAt(receiver.range.start),
+					receiver.name,
+				);
 				if (type?.builtin && globals.docsProvider?.classInfo.has(type.name)) receiverClass = type.name;
 			}
 			if (receiverClass) {
@@ -227,7 +249,11 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		return new Location(make_docs_uri(className, doc_symbol_anchor(info?.kind, symbolName)), new Position(0, 0));
 	}
 
-	private async resolveNativeMemberClass(className: string, symbolName: string, token: CancellationToken): Promise<string | undefined> {
+	private async resolveNativeMemberClass(
+		className: string,
+		symbolName: string,
+		token: CancellationToken,
+	): Promise<string | undefined> {
 		const docs = globals.docsProvider;
 		if (!docs || token.isCancellationRequested) return undefined;
 
@@ -235,7 +261,8 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		let current = className;
 		while (current && !visited.has(current)) {
 			visited.add(current);
-			if (docs.classInfo.has(current) && (await this.nativeSymbolExists(current, symbolName, token))) return current;
+			if (docs.classInfo.has(current) && (await this.nativeSymbolExists(current, symbolName, token)))
+				return current;
 			current = docs.classInfo.get(current)?.inherits ?? "";
 		}
 		return undefined;
@@ -286,7 +313,11 @@ export class GDDefinitionProvider implements DefinitionProvider {
 		return candidates;
 	}
 
-	private async nativeSymbolExists(className: string, symbolName: string, token: CancellationToken): Promise<boolean> {
+	private async nativeSymbolExists(
+		className: string,
+		symbolName: string,
+		token: CancellationToken,
+	): Promise<boolean> {
 		const lsp = globals.lsp?.client;
 		if (!lsp || token.isCancellationRequested) return false;
 

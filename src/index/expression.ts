@@ -145,7 +145,11 @@ export function startsStatement(tokens: readonly GDScriptToken[], dotOffset: num
 	const index = tokenBefore(tokens, dotOffset);
 	if (index < 0) return true;
 	const token = tokens[index];
-	return token.kind === "newline" || token.kind === "eof" || (token.kind === "punctuation" && (token.value === ":" || token.value === "{"));
+	return (
+		token.kind === "newline" ||
+		token.kind === "eof" ||
+		(token.kind === "punctuation" && (token.value === ":" || token.value === "{"))
+	);
 }
 
 /**

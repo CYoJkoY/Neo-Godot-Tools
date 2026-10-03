@@ -71,7 +71,10 @@ pressed = false
 [connection signal="pressed" from="." to="." method="on_pressed"]
 `;
 		const properties = parseNodeProperties(text, 0, text.length);
-		assert.deepEqual(properties.map((property) => property.name), ["pressed"]);
+		assert.deepEqual(
+			properties.map((property) => property.name),
+			["pressed"],
+		);
 		assert.equal(properties[0].raw, "false");
 	});
 

@@ -4,7 +4,17 @@ import { FileIndex } from "./file_index";
 import { IndexedFile, IndexedSymbol } from "./symbol";
 import { tokensFor } from "./token_cache.js";
 
-export type BindingKind = "parameter" | "local" | "member" | "function" | "class" | "constant" | "class_name" | "signal" | "enum" | "enum_member";
+export type BindingKind =
+	| "parameter"
+	| "local"
+	| "member"
+	| "function"
+	| "class"
+	| "constant"
+	| "class_name"
+	| "signal"
+	| "enum"
+	| "enum_member";
 
 export interface Binding {
 	id: string;
@@ -50,15 +60,24 @@ function tokenRange(token: GDScriptToken): SourceRange {
 
 function bindingKind(symbol: IndexedSymbol): BindingKind | undefined {
 	switch (symbol.kind) {
-		case "variable": return "member";
-		case "function": return "function";
-		case "class": return "class";
-		case "constant": return "constant";
-		case "class_name": return "class_name";
-		case "signal": return "signal";
-		case "enum": return "enum";
-	case "enum_member": return "enum_member";
-		default: return undefined;
+		case "variable":
+			return "member";
+		case "function":
+			return "function";
+		case "class":
+			return "class";
+		case "constant":
+			return "constant";
+		case "class_name":
+			return "class_name";
+		case "signal":
+			return "signal";
+		case "enum":
+			return "enum";
+		case "enum_member":
+			return "enum_member";
+		default:
+			return undefined;
 	}
 }
 
@@ -90,16 +109,17 @@ function addBinding(scope: Scope, binding: Binding): void {
 }
 
 function addParameters(scope: Scope, fn: GDScriptFunction, uri: string): void {
-	for (const parameter of fn.parameters) addBinding(scope, {
-		id: `${uri}:${parameter.range.start.offset}`,
-		name: parameter.name,
-		kind: "parameter",
-		uri,
-		declarationRange: parameter.range,
-		nameOffset: parameter.range.start.offset,
-		scopeRange: scope.range,
-		type: parameter.type,
-	});
+	for (const parameter of fn.parameters)
+		addBinding(scope, {
+			id: `${uri}:${parameter.range.start.offset}`,
+			name: parameter.name,
+			kind: "parameter",
+			uri,
+			declarationRange: parameter.range,
+			nameOffset: parameter.range.start.offset,
+			scopeRange: scope.range,
+			type: parameter.type,
+		});
 }
 
 function addLocalDeclarations(tokens: readonly GDScriptToken[], fn: GDScriptFunction, scope: Scope, uri: string): void {
@@ -108,7 +128,12 @@ function addLocalDeclarations(tokens: readonly GDScriptToken[], fn: GDScriptFunc
 		const token = tokens[index];
 		const previous = tokens[index - 1];
 		if (token.start < fn.bodyRange.start.offset || token.end > fn.bodyRange.end.offset) continue;
-		if (token.kind !== "identifier" || (previous.value !== "var" && previous.value !== "const") || previous.line !== token.line) continue;
+		if (
+			token.kind !== "identifier" ||
+			(previous.value !== "var" && previous.value !== "const") ||
+			previous.line !== token.line
+		)
+			continue;
 		const type = tokens[index + 1]?.value === ":" ? readTypeName(tokens, index + 2) : undefined;
 		addBinding(scope, {
 			id: `${uri}:${token.start}`,
@@ -134,17 +159,18 @@ function buildScopes(file: IndexedFile, uri: string): Scope {
 	const root = createScope(file.ast.range, "root");
 	for (const symbol of file.symbols) {
 		const kind = bindingKind(symbol);
-		if (kind && !symbol.containerName) addBinding(root, {
-			id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
-			name: symbol.name,
-			kind,
-			uri,
-			declarationRange: symbol.range,
-			nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
-			scopeRange: root.range,
-			type: symbol.type,
-			returnType: symbol.returnType,
-		});
+		if (kind && !symbol.containerName)
+			addBinding(root, {
+				id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
+				name: symbol.name,
+				kind,
+				uri,
+				declarationRange: symbol.range,
+				nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
+				scopeRange: root.range,
+				type: symbol.type,
+				returnType: symbol.returnType,
+			});
 	}
 
 	const visit = (declarations: GDScriptDeclaration[], parent: Scope) => {
@@ -154,18 +180,19 @@ function buildScopes(file: IndexedFile, uri: string): Scope {
 				for (const symbol of file.symbols) {
 					if (symbol.containerName !== declaration.name) continue;
 					const kind = bindingKind(symbol);
-					if (kind) addBinding(classScope, {
-						id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
-						name: symbol.name,
-						kind,
-						uri,
-						declarationRange: symbol.range,
-						nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
-						scopeRange: classScope.range,
-						containerName: declaration.name,
-						type: symbol.type,
-						returnType: symbol.returnType,
-					});
+					if (kind)
+						addBinding(classScope, {
+							id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
+							name: symbol.name,
+							kind,
+							uri,
+							declarationRange: symbol.range,
+							nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
+							scopeRange: classScope.range,
+							containerName: declaration.name,
+							type: symbol.type,
+							returnType: symbol.returnType,
+						});
 				}
 				visit(declaration.declarations, classScope);
 				continue;
@@ -194,9 +221,41 @@ function findBinding(scope: Scope, name: string, offset: number): Binding | unde
 }
 
 const nonReferenceIdentifiers = new Set([
-	"and", "as", "await", "breakpoint", "break", "class_name", "class", "const", "continue", "elif", "else",
-	"enum", "extends", "false", "for", "func", "if", "in", "is", "match", "not", "null", "or", "pass",
-	"preload", "return", "self", "signal", "static", "super", "true", "var", "void", "while", "when",
+	"and",
+	"as",
+	"await",
+	"breakpoint",
+	"break",
+	"class_name",
+	"class",
+	"const",
+	"continue",
+	"elif",
+	"else",
+	"enum",
+	"extends",
+	"false",
+	"for",
+	"func",
+	"if",
+	"in",
+	"is",
+	"match",
+	"not",
+	"null",
+	"or",
+	"pass",
+	"preload",
+	"return",
+	"self",
+	"signal",
+	"static",
+	"super",
+	"true",
+	"var",
+	"void",
+	"while",
+	"when",
 ]);
 
 export class BindingIndex {
@@ -243,7 +302,12 @@ export class BindingIndex {
 		return this.resolveBinding(uri, offset, name, false);
 	}
 
-	private resolveBinding(uri: string, offset: number, name: string, allowFunctionScopes: boolean): Binding | undefined {
+	private resolveBinding(
+		uri: string,
+		offset: number,
+		name: string,
+		allowFunctionScopes: boolean,
+	): Binding | undefined {
 		const root = this.scopes.get(uri);
 		if (!root) return undefined;
 		let scope: Scope | undefined = findInnermostScope(root, offset);
@@ -297,7 +361,9 @@ export class BindingIndex {
 			for (const reference of references) {
 				const entries = this.referencesByBinding.get(reference.bindingId);
 				if (!entries) continue;
-				const remaining = entries.filter((entry) => entry.uri !== uri || entry.range.start.offset !== reference.range.start.offset);
+				const remaining = entries.filter(
+					(entry) => entry.uri !== uri || entry.range.start.offset !== reference.range.start.offset,
+				);
 				if (remaining.length) this.referencesByBinding.set(reference.bindingId, remaining);
 				else this.referencesByBinding.delete(reference.bindingId);
 			}
@@ -343,7 +409,9 @@ export class BindingIndex {
 					// the plain scope lookup cannot see.
 					const scopeMember = this.getMemberBinding(uri, token.start, token.value);
 					const chain = scopeMember ? undefined : parseChainEndingAt(tokens, tokens[index - 1].start);
-					const member = scopeMember ?? (chain ? this.resolveChainMember(uri, token.start, chain, token.value) : undefined);
+					const member =
+						scopeMember ??
+						(chain ? this.resolveChainMember(uri, token.start, chain, token.value) : undefined);
 					if (!member) continue;
 					result.push({ bindingId: member.id, name: token.value, uri, range: tokenRange(token) });
 					continue;
@@ -375,7 +443,12 @@ export class BindingIndex {
 	 * (`A.B.run()`), a constructed instance (`Worker.new().run()`) or a call
 	 * result (`make().run()`).
 	 */
-	private resolveChainMember(uri: string, offset: number, chain: readonly ChainLink[], memberName: string): Binding | undefined {
+	private resolveChainMember(
+		uri: string,
+		offset: number,
+		chain: readonly ChainLink[],
+		memberName: string,
+	): Binding | undefined {
 		const owner = this.chainClass(uri, offset, chain);
 		if (!owner) return undefined;
 		const member = this.findClassMember(owner.uri, owner, memberName, new Set<string>());
@@ -407,10 +480,11 @@ export class BindingIndex {
 			if (!current) return undefined;
 			const member = this.findClassMember(current.uri, current, link.name, new Set<string>());
 			if (!member) return undefined;
-			const typeName = link.call ? member.returnType : member.type ?? member.name;
+			const typeName = link.call ? member.returnType : (member.type ?? member.name);
 			if (!typeName) return undefined;
 			const normalized = typeName.replace(/^([A-Za-z_]\w*).*$/, "$1");
-			const next = this.namedClass(file, normalized, offset) ?? this.classCandidateOf(current.uri, normalized, offset);
+			const next =
+				this.namedClass(file, normalized, offset) ?? this.classCandidateOf(current.uri, normalized, offset);
 			if (!next) return undefined;
 			current = next;
 		}
@@ -428,7 +502,10 @@ export class BindingIndex {
 
 	/** Innermost class declaration containing `offset`. */
 	private containingClass(file: IndexedFile, offset: number): IndexedSymbol | undefined {
-		const classes = file.symbols.filter((symbol) => symbol.kind === "class" && symbol.range.start.offset <= offset && offset <= symbol.range.end.offset);
+		const classes = file.symbols.filter(
+			(symbol) =>
+				symbol.kind === "class" && symbol.range.start.offset <= offset && offset <= symbol.range.end.offset,
+		);
 		return classes.sort((left, right) => right.range.start.offset - left.range.start.offset)[0];
 	}
 
@@ -439,7 +516,11 @@ export class BindingIndex {
 		const enclosing = candidates
 			.filter((symbol) => symbol.range.start.offset <= offset && offset <= symbol.range.end.offset)
 			.sort((left, right) => right.range.start.offset - left.range.start.offset);
-		return enclosing[0] ?? candidates.find((symbol) => !symbol.containerName) ?? (candidates.length === 1 ? candidates[0] : undefined);
+		return (
+			enclosing[0] ??
+			candidates.find((symbol) => !symbol.containerName) ??
+			(candidates.length === 1 ? candidates[0] : undefined)
+		);
 	}
 
 	private globalClassCandidate(name: string): IndexedSymbol | undefined {
@@ -466,7 +547,12 @@ export class BindingIndex {
 	}
 
 	/** Looks up `name` on a class, following its `extends` chain. */
-	private findClassMember(uri: string, classSymbol: IndexedSymbol, name: string, visited: Set<string>): IndexedSymbol | undefined {
+	private findClassMember(
+		uri: string,
+		classSymbol: IndexedSymbol,
+		name: string,
+		visited: Set<string>,
+	): IndexedSymbol | undefined {
 		const key = `${uri}#${classSymbol.range.start.offset}`;
 		if (visited.has(key)) return undefined;
 		visited.add(key);
@@ -497,8 +583,10 @@ export class BindingIndex {
 		const scriptBase = file.symbols.find((symbol) => symbol.kind === "class_name");
 		if (!scriptBase || scriptBase === classSymbol) return undefined;
 		const extendsDeclaration = file.ast.declarations.find((declaration) => declaration.kind === "extends");
-		const scriptReference = extendsDeclaration?.kind === "extends" ? extendsDeclaration.name.replace(/^["']|["']$/g, "") : undefined;
-		if (!scriptReference || (!scriptReference.startsWith("res://") && !scriptReference.endsWith(".gd"))) return undefined;
+		const scriptReference =
+			extendsDeclaration?.kind === "extends" ? extendsDeclaration.name.replace(/^["']|["']$/g, "") : undefined;
+		if (!scriptReference || (!scriptReference.startsWith("res://") && !scriptReference.endsWith(".gd")))
+			return undefined;
 		const baseUri = this.files.findByPathSuffix(scriptReference);
 		const baseFile = baseUri ? this.files.get(baseUri) : undefined;
 		const baseClass = baseFile?.symbols.find((symbol) => symbol.kind === "class_name");
@@ -517,7 +605,9 @@ export class BindingIndex {
 			if (base && member) return this.bindingFromSymbol(member, base.range);
 		}
 		const scriptBase = this.scriptBaseClass(file);
-		const member = scriptBase ? this.findClassMember(scriptBase.uri, scriptBase, name, new Set<string>()) : undefined;
+		const member = scriptBase
+			? this.findClassMember(scriptBase.uri, scriptBase, name, new Set<string>())
+			: undefined;
 		return scriptBase && member ? this.bindingFromSymbol(member, scriptBase.range) : undefined;
 	}
 
