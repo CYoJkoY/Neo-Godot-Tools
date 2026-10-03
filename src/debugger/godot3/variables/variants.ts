@@ -1,4 +1,4 @@
-import { GodotVariable } from "../../debug_runtime";
+import { type GodotValue, GodotVariable } from "../../debug_runtime";
 
 export enum GDScriptTypes {
 	NIL = 0,
@@ -61,13 +61,11 @@ export class Vector3 implements GDObject {
 	constructor(
 		public x = 0.0,
 		public y = 0.0,
-		public z = 0.0
+		public z = 0.0,
 	) {}
 
 	public stringify_value(): string {
-		return `(${clean_number(this.x)}, ${clean_number(this.y)}, ${clean_number(
-			this.z
-		)})`;
+		return `(${clean_number(this.x)}, ${clean_number(this.y)}, ${clean_number(this.z)})`;
 	}
 
 	public sub_values(): GodotVariable[] {
@@ -84,7 +82,10 @@ export class Vector3 implements GDObject {
 }
 
 export class Vector2 implements GDObject {
-	constructor(public x = 0.0, public y = 0.0) {}
+	constructor(
+		public x = 0.0,
+		public y = 0.0,
+	) {}
 
 	public stringify_value(): string {
 		return `(${clean_number(this.x)}, ${clean_number(this.y)})`;
@@ -103,7 +104,11 @@ export class Vector2 implements GDObject {
 }
 
 export class Basis implements GDObject {
-	constructor(public x: Vector3, public y: Vector3, public z: Vector3) {}
+	constructor(
+		public x: Vector3,
+		public y: Vector3,
+		public z: Vector3,
+	) {}
 
 	public stringify_value(): string {
 		return `(${this.x.stringify_value()}, ${this.y.stringify_value()}, ${this.z.stringify_value()})`;
@@ -123,7 +128,10 @@ export class Basis implements GDObject {
 }
 
 export class AABB implements GDObject {
-	constructor(public position: Vector3, public size: Vector3) {}
+	constructor(
+		public position: Vector3,
+		public size: Vector3,
+	) {}
 
 	public stringify_value(): string {
 		return `(${this.position.stringify_value()}, ${this.size.stringify_value()})`;
@@ -146,13 +154,11 @@ export class Color implements GDObject {
 		public r: number,
 		public g: number,
 		public b: number,
-		public a = 1.0
+		public a = 1.0,
 	) {}
 
 	public stringify_value(): string {
-		return `(${clean_number(this.r)}, ${clean_number(this.g)}, ${clean_number(
-			this.b
-		)}, ${clean_number(this.a)})`;
+		return `(${clean_number(this.r)}, ${clean_number(this.g)}, ${clean_number(this.b)}, ${clean_number(this.a)})`;
 	}
 
 	public sub_values(): GodotVariable[] {
@@ -173,13 +179,11 @@ export class NodePath implements GDObject {
 	constructor(
 		public names: string[],
 		public sub_names: string[],
-		public absolute: boolean
+		public absolute: boolean,
 	) {}
 
 	public stringify_value(): string {
-		return `(/${this.names.join("/")}${
-			this.sub_names.length > 0 ? ":" : ""
-		}${this.sub_names.join(":")})`;
+		return `(/${this.names.join("/")}${this.sub_names.length > 0 ? ":" : ""}${this.sub_names.join(":")})`;
 	}
 
 	public sub_values(): GodotVariable[] {
@@ -195,7 +199,7 @@ export class NodePath implements GDObject {
 	}
 }
 
-export class RawObject extends Map<any, any> {
+export class RawObject extends Map<string, GodotValue> {
 	constructor(public class_name: string) {
 		super();
 	}
@@ -222,13 +226,11 @@ export class Plane implements GDObject {
 		public x: number,
 		public y: number,
 		public z: number,
-		public d: number
+		public d: number,
 	) {}
 
 	public stringify_value(): string {
-		return `(${clean_number(this.x)}, ${clean_number(this.y)}, ${clean_number(
-			this.z
-		)}, ${clean_number(this.d)})`;
+		return `(${clean_number(this.x)}, ${clean_number(this.y)}, ${clean_number(this.z)}, ${clean_number(this.d)})`;
 	}
 
 	public sub_values(): GodotVariable[] {
@@ -250,13 +252,11 @@ export class Quat implements GDObject {
 		public x: number,
 		public y: number,
 		public z: number,
-		public w: number
+		public w: number,
 	) {}
 
 	public stringify_value(): string {
-		return `(${clean_number(this.x)}, ${clean_number(this.y)}, ${clean_number(
-			this.z
-		)}, ${clean_number(this.w)})`;
+		return `(${clean_number(this.x)}, ${clean_number(this.y)}, ${clean_number(this.z)}, ${clean_number(this.w)})`;
 	}
 
 	public sub_values(): GodotVariable[] {
@@ -274,7 +274,10 @@ export class Quat implements GDObject {
 }
 
 export class Rect2 implements GDObject {
-	constructor(public position: Vector2, public size: Vector2) {}
+	constructor(
+		public position: Vector2,
+		public size: Vector2,
+	) {}
 
 	public stringify_value(): string {
 		return `(${this.position.stringify_value()} - ${this.size.stringify_value()})`;
@@ -293,7 +296,10 @@ export class Rect2 implements GDObject {
 }
 
 export class Transform implements GDObject {
-	constructor(public basis: Basis, public origin: Vector3) {}
+	constructor(
+		public basis: Basis,
+		public origin: Vector3,
+	) {}
 
 	public stringify_value(): string {
 		return `(${this.basis.stringify_value()} - ${this.origin.stringify_value()})`;
@@ -312,7 +318,11 @@ export class Transform implements GDObject {
 }
 
 export class Transform2D implements GDObject {
-	constructor(public origin: Vector2, public x: Vector2, public y: Vector2) {}
+	constructor(
+		public origin: Vector2,
+		public x: Vector2,
+		public y: Vector2,
+	) {}
 
 	public stringify_value(): string {
 		return `(${this.origin.stringify_value()} - (${this.x.stringify_value()}, ${this.y.stringify_value()})`;

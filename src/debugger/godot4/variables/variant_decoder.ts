@@ -1,3 +1,4 @@
+import type { GodotValue } from "../../debug_runtime";
 import {
 	AABB,
 	Basis,
@@ -31,31 +32,8 @@ import {
 	Vector4i,
 } from "./variants";
 
-export type DecodedVariant =
-	| string
-	| number
-	| bigint
-	| boolean
-	| DecodedVariant[]
-	| Vector2
-	| Rect2
-	| Vector3
-	| Transform2D
-	| Plane
-	| Vector4
-	| Quat
-	| AABB
-	| Basis
-	| Transform3D
-	| Projection
-	| Color
-	| StringName
-	| NodePath
-	| ObjectId
-	| Callable
-	| Signal
-	| Map<DecodedVariant, DecodedVariant>
-	| undefined;
+/** A value decoded from the Godot 4 debugger wire format. */
+export type DecodedVariant = GodotValue;
 
 export class VariantDecoder {
 	public decode_variant(model: BufferModel): DecodedVariant {

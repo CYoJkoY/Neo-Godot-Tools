@@ -1,4 +1,4 @@
-import { GodotVariable } from "../../debug_runtime";
+import { type GodotValue, GodotVariable } from "../../debug_runtime";
 import { GodotObject } from "./godot_object_promise";
 import { VariablesManager } from "./variables_manager";
 
@@ -271,7 +271,7 @@ export class NodePath implements GDObject {
 	}
 }
 
-export class RawObject extends Map<any, any> {
+export class RawObject extends Map<string, GodotValue> {
 	constructor(public class_name: string) {
 		super();
 	}
@@ -287,9 +287,7 @@ export class ObjectId implements GDObject {
 	public async get_rendered_value(variables_manager: VariablesManager): Promise<string> {
 		const godot_object: GodotObject = await variables_manager.get_godot_object(this.id);
 		const __repr__ = godot_object.sub_values.find((sv) => sv.name === "__repr__");
-		const rendered_value =
-			__repr__ !== undefined ? __repr__.value : `${godot_object.type}${this.stringify_value()}`;
-		return rendered_value;
+		return __repr__ !== undefined ? `${__repr__.value}` : `${godot_object.type}${this.stringify_value()}`;
 	}
 
 	public sub_values(): GodotVariable[] {

@@ -1,5 +1,5 @@
 import { EventEmitter, TreeDataProvider, TreeItem, TreeItemCollapsibleState, TreeView, window } from "vscode";
-import { GodotVariable, ObjectId, RawObject } from "./debug_runtime";
+import { type GodotValue, GodotVariable, ObjectId, RawObject, is_gd_object } from "./debug_runtime";
 
 export class InspectorProvider implements TreeDataProvider<RemoteProperty> {
 	private changeTreeEvent = new EventEmitter<void>();
@@ -48,18 +48,17 @@ export class InspectorProvider implements TreeDataProvider<RemoteProperty> {
 		return element;
 	}
 
-	public get_changed_value(parents: RemoteProperty[], property: RemoteProperty, new_parsed_value: any) {
-		const idx = parents.length - 1;
-		const value = parents[idx].value;
+	public get_changed_value(parents: RemoteProperty[], property: RemoteProperty, new_parsed_value: GodotValue) {
+		const value = parents[parents.length - 1].value;
 		if (Array.isArray(value)) {
-			const idx = Number.parseInt(property.label);
-			if (idx < value.length) {
-				value[idx] = new_parsed_value;
-			}
+			const index = Number.parseInt(property.label);
+			if (index < value.length) value[index] = new_parsed_value;
 		} else if (value instanceof Map && property.parent) {
-			value.set(property.parent.value.key, new_parsed_value);
-		} else if (value && typeof value === "object" && value[property.label]) {
-			value[property.label] = new_parsed_value;
+			// Map entries are keyed by the property that holds the key, not by its label.
+			const key = property.parent.value;
+			if (key !== undefined && key !== null) value.set(key, new_parsed_value);
+		} else if (typeof value === "object" && value !== null && property.label in value) {
+			(value as Record<string, GodotValue>)[property.label] = new_parsed_value;
 		}
 
 		return value;
@@ -99,7 +98,7 @@ export class InspectorProvider implements TreeDataProvider<RemoteProperty> {
 				} else {
 					rendered_value = `Dictionary[${value.size}]`;
 				}
-			} else {
+			} else if (is_gd_object(value)) {
 				rendered_value = `${value.type_name()}${value.stringify_value()}`;
 			}
 		}
@@ -107,25 +106,19 @@ export class InspectorProvider implements TreeDataProvider<RemoteProperty> {
 		let child_props: RemoteProperty[] = [];
 
 		if (value) {
-			let sub_variables: any[] = [];
-			if (typeof value.sub_values === "function" && value instanceof ObjectId === false) {
+			let sub_variables: GodotVariable[] = [];
+			if (is_gd_object(value) && !(value instanceof ObjectId)) {
 				sub_variables = value.sub_values();
 			} else if (Array.isArray(value)) {
-				sub_variables = value.map((va, i) => {
-					return { name: `${i}`, value: va };
-				});
+				sub_variables = value.map((element, i) => ({ name: `${i}`, value: element }));
 			} else if (value instanceof Map) {
-				sub_variables = Array.from(value.keys()).map((va: any) => {
-					const name = typeof va.rendered_value === "function" ? va.rendered_value() : `${va}`;
-					const map_value = value.get(va);
-					return { name: name, value: map_value };
-				});
+				sub_variables = Array.from(value.keys()).map((key) => ({
+					name: is_gd_object(key) ? `${key.stringify_value()}` : `${key}`,
+					value: value.get(key),
+				}));
 			}
 
-			child_props =
-				sub_variables?.map((va: any) => {
-					return this.parse_variable(va, object_id);
-				}) || [];
+			child_props = sub_variables.map((va) => this.parse_variable(va, object_id));
 		}
 
 		const out_prop = new RemoteProperty(
@@ -167,7 +160,7 @@ export class RemoteProperty extends TreeItem {
 
 	constructor(
 		public override label: string,
-		public value: any,
+		public value: GodotValue,
 		public object_id: number | undefined,
 		public properties: RemoteProperty[],
 		public override collapsibleState?: TreeItemCollapsibleState,

@@ -16,19 +16,37 @@ import {
 } from "../../utils";
 import { prompt_for_godot_executable } from "../../utils/prompts";
 import { killSubProcesses, subProcess } from "../../utils/subspawn";
-import { GodotStackFrame, GodotVariable } from "../debug_runtime";
+import { GodotStackFrame, type GodotValue, GodotVariable } from "../debug_runtime";
 import { AttachRequestArguments, LaunchRequestArguments, pinnedScene } from "../debugger";
 import { GodotDebugSession } from "./debug_session";
 import { get_sub_values, parse_next_scene_node, split_buffers } from "./helpers";
 import { VariablesManager } from "./variables/variables_manager";
 import { DecodedVariant, VariantDecoder } from "./variables/variant_decoder";
 import { VariantEncoder } from "./variables/variant_encoder";
-import { RawObject } from "./variables/variants";
+import { ObjectId, RawObject } from "./variables/variants";
 
 const log = createLogger("debugger.controller", { output: "Godot Debugger" });
 const socketLog = createLogger("debugger.socket");
 //initialize bbcodeParser and set default output color to grey
 const bbcodeParser = new BBCodeToAnsi("\u001b[38;2;211;211;211m");
+
+/** Extra fields merged into a debugger output event body. */
+interface OutputExtras {
+	source?: { name: string };
+	line?: GodotValue;
+	group?: "start" | "startCollapsed" | "end";
+}
+
+/** Renders a protocol value as text. */
+function as_string(value: GodotValue): string {
+	if (typeof value === "string") return value;
+	return value === undefined || value === null ? "" : `${value}`;
+}
+
+/** Reads a protocol value as a number. */
+function as_number(value: GodotValue): number {
+	return typeof value === "number" ? value : Number(value ?? 0);
+}
 
 class Command {
 	public command = "";
@@ -53,10 +71,16 @@ class GodotPartialStackVars {
 		this.Globals = [];
 	}
 
-	public append(name: string, godotScopeIndex: 0 | 1 | 2, type: number, value: any, sub_values?: GodotVariable[]) {
+	public append(
+		name: string,
+		godotScopeIndex: 0 | 1 | 2,
+		type: number,
+		value: DecodedVariant,
+		sub_values?: GodotVariable[],
+	) {
 		const scope = [this.Locals, this.Members, this.Globals][godotScopeIndex];
 		// const objectId = value instanceof ObjectId ? value : undefined; // won't work, unless the value is re-created through new ObjectId(godot_id)
-		const godot_id = type === 24 ? value?.id : undefined;
+		const godot_id = type === 24 && value instanceof ObjectId ? value.id : undefined;
 		scope.push({ id: godot_id, name, value, type, sub_values } as GodotVariable);
 		this.remaining--;
 	}
@@ -140,7 +164,7 @@ export class ServerController {
 		this.send_command("get_stack_frame_vars", [stack_frame_id]);
 	}
 
-	public set_object_property(objectId: bigint, label: string, newParsedValue: unknown) {
+	public set_object_property(objectId: bigint, label: string, newParsedValue: GodotValue) {
 		this.send_command("scene:set_object_property", [objectId, label, newParsedValue]);
 	}
 
@@ -185,7 +209,7 @@ export class ServerController {
 			log.info("Using 'editorPath.godot4' from settings");
 
 			const settingName = "editorPath.godot4";
-			godotPath = get_configuration(settingName);
+			godotPath = get_configuration(settingName, "godot");
 
 			log.info(`Verifying version of '${godotPath}'`);
 			result = verify_godot_version(godotPath, "4");
@@ -443,14 +467,7 @@ export class ServerController {
 				}
 				let godot_id = BigInt(command.parameters[0] as number);
 				const className: string = command.parameters[1] as string;
-				const properties: [string, string, number, string, number, any][] = command.parameters[2] as [
-					string,
-					string,
-					number,
-					string,
-					number,
-					any,
-				][];
+				const properties = command.parameters[2] as [string, string, number, string, number, DecodedVariant][];
 
 				// message:inspect_object returns the id as an unsigned 64 bit integer, but it is decoded as a signed 64 bit integer,
 				// thus we need to convert it to its equivalent unsigned value here.
@@ -471,7 +488,7 @@ export class ServerController {
 				const rawObject = new RawObject(className);
 				let category = "";
 				for (const prop of properties) {
-					const [name, , , , usage, value]: [string, string, number, string, number, unknown] = prop;
+					const [name, , , , usage, value]: [string, string, number, string, number, DecodedVariant] = prop;
 					if (usage === 128) {
 						category = name;
 						continue; // not a variable - just a category grouping element for UI for subsequent items
@@ -573,7 +590,7 @@ export class ServerController {
 				const name: string = command.parameters[0];
 				const scope: 0 | 1 | 2 = command.parameters[1]; // 0 = locals, 1 = members, 2 = globals
 				const type: number = command.parameters[2];
-				const value: any = command.parameters[3];
+				const value = command.parameters[3];
 				const subValues: GodotVariable[] = await get_sub_values(value, this.session.variables_manager);
 				this.partialStackVars.append(name, scope, type, value, subValues);
 
@@ -628,26 +645,26 @@ export class ServerController {
 	async handle_error(command: Command) {
 		const params = command.parameters;
 		const e = {
-			hr: params[0],
-			min: params[1],
-			sec: params[2],
-			msec: params[3],
-			file: params[4] as string,
-			func: params[5] as string,
-			line: params[6],
-			error: params[7] as string,
-			desc: params[8] as string,
-			warning: params[9] as boolean,
-			stack: [] as { msg: string; extras: any }[],
+			hr: as_number(params[0]),
+			min: as_number(params[1]),
+			sec: as_number(params[2]),
+			msec: as_number(params[3]),
+			file: as_string(params[4]),
+			func: as_string(params[5]),
+			line: as_number(params[6]),
+			error: as_string(params[7]),
+			desc: as_string(params[8]),
+			warning: params[9] === true,
+			stack: [] as { msg: string; extras: OutputExtras }[],
 		};
-		const stackCount = (params[10] as number) ?? 0;
+		const stackCount = as_number(params[10]);
 		for (let i = 0; i < stackCount; i += 3) {
-			const file = params[11 + i] as string;
-			const func = params[12 + i] as string;
-			const line = params[13 + i] as number;
+			const file = as_string(params[11 + i]);
+			const func = as_string(params[12 + i]);
+			const line = as_number(params[13 + i]);
 			const msg = `${file.slice("res://".length)}:${line} @ ${func}()`;
 			const uri = await convert_resource_path_to_uri(file);
-			const extras = {
+			const extras: OutputExtras = {
 				source: { name: uri?.toString() ?? "" },
 				line: line,
 			};
@@ -781,8 +798,8 @@ export class ServerController {
 		}
 	}
 
-	private send_command(command: string, parameters?: any[]) {
-		const commandArray: any[] = [command];
+	private send_command(command: string, parameters?: GodotValue[]) {
+		const commandArray: GodotValue[] = [command];
 		if (this.projectVersionMinor >= 2) {
 			commandArray.push(this.threadId);
 		}

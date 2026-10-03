@@ -164,12 +164,12 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		this.target = target;
 		this.status = ClientStatus.PENDING;
 
-		let port = get_configuration("lsp.serverPort");
+		let port = get_configuration("lsp.serverPort", 6008);
 		if (this.port !== -1) port = this.port;
 		if (this.target === TargetLSP.EDITOR && (port === 6005 || port === 6008)) port = 6005;
 		this.lastPortTried = port;
 
-		const host = get_configuration("lsp.serverHost");
+		const host = get_configuration("lsp.serverHost", "127.0.0.1");
 		log.info(`attempting to connect to LSP at ${host}:${port}`);
 		this.io.connect(host, port);
 	}
@@ -177,7 +177,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	override handleFailedRequest<T>(
 		type: MessageSignature,
 		token: vscode.CancellationToken | undefined,
-		error: any,
+		error: Error,
 		defaultValue: T,
 		showNotification?: boolean,
 	): T {
@@ -310,8 +310,8 @@ export default class GDScriptLanguageClient extends LanguageClient {
 			return;
 		}
 		if (this.target === TargetLSP.EDITOR) {
-			const host = get_configuration("lsp.serverHost");
-			let port = get_configuration("lsp.serverPort");
+			const host = get_configuration("lsp.serverHost", "127.0.0.1");
+			let port = get_configuration("lsp.serverPort", 6008);
 			if (port === 6005 || port === 6008) {
 				if (this.lastPortTried === 6005) {
 					port = 6008;

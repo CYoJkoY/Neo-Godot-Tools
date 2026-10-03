@@ -17,7 +17,7 @@ export interface GodotObject {
  */
 export class GodotObjectPromise {
 	private _resolve!: (value: GodotObject | PromiseLike<GodotObject>) => void;
-	private _reject!: (reason?: any) => void;
+	private _reject!: (reason?: unknown) => void;
 	public promise: Promise<GodotObject>;
 	private timeoutId?: NodeJS.Timeout;
 

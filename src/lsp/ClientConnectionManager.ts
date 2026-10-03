@@ -50,9 +50,12 @@ export class ClientConnectionManager implements vscode.Disposable {
 	constructor(context: vscode.ExtensionContext) {
 		this.client = this.create_new_client(undefined);
 
-		this.reconnectTimer = setInterval(() => {
-			this.retry_callback();
-		}, get_configuration("lsp.autoReconnect.cooldown"));
+		this.reconnectTimer = setInterval(
+			() => {
+				this.retry_callback();
+			},
+			get_configuration("lsp.autoReconnect.cooldown", 3000),
+		);
 
 		set_context("connectedToLSP", false);
 
@@ -153,7 +156,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 			targetVersion = "4.2";
 		}
 		const settingName = `editorPath.godot${projectVersion?.[0] || ""}`;
-		let godotPath = get_configuration(settingName);
+		let godotPath = get_configuration(settingName, projectVersion?.[0] === "3" ? "godot3" : "godot");
 
 		const result = verify_godot_version(godotPath, projectVersion?.[0] || "");
 		godotPath = result.godotPath;
@@ -225,8 +228,8 @@ export class ClientConnectionManager implements vscode.Disposable {
 	}
 
 	private get_lsp_connection_string() {
-		const host = get_configuration("lsp.serverHost");
-		let port = get_configuration("lsp.serverPort");
+		const host = get_configuration("lsp.serverHost", "127.0.0.1");
+		let port = get_configuration("lsp.serverPort", 6008);
 		if (this.client.port !== -1) port = this.client.port;
 		return `${host}:${port}`;
 	}
@@ -334,8 +337,8 @@ export class ClientConnectionManager implements vscode.Disposable {
 	}
 
 	private retry_connect_client() {
-		const autoRetry = get_configuration("lsp.autoReconnect.enabled");
-		const maxAttempts = get_configuration("lsp.autoReconnect.attempts");
+		const autoRetry = get_configuration("lsp.autoReconnect.enabled", true);
+		const maxAttempts = get_configuration("lsp.autoReconnect.attempts", 10);
 		if (autoRetry && this.reconnectionAttempts <= maxAttempts - 1) {
 			this.reconnectionAttempts++;
 			this.client.connect(this.target);

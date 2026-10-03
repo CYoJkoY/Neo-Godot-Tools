@@ -38,13 +38,43 @@ export class GodotStackVars {
 	}
 }
 
+/**
+ * A value as it travels between the debug adapter and the debugger UI: a
+ * decoded variant, a collection of them, or a plain JSON-ish value from the
+ * wire. Every consumer narrows before use.
+ */
+export type GodotValue =
+	| undefined
+	| null
+	| string
+	| number
+	| bigint
+	| boolean
+	| GodotValue[]
+	| GodotVariable[]
+	| GodotVariable
+	| Map<GodotValue, GodotValue>
+	| { [key: string]: GodotValue }
+	| GDObject;
+
 export interface GodotVariable {
 	name: string;
 	scope_path?: string;
 	sub_values?: GodotVariable[];
-	value: any;
+	value: GodotValue;
 	type?: number;
 	id?: bigint;
+}
+
+/** Narrows a value to one of the decoded variants that can render itself. */
+export function is_gd_object(value: GodotValue): value is GDObject {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"stringify_value" in value &&
+		"sub_values" in value &&
+		"type_name" in value
+	);
 }
 
 export interface GDObject {
@@ -53,7 +83,7 @@ export interface GDObject {
 	type_name(): string;
 }
 
-export class RawObject extends Map<any, any> {
+export class RawObject extends Map<string, GodotValue> {
 	constructor(public class_name: string) {
 		super();
 	}

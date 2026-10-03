@@ -21,7 +21,7 @@ import {
 	workspace,
 } from "vscode";
 import { createLogger, get_project_version, register_command, set_context } from "../utils";
-import { GodotVariable } from "./debug_runtime";
+import { type GodotValue, GodotVariable } from "./debug_runtime";
 import { GodotDebugSession as Godot3DebugSession } from "./godot3/debug_session";
 import { GodotDebugSession as Godot4DebugSession } from "./godot4/debug_session";
 import { GodotObject } from "./godot4/variables/godot_object_promise";
@@ -337,7 +337,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 		const type = typeof previous_value;
 		const is_float = type === "number" && !Number.isInteger(previous_value);
 		const value = await window.showInputBox({ value: `${property.description}` });
-		let new_parsed_value: any;
+		let new_parsed_value: GodotValue;
 		switch (type) {
 			case "string":
 				new_parsed_value = value;

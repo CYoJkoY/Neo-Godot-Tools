@@ -117,8 +117,8 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 
 		let classHtml = this.htmlDb.get(className);
 		if (classHtml) {
-			const scaleFactor = get_configuration("documentation.pageScale");
-			classHtml = classHtml.replaceAll("scaleFactor", scaleFactor);
+			const scaleFactor = get_configuration("documentation.pageScale", 100);
+			classHtml = classHtml.replaceAll("scaleFactor", String(scaleFactor));
 
 			const displayMinimap = get_configuration("documentation.displayMinimap");
 			if (displayMinimap) {

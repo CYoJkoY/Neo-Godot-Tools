@@ -1,10 +1,10 @@
+import { readFile } from "node:fs/promises";
 import { TextEdit } from "vscode";
 import type { TextDocument, TextLine } from "vscode";
-import * as vsctm from "vscode-textmate";
 import * as oniguruma from "vscode-oniguruma";
+import * as vsctm from "vscode-textmate";
+import { createLogger, get_configuration, get_extension_uri, is_debug_mode } from "../utils";
 import { keywords, symbols } from "./symbols";
-import { get_configuration, get_extension_uri, createLogger, is_debug_mode } from "../utils";
-import { readFile } from "node:fs/promises";
 
 const log = createLogger("formatter.tm");
 const grammarPath = get_extension_uri("syntaxes/GDScript.tmLanguage.json").fsPath;
@@ -65,7 +65,7 @@ function get_formatter_options() {
 
 	const options: FormatterOptions = {
 		maxEmptyLines: maxEmptyLines,
-		denseFunctionParameters: get_configuration("formatter.denseFunctionParameters"),
+		denseFunctionParameters: get_configuration("formatter.denseFunctionParameters", false),
 		spacesBeforeEndOfLineComment: get_configuration("formatter.spacesBeforeEndOfLineComment") === "1" ? 1 : 2,
 	};
 

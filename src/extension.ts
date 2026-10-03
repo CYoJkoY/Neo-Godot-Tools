@@ -145,7 +145,7 @@ async function initial_setup() {
 	const projectVersion = await get_project_version();
 	if (projectVersion === undefined) return;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
-	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
+	const result = verify_godot_version(get_configuration(settingName, "godot"), projectVersion[0]);
 	const godotPath = result.godotPath;
 	switch (result.status) {
 		case "SUCCESS":
@@ -249,7 +249,7 @@ async function open_workspace_with_editor() {
 		return;
 	}
 	const settingName = `editorPath.godot${projectVersion[0]}`;
-	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
+	const result = verify_godot_version(get_configuration(settingName, "godot"), projectVersion[0]);
 	const godotPath = result.godotPath;
 	switch (result.status) {
 		case "SUCCESS": {
@@ -321,5 +321,5 @@ async function get_godot_path(): Promise<string | undefined> {
 	const projectVersion = await get_project_version();
 	if (projectVersion === undefined) return undefined;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
-	return clean_godot_path(get_configuration(settingName));
+	return clean_godot_path(get_configuration(settingName, "godot"));
 }

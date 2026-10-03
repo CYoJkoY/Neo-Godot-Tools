@@ -1,3 +1,4 @@
+import type { GodotValue } from "../../debug_runtime";
 import {
 	AABB,
 	Basis,
@@ -14,10 +15,7 @@ import {
 } from "./variants";
 
 export class VariantEncoder {
-	public encode_variant(
-		value: number | bigint | boolean | string | Map<any, any> | Array<any> | object | undefined,
-		model?: BufferModel,
-	) {
+	public encode_variant(value: GodotValue, model?: BufferModel) {
 		if (typeof value === "number" && Number.isInteger(value) && (value > 2147483647 || value < -2147483648)) {
 			value = BigInt(value);
 		}
@@ -110,7 +108,7 @@ export class VariantEncoder {
 		this.encode_Vector3(value.size, model);
 	}
 
-	private encode_Array(arr: any[], model: BufferModel) {
+	private encode_Array(arr: GodotValue[], model: BufferModel) {
 		const size = arr.length;
 		this.encode_UInt32(size, model);
 		// biome-ignore lint/complexity/noForEach: <explanation>
@@ -136,7 +134,7 @@ export class VariantEncoder {
 		this.encode_Float(value.a, model);
 	}
 
-	private encode_Dictionary(dict: Map<any, any>, model: BufferModel) {
+	private encode_Dictionary(dict: Map<GodotValue, GodotValue>, model: BufferModel) {
 		const size = dict.size;
 		this.encode_UInt32(size, model);
 		const keys = Array.from(dict.keys());
@@ -221,7 +219,7 @@ export class VariantEncoder {
 		return this.size_UInt32();
 	}
 
-	private size_Dictionary(dict: Map<any, any>): number {
+	private size_Dictionary(dict: Map<GodotValue, GodotValue>): number {
 		let size = this.size_UInt32();
 		const keys = Array.from(dict.keys());
 		// biome-ignore lint/complexity/noForEach: <explanation>
@@ -250,7 +248,7 @@ export class VariantEncoder {
 		return 8;
 	}
 
-	private size_array(arr: any[]): number {
+	private size_array(arr: GodotValue[]): number {
 		let size = this.size_UInt32();
 		// biome-ignore lint/complexity/noForEach: <explanation>
 		arr.forEach((e) => {
@@ -260,9 +258,7 @@ export class VariantEncoder {
 		return size;
 	}
 
-	private size_variant(
-		value: number | bigint | boolean | string | Map<any, any> | any[] | object | undefined,
-	): number {
+	private size_variant(value: GodotValue): number {
 		let size = 4;
 
 		if (typeof value === "number" && (value > 2147483647 || value < -2147483648)) {
@@ -294,7 +290,9 @@ export class VariantEncoder {
 				} else {
 					// Non-native variants arrive as tagged objects
 					// (`{ __type__: "Vector2", x, y }`); the tag picks the wire layout.
-					switch ("__type__" in value ? value.__type__ : undefined) {
+					switch (
+						typeof value === "object" && value !== null && "__type__" in value ? value.__type__ : undefined
+					) {
 						case "Vector2":
 							size += this.size_UInt32() * 2;
 							break;
