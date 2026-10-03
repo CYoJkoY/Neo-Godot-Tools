@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import { TextDocument, Uri, workspace } from "vscode";
 import { SceneNode, Scene, SceneResource } from "./types";
+import { parseNodeProperties } from "./properties";
 import { createLogger } from "../utils";
 
 const log = createLogger("scenes.parser");
@@ -202,6 +203,7 @@ export class SceneParser {
 			}
 
 			if (lastNode) {
+				lastNode.bodyEnd = match.index;
 				lastNode.body = text.slice(lastNode.position, match.index);
 				lastNode.parse_body();
 			}
@@ -241,11 +243,20 @@ export class SceneParser {
 		}
 
 		if (lastNode) {
+			lastNode.bodyEnd = text.length;
 			lastNode.body = text.slice(lastNode.position);
 			lastNode.parse_body();
 		}
 
 		if (lastResource) lastResource.body = text.slice(lastResource.index).trimEnd();
+
+		// Overridden properties are parsed from the raw section text: the offsets
+		// they carry are what the Scene Preview edits.
+		for (const node of scene.nodes.values()) {
+			if (node.position < 0 || node.bodyEnd < 0) continue;
+			node.properties = parseNodeProperties(text, node.position, node.bodyEnd);
+		}
+		scene.source = text;
 		return scene;
 	}
 

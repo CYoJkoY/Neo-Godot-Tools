@@ -4,6 +4,7 @@ import {
 	MarkdownString,
 	Uri,
 } from "vscode";
+import type { SceneProperty } from "./properties";
 import * as path from "node:path";
 import { get_extension_uri } from "../utils";
 import * as fs from "node:fs";
@@ -19,6 +20,10 @@ export class SceneNode extends TreeItem {
 	public parent: string;
 	public text: string;
 	public position: number;
+	/** Offset where the next section of the scene starts. */
+	public bodyEnd = -1;
+	/** Overridden properties of this node, as written in the scene file. */
+	public properties: SceneProperty[] = [];
 	public body: string;
 	public unique = false;
 	public hasScript = false;
@@ -115,11 +120,36 @@ export class Scene {
 	public path: string;
 	public title: string;
 	public mtime: number;
+	/** Raw text of the scene file, used to compute property edits. */
+	public source = "";
 	public sourceFingerprint = "";
 	public root: SceneNode | undefined;
 	public externalResources: Map<string, GDResource> = new Map();
 	public subResources: Map<string, GDResource> = new Map();
 	public nodes: Map<string, SceneNode> = new Map();
+}
+
+/** Properties of a node, grouped in the Scene Preview tree. */
+export class ScenePropertiesGroup extends TreeItem {
+	constructor(public node: SceneNode) {
+		super("Properties", TreeItemCollapsibleState.Collapsed);
+		this.description = node.properties.length ? String(node.properties.length) : "none";
+		this.contextValue = "sceneProperties";
+		this.tooltip = node.properties.length
+			? "Overridden properties of this node"
+			: "This node overrides no properties";
+	}
+}
+
+/** One editable property of a node. */
+export class ScenePropertyItem extends TreeItem {
+	constructor(public node: SceneNode, public property: SceneProperty, label?: string) {
+		super(label ?? "", TreeItemCollapsibleState.None);
+		this.label = property.name;
+		this.description = property.raw.length > 80 ? `${property.raw.slice(0, 77)}...` : property.raw;
+		this.contextValue = "sceneProperty";
+		this.tooltip = new MarkdownString(`\`\`\`gdresource\n${property.name} = ${property.raw}\n\`\`\``);
+	}
 }
 
 export interface SceneResource {

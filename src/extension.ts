@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.lsp = new ClientConnectionManager(context);
 	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback(), new RenameFallback());
 	globals.debug = new GodotDebugger(context);
-	globals.scenePreviewProvider = new ScenePreviewProvider(context);
+	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });
 	globals.resourceInspector = new ResourceInspectorProvider(context, {
 		lspClient: () => globals.lsp?.client,
 	});

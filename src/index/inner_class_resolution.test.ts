@@ -364,6 +364,102 @@ class Worker extends Base:
 		assert.notEqual(override.id, baseDeclaration.id, "an override is its own declaration");
 	});
 
+	it("navigates static inner methods, casts and deep nesting", () => {
+		const source = `class_name Child
+class Outer:
+	class Inner:
+		class Deep:
+			func fn():
+				pass
+		var slot := "s"
+	var inner := Inner.new()
+
+func use(node) -> void:
+	var built := Outer.Inner.Deep.new()
+	built.fn()
+	var typed: Outer.Inner = Outer.Inner.new()
+	typed.slot
+	if node is Outer.Inner.Deep:
+		pass
+
+static func create() -> Outer.Inner:
+	return Outer.Inner.new()
+`;
+		const { semantic } = index(source);
+		// [marker around the click, word to click, expected symbol]
+		const cases: Array<[string, string, string, string]> = [
+			["var built := Outer.Inner.Deep.new()", "Deep", "Deep", "class"],
+			["built.fn()", "fn", "fn", "function"],
+			["var typed: Outer.Inner = Outer.Inner.new()", "Inner", "Inner", "class"],
+			["typed.slot", "slot", "slot", "variable"],
+			["if node is Outer.Inner.Deep:", "Deep", "Deep", "class"],
+			["static func create() -> Outer.Inner:", "Inner", "Inner", "class"],
+		];
+		for (const [marker, word, name, kind] of cases) {
+			const start = source.lastIndexOf(marker);
+			assert.ok(start >= 0, `marker ${marker} not found`);
+			const offset = start + marker.lastIndexOf(word) + Math.floor(word.length / 2);
+			const result = semantic.getDefinition(URI, { offset });
+			assert.equal(result.confidence, "exact", `${marker} must resolve`);
+			assert.equal(result.value?.name, name, `${marker} must reach ${name}`);
+			assert.equal(result.value?.kind, kind, `${marker} must reach a ${kind}`);
+		}
+	});
+
+	it("navigates members of an inner class reached through a static factory", () => {
+		const other = `class_name Inventory
+class Item:
+	var id := 0
+	func describe() -> String:
+		return "n/a"
+
+static func create() -> Inventory:
+	return Inventory.new()
+
+func items() -> Array:
+	return []
+`;
+		const source = `class_name Player
+var inventory := Inventory.create()
+
+func use() -> void:
+	inventory.items()
+	Inventory.create().items()
+	inventory.items().size()
+`;
+		const { semantic } = index(source, { "file:///workspace/inventory.gd": other });
+		for (const marker of ["inventory.items()", "Inventory.create().items()", "inventory.items().size()"]) {
+			const start = source.lastIndexOf(marker);
+			assert.ok(start >= 0, `marker ${marker} not found`);
+			const offset = start + marker.lastIndexOf("items") + 2;
+			const result = semantic.getDefinition(URI, { offset });
+			assert.equal(result.confidence, "exact", `${marker} must resolve`);
+			assert.equal(result.value?.name, "items", `${marker} must reach items`);
+			assert.equal(result.value?.uri, "file:///workspace/inventory.gd");
+		}
+	});
+
+	it("binds overridden and inherited calls to the right declaration", () => {
+		const source = `class_name Child
+class Base:
+	func ping():
+		pass
+class Worker extends Base:
+	func run():
+		self.ping()
+	func ping():
+		super.ping()
+`;
+		const { bindings } = index(source);
+		const base = bindings.getBinding(URI, source.indexOf("func ping"), "ping");
+		const override = bindings.getBinding(URI, source.lastIndexOf("func ping"), "ping");
+		assert.ok(base && override);
+		assert.notEqual(base.id, override.id, "an override declares its own member");
+		const lines = (binding: { id: string }) => bindings.findReferences(binding.id).map((reference) => reference.range.start.line + 1).sort((a, b) => a - b);
+		assert.deepEqual(lines(base), [3, 9], "the base and its super call share one binding");
+		assert.deepEqual(lines(override), [7, 8], "self.ping reaches the override, not the base");
+	});
+
 	it("completes members after a chained construction", () => {
 		const source = "class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
 		const result = completionsAt(source, "Worker.new().", "Worker.new().".length);
