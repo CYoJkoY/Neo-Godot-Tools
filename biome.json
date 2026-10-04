@@ -1,0 +1,36 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.3/schema.json",
+	"vcs": {
+		"defaultBranch": "master"
+	},
+	"formatter": {
+		"enabled": true,
+		"formatWithErrors": false,
+		"indentStyle": "tab",
+		"indentWidth": 4,
+		"lineWidth": 120,
+		"lineEnding": "lf",
+		"include": ["src/**/*.ts", "tools/**/*.ts"]
+	},
+	"files": {
+		"include": ["src/**/*.ts", "tools/**/*.ts"],
+		"ignore": ["node_modules", "src/dev/**"]
+	},
+	"linter": {
+		"rules": {
+			"complexity": {
+				"useLiteralKeys": "off"
+			},
+			"style": {
+				"noUselessElse": "off",
+				"useImportType": "off",
+				"noParameterAssign": "error",
+				"noUnusedTemplateLiteral": "off",
+				"noNonNullAssertion": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "error"
+			}
+		}
+	}
+}
