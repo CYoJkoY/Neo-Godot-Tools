@@ -3,9 +3,10 @@
  *
  * `docs/coding-standards.md` binds new and modified code, while the rest of the
  * repository migrates module by module. This checker keeps that honest: it
- * counts the limited constructs across `src` and `tools`, compares them with
- * `tools/standards_baseline.json`, and fails when a count grows. Counts may only
- * fall; `--update` refreshes the baseline after a deliberate reduction.
+ * counts the limited constructs across `src` and `tools` (test files excluded,
+ * see below), compares them with `tools/standards_baseline.json`, and fails when
+ * a count grows. Counts may only fall; `--update` refreshes the baseline after a
+ * deliberate reduction.
  *
  * Textual census rules live in `src/standards/census.ts` and are unit tested
  * there; this file only walks the tree, reads the baseline and reports.
@@ -29,11 +30,15 @@ const ROOT = path.resolve(__dirname, "..");
 const BASELINE_PATH = path.join(ROOT, "tools", "standards_baseline.json");
 const SCAN_DIRECTORIES: readonly string[] = ["src", "tools"];
 
+/**
+ * Test files are outside the ratchet: fixtures legitimately collect into
+ * arrays and mutate locals, and their growth must not force a baseline update.
+ */
 const readSourceFiles = (directory: string): readonly SourceFile[] =>
 	fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
 		const full = path.join(directory, entry.name);
 		if (entry.isDirectory()) return readSourceFiles(full);
-		if (!entry.name.endsWith(".ts")) return [];
+		if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) return [];
 		const relative = path.relative(ROOT, full).split(path.sep).join("/");
 		return [{ path: relative, source: fs.readFileSync(full, "utf8") }];
 	});
@@ -69,7 +74,7 @@ const verify = (current: StandardsBaseline, exempted: number): number => {
 	const totals = sum(Object.values(current).map(violationTotal));
 	const regressions = findRegressions(baseline, current);
 	console.log(
-		`Coding standard census: ${totals} tracked constructs in ${Object.keys(current).length} files ` +
+		`Coding standard census: ${totals} tracked constructs in ${Object.keys(current).length} source files ` +
 			`(${exempted} justified with "// perf:", ${improvements(baseline, current)} rules improved).`,
 	);
 

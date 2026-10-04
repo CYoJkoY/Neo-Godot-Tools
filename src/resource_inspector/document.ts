@@ -6,6 +6,7 @@
  * comments elsewhere in the file survive untouched.
  */
 
+import { LruCache } from "../utils/lru_cache.js";
 import { VariantValue, parseVariant } from "./values.js";
 
 /** Attributes a `[...]` section header may carry. */
@@ -215,6 +216,39 @@ export function parseResourceDocument(text: string): ResourceDocument {
 		line = end - 1;
 	}
 	return document;
+}
+
+/**
+ * Parse cache for open resource documents.
+ *
+ * Every edit, image preview and diagnostics pass re-parsed the whole file; the
+ * key is the `TextDocument.version`, so a changed document is parsed once and
+ * an unchanged one is served from memory.
+ */
+export interface DocumentParseCache {
+	/** Parses `text` unless the cached entry is already for `version`. */
+	parse(uri: string, version: number, text: () => string): ResourceDocument;
+	invalidate(uri: string): void;
+	readonly size: number;
+}
+
+export function createDocumentParseCache(capacity = 64): DocumentParseCache {
+	const entries = new LruCache<string, { version: number; parsed: ResourceDocument }>({ capacity });
+	return {
+		parse(uri, version, text) {
+			const cached = entries.get(uri);
+			if (cached?.version === version) return cached.parsed;
+			const parsed = parseResourceDocument(text());
+			entries.set(uri, { version, parsed });
+			return parsed;
+		},
+		invalidate(uri) {
+			entries.delete(uri);
+		},
+		get size() {
+			return entries.size;
+		},
+	};
 }
 
 export type ResourceEdit =

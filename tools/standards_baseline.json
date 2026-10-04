@@ -32,17 +32,6 @@
 		},
 		"perf": 0
 	},
-	"src/analyzer/parser.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/analyzer/parser.ts": {
 		"counts": {
 			"class": 1,
@@ -175,28 +164,6 @@
 		},
 		"perf": 0
 	},
-	"src/debugger/godot4/variables/debugger_variables.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 3,
-			"let": 1,
-			"throw": 11,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/debugger/godot4/variables/godot_id_to_vscode_id_mapper.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/debugger/godot4/variables/godot_id_to_vscode_id_mapper.ts": {
 		"counts": {
 			"class": 2,
@@ -204,17 +171,6 @@
 			"for": 0,
 			"let": 1,
 			"throw": 3,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/debugger/godot4/variables/godot_object_promise.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 1,
-			"throw": 0,
 			"while": 0
 		},
 		"perf": 0
@@ -395,17 +351,6 @@
 		},
 		"perf": 0
 	},
-	"src/formatter/formatter.test.ts": {
-		"counts": {
-			"class": 1,
-			"else": 0,
-			"for": 3,
-			"let": 4,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/formatter/formatter.ts": {
 		"counts": {
 			"class": 1,
@@ -450,17 +395,6 @@
 		},
 		"perf": 0
 	},
-	"src/index/bindings.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/index/bindings.ts": {
 		"counts": {
 			"class": 1,
@@ -469,39 +403,6 @@
 			"let": 7,
 			"throw": 0,
 			"while": 2
-		},
-		"perf": 0
-	},
-	"src/index/compatibility_fixture.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/control_flow_inferred.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/control_flow.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
 		},
 		"perf": 0
 	},
@@ -516,17 +417,6 @@
 		},
 		"perf": 0
 	},
-	"src/index/dependency_graph.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/index/dependency_graph.ts": {
 		"counts": {
 			"class": 1,
@@ -535,17 +425,6 @@
 			"let": 0,
 			"throw": 0,
 			"while": 1
-		},
-		"perf": 0
-	},
-	"src/index/enum_members.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 0,
-			"throw": 0,
-			"while": 0
 		},
 		"perf": 0
 	},
@@ -560,34 +439,12 @@
 		},
 		"perf": 0
 	},
-	"src/index/file_index.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/index/file_index.ts": {
 		"counts": {
 			"class": 1,
 			"else": 0,
 			"for": 1,
 			"let": 2,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/index.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
 			"throw": 0,
 			"while": 0
 		},
@@ -604,42 +461,9 @@
 		},
 		"perf": 0
 	},
-	"src/index/inherited_member_resolution.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 2,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/index/inherited_member_resolution.ts": {
 		"counts": {
 			"class": 1,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/inner_class_resolution.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 4,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/references.test.ts": {
-		"counts": {
-			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -659,40 +483,7 @@
 		},
 		"perf": 0
 	},
-	"src/index/scaling.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 3,
-			"let": 4,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/semantic_change.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/index/semantic_change.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/semantic_snapshot.test.ts": {
 		"counts": {
 			"class": 0,
 			"else": 0,
@@ -709,17 +500,6 @@
 			"else": 0,
 			"for": 1,
 			"let": 3,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/signature_phase6.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
 			"throw": 0,
 			"while": 0
 		},
@@ -758,39 +538,6 @@
 		},
 		"perf": 0
 	},
-	"src/index/type_resolution_control_flow.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/type_resolution_expression.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/index/type_resolution.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/index/type_resolution.ts": {
 		"counts": {
 			"class": 1,
@@ -799,28 +546,6 @@
 			"let": 12,
 			"throw": 0,
 			"while": 1
-		},
-		"perf": 0
-	},
-	"src/language/completion.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 4,
-			"throw": 0,
-			"while": 2
-		},
-		"perf": 0
-	},
-	"src/language/hover.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 4,
-			"throw": 0,
-			"while": 2
 		},
 		"perf": 0
 	},
@@ -846,34 +571,12 @@
 		},
 		"perf": 0
 	},
-	"src/language/semantic/gdscript_builtins.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/language/semantic/gdscript_builtins.ts": {
 		"counts": {
 			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 1,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/language/semantic/query_engine.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 2,
-			"let": 2,
 			"throw": 0,
 			"while": 0
 		},
@@ -890,17 +593,6 @@
 		},
 		"perf": 0
 	},
-	"src/language/semantic/resolution_policy.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/language/semantic/resolution_policy.ts": {
 		"counts": {
 			"class": 0,
@@ -912,34 +604,12 @@
 		},
 		"perf": 0
 	},
-	"src/language/service.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 2,
-			"let": 3,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/language/service.ts": {
 		"counts": {
 			"class": 1,
 			"else": 0,
 			"for": 2,
 			"let": 1,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/language/update_scheduler.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 3,
 			"throw": 0,
 			"while": 0
 		},
@@ -1022,17 +692,6 @@
 		},
 		"perf": 0
 	},
-	"src/performance/profiler.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 1,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/performance/profiler.ts": {
 		"counts": {
 			"class": 1,
@@ -1091,17 +750,6 @@
 	"src/providers/document_symbols.ts": {
 		"counts": {
 			"class": 1,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/providers/documentation_builder.test.ts": {
-		"counts": {
-			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -1242,33 +890,11 @@
 		},
 		"perf": 0
 	},
-	"src/resource_inspector/diagnostics.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/resource_inspector/diagnostics.ts": {
 		"counts": {
 			"class": 0,
 			"else": 0,
 			"for": 4,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/resource_inspector/document.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
 			"let": 0,
 			"throw": 0,
 			"while": 0
@@ -1286,17 +912,6 @@
 		},
 		"perf": 0
 	},
-	"src/resource_inspector/metadata.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 3,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/resource_inspector/metadata.ts": {
 		"counts": {
 			"class": 0,
@@ -1308,34 +923,12 @@
 		},
 		"perf": 0
 	},
-	"src/resource_inspector/panel_html.test.ts": {
-		"counts": {
-			"class": 1,
-			"else": 0,
-			"for": 1,
-			"let": 1,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/resource_inspector/panel_html.ts": {
 		"counts": {
 			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/resource_inspector/provider.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 5,
 			"throw": 0,
 			"while": 0
 		},
@@ -1363,17 +956,6 @@
 		},
 		"perf": 0
 	},
-	"src/resource_inspector/values.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 4,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/resource_inspector/values.ts": {
 		"counts": {
 			"class": 0,
@@ -1396,17 +978,6 @@
 		},
 		"perf": 0
 	},
-	"src/scene_tools/node_icons.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/scene_tools/node_icons.ts": {
 		"counts": {
 			"class": 1,
@@ -1415,17 +986,6 @@
 			"let": 7,
 			"throw": 0,
 			"while": 3
-		},
-		"perf": 0
-	},
-	"src/scene_tools/parser.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 1,
-			"throw": 0,
-			"while": 0
 		},
 		"perf": 0
 	},
@@ -1446,17 +1006,6 @@
 			"else": 4,
 			"for": 2,
 			"let": 3,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/scene_tools/properties.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 1,
-			"let": 1,
 			"throw": 0,
 			"while": 0
 		},
@@ -1491,17 +1040,6 @@
 			"for": 1,
 			"let": 1,
 			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"src/standards/census.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 2,
 			"while": 0
 		},
 		"perf": 0
@@ -1572,17 +1110,6 @@
 		},
 		"perf": 0
 	},
-	"src/utils/lru_cache.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
 	"src/utils/lru_cache.ts": {
 		"counts": {
 			"class": 1,
@@ -1602,17 +1129,6 @@
 			"let": 0,
 			"throw": 0,
 			"while": 0
-		},
-		"perf": 0
-	},
-	"src/utils/scheduling.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 3,
-			"throw": 0,
-			"while": 1
 		},
 		"perf": 0
 	},
@@ -1656,28 +1172,6 @@
 			"for": 0,
 			"let": 0,
 			"throw": 1,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"tools/changelog_workflow.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 0,
-			"throw": 0,
-			"while": 0
-		},
-		"perf": 0
-	},
-	"tools/changelog.test.ts": {
-		"counts": {
-			"class": 0,
-			"else": 0,
-			"for": 0,
-			"let": 1,
-			"throw": 0,
 			"while": 0
 		},
 		"perf": 0

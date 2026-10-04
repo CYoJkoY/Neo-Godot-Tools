@@ -35,7 +35,7 @@ import {
 	ResourceEdit,
 	SubResourceEntry,
 	applyResourceEdits,
-	parseResourceDocument,
+	createDocumentParseCache,
 	resourceReference,
 } from "./document.js";
 import {
@@ -128,6 +128,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private readonly nativePropertiesCache = new LruCache<string, Promise<LspPropertyInfo[] | undefined>>({
 		capacity: 64,
 	});
+	private readonly parsedDocuments = createDocumentParseCache();
 	private readonly watcher = vscode.workspace.createFileSystemWatcher("**/*.tres");
 	private readonly scriptWatcher = vscode.workspace.createFileSystemWatcher("**/*.gd");
 	private readonly pendingModelUpdates = new Map<string, ReturnType<typeof setTimeout>>();
@@ -256,7 +257,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	async openCurrentScript(): Promise<void> {
 		const doc = await this.currentDocument();
 		if (!doc) return;
-		const parsed = parseResourceDocument(doc.getText());
+		const parsed = this.parsedDocument(doc);
 		const scriptUri = await this.resolveMainScriptUri(doc.uri, parsed);
 		if (!scriptUri) {
 			void vscode.window.showInformationMessage("This resource does not have an attached script.");
@@ -419,7 +420,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		}
 		for (const doc of vscode.workspace.textDocuments) {
 			if (!isResourceDocument(doc)) continue;
-			const parsed = parseResourceDocument(doc.getText());
+			const parsed = this.parsedDocument(doc);
 			for (const ext of parsed.extResources) {
 				if (!ext.path) continue;
 				const resolved = resolveResourceUri(doc.uri, ext.path);
@@ -527,7 +528,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 			case "openImage": {
 				const document = await vscode.workspace.openTextDocument(uri);
-				const parsed = parseResourceDocument(document.getText());
+				const parsed = this.parsedDocument(document);
 				const owner = message.target ? parsed.subResources.find((sub) => sub.id === message.target) : undefined;
 				if (message.target && !owner) return;
 				const property = (owner?.properties ?? parsed.properties).find((entry) => entry.name === message.name);
@@ -640,7 +641,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 					return;
 				}
 				const document = await vscode.workspace.openTextDocument(uri);
-				const parsed = parseResourceDocument(document.getText());
+				const parsed = this.parsedDocument(document);
 				if (!parsed.subResources.some((resource) => resource.id === id)) return;
 				if (newId !== id && parsed.subResources.some((resource) => resource.id === newId)) {
 					void vscode.window.showWarningMessage(`A sub-resource named '${newId}' already exists.`);
@@ -679,7 +680,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	private async openExtResource(uri: vscode.Uri, id: string): Promise<void> {
 		const document = await vscode.workspace.openTextDocument(uri);
-		const resource = parseResourceDocument(document.getText()).extResources.find((entry) => entry.id === id);
+		const resource = this.parsedDocument(document).extResources.find((entry) => entry.id === id);
 		if (!resource?.path) {
 			void vscode.window.showWarningMessage(`ExtResource '${id}' has no path.`);
 			return;
@@ -732,7 +733,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const document = await vscode.workspace.openTextDocument(uri);
 		const text = document.getText();
 		const resourcePath = toResPath(uri, picked[0]);
-		const parsed = parseResourceDocument(text);
+		const parsed = this.parsedDocument(document);
 		if (parsed.extResources.some((resource) => resource.path === resourcePath)) {
 			void vscode.window.showInformationMessage("This external resource is already included.");
 			return;
@@ -770,7 +771,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		});
 		if (!picked?.length) return;
 		const document = await vscode.workspace.openTextDocument(uri);
-		const parsed = parseResourceDocument(document.getText());
+		const parsed = this.parsedDocument(document);
 		const relative = toResPath(uri, picked[0]);
 		const existing = parsed.extResources.find((entry) => entry.path === relative);
 		let text = document.getText();
@@ -824,6 +825,18 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	// ------------------------------------------------------------------ models
 
+	/**
+	 * Parses `document`, reusing the previous parse while its version is unchanged.
+	 * Every message from the webview used to re-read and re-parse the whole file,
+	 * which is the most expensive step of a property edit.
+	 *
+	 * The returned document is shared with the cache, so callers must treat it as
+	 * read-only (`ResourceDocument` is only ever rebuilt, never patched).
+	 */
+	private parsedDocument(document: vscode.TextDocument): ResourceDocument {
+		return this.parsedDocuments.parse(document.uri.toString(), document.version, () => document.getText());
+	}
+
 	private async reloadDocument(
 		uri: vscode.Uri,
 		webview: vscode.Webview | undefined,
@@ -860,7 +873,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	async buildModel(document: vscode.TextDocument, webview?: vscode.Webview): Promise<ResourceModel> {
-		const parsed = parseResourceDocument(document.getText());
+		const parsed = this.parsedDocument(document);
 		const { scriptSource, scriptPath, nativeBaseType } = await this.readScriptChain(document.uri, parsed);
 		const shaderSource =
 			(nativeBaseType ?? parsed.resourceType) === "ShaderMaterial"
@@ -1113,6 +1126,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async onDocumentClosed(document: vscode.TextDocument): Promise<void> {
+		this.parsedDocuments.invalidate(document.uri.toString());
 		if (!isResourceDocument(document)) return;
 		if (!this.locked && this.panelUri?.toString() === document.uri.toString()) {
 			const nextVisible = vscode.window.visibleTextEditors.find(
@@ -1127,6 +1141,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async onFileSystemChanged(uri: vscode.Uri): Promise<void> {
+		// The open document may not have picked the new content up yet, so the
+		// cached parse of an unchanged version can be stale here.
+		this.parsedDocuments.invalidate(uri.toString());
 		if (!isResourceFile(uri)) return;
 		if (this.panelUri?.toString() === uri.toString() || !this.panelUri) {
 			if (!this.locked && !this.panelUri) this.panelUri = uri;
@@ -1135,6 +1152,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async onFileDeleted(uri: vscode.Uri): Promise<void> {
+		this.parsedDocuments.invalidate(uri.toString());
 		if (this.panelUri?.toString() === uri.toString()) {
 			this.panelUri = undefined;
 			this.setLocked(false);

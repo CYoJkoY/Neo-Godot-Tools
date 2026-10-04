@@ -75,23 +75,24 @@ Violations found in code touched by a change must be fixed in the same change.
 
 ## 4. Current census (baseline for the ratchet)
 
-31,581 lines of TypeScript in 149 `src` files and 15 `tools` files.
+Roughly 31,600 lines of TypeScript in 149 `src` files and 15 `tools` files; the census covers the 121 non-test ones.
 
 Measured by `npm run check:standards`; strings and template literals are excluded, so
-embedded GDScript and webview JavaScript do not inflate the numbers.
+embedded GDScript and webview JavaScript do not inflate the numbers, and `*.test.ts` files are
+outside the ratchet — fixtures legitimately collect into arrays and mutate locals.
 
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
-| `class` declarations | 139 | debugger, index, tools, providers |
-| `let` / `var` declarations | 402 | debugger, resource inspector, index, providers |
-| `for` loops | 318 | index, resource inspector, debugger |
-| `while` / `do` loops | 78 | protocol and settle-wait loops |
+| `class` declarations | 137 | debugger, index, tools, providers |
+| `let` / `var` declarations | 360 | debugger, resource inspector, index, providers |
+| `for` loops | 284 | index, resource inspector, debugger |
+| `while` / `do` loops | 72 | protocol and settle-wait loops |
 | `} else` branches | 198 | debugger, resource inspector |
-| `throw` statements | 53 | parameter validation and protocol errors |
+| `throw` statements | 40 | parameter validation and protocol errors |
 | `as` assertions | 59 | narrowing the compiler cannot express |
 | `readonly` annotations | 158 | present, not yet uniform |
 
-Total tracked constructs: 1188 in 167 files; none needs a `// perf:` justification yet.
+Total tracked constructs: 1091 in 121 source files; none needs a `// perf:` justification yet.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -100,7 +101,7 @@ Total tracked constructs: 1188 in 167 files; none needs a `// perf:` justificati
    Stateful protocol machines (debugger sessions, LSP client) also earn their classes: they own
    sockets, buffers and disposable timers. The standard's "composition over inheritance" applies —
    `extends` is allowed only where the API demands it — and a class that only groups pure helpers
-   must become functions. Rewriting all 139 declarations would change the extension's contracts
+   must become functions. Rewriting all 137 declarations would change the extension's contracts
    without improving correctness.
 2. **Loops and `let` in measured hot paths.** The lexer/parser, variant encode/decode and index
    queries use indexed loops on purpose; `map`/`filter` allocate intermediate arrays and closure
