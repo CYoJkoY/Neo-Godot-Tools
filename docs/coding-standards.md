@@ -83,16 +83,20 @@ outside the ratchet — fixtures legitimately collect into arrays and mutate loc
 
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
-| `class` declarations | 137 | debugger, index, tools, providers |
-| `let` / `var` declarations | 360 | debugger, resource inspector, index, providers |
-| `for` loops | 284 | index, resource inspector, debugger |
-| `while` / `do` loops | 72 | protocol and settle-wait loops |
-| `} else` branches | 198 | debugger, resource inspector |
+| `class` declarations | 134 | debugger, index, tools, providers |
+| `let` / `var` declarations | 347 | debugger, resource inspector, index, providers |
+| `for` loops | 278 | index, resource inspector, debugger |
+| `while` / `do` loops | 71 | protocol and settle-wait loops |
+| `} else` branches | 194 | debugger, resource inspector |
 | `throw` statements | 40 | parameter validation and protocol errors |
-| `as` assertions | 59 | narrowing the compiler cannot express |
-| `readonly` annotations | 158 | present, not yet uniform |
 
-Total tracked constructs: 1091 in 121 source files; none needs a `// perf:` justification yet.
+Total tracked constructs: 1064 in 121 source files; none needs a `// perf:` justification yet.
+
+`as` assertions and `readonly` coverage are not ratcheted — they are reviewed per file during the §6
+migration — and the census strips comments and strings, so prose such as "renders a value as text"
+does not need a count. The 2026-10-04 cleanup removed the logger, profiler and LRU-cache classes and
+the last `while` outside the lexer: `src/utils` and `src/performance` are now class-free, and the
+remaining classes are VS Code contracts and protocol machines.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -137,7 +141,7 @@ Total tracked constructs: 1091 in 121 source files; none needs a `// perf:` just
 ```bash
 npx tsc -p tsconfig.json --noEmit        # product sources
 npx tsc -p tsconfig.test.json --noEmit   # tests and tools
-npm run test:unit                        # 256 unit tests
+npm run test:unit                        # 265 unit tests
 npm run lint                             # biome over src and tools, 0 errors required
 npm run compile                          # extension build
 npm run check:standards                  # coding standard ratchet (CI)

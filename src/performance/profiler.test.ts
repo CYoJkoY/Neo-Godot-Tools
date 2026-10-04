@@ -1,6 +1,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { type LanguageMetric, PerformanceProfiler, type PerformanceSnapshot } from "./profiler.js";
+import {
+	type LanguageMetric,
+	type PerformanceProfiler,
+	type PerformanceSnapshot,
+	createPerformanceProfiler,
+} from "./profiler.js";
 
 function sampleFor(snapshot: PerformanceSnapshot, metric: LanguageMetric) {
 	const sample = snapshot[metric];
@@ -9,7 +14,7 @@ function sampleFor(snapshot: PerformanceSnapshot, metric: LanguageMetric) {
 }
 
 test("PerformanceProfiler records aggregate and percentile latency", () => {
-	const profiler = new PerformanceProfiler();
+	const profiler: PerformanceProfiler = createPerformanceProfiler();
 	profiler.record("parse", 2);
 	profiler.record("parse", 3);
 
@@ -23,7 +28,7 @@ test("PerformanceProfiler records aggregate and percentile latency", () => {
 });
 
 test("PerformanceProfiler bounds retained latency samples", () => {
-	const profiler = new PerformanceProfiler();
+	const profiler: PerformanceProfiler = createPerformanceProfiler();
 	for (let index = 0; index < 513; index++) profiler.record("parse", index);
 
 	// The profiler keeps the 512 most recent samples (1..512) and uses the

@@ -15,7 +15,7 @@ import {
 import { globals } from "../extension";
 import { languageProfiler } from "../performance/profiler";
 import { createLogger, get_configuration, get_project_dir } from "../utils";
-import { LruCache } from "../utils/lru_cache";
+import { createLruCache } from "../utils/lru_cache";
 import { MessageIO } from "./MessageIO";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
@@ -105,8 +105,8 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	 * Bounded: a request that never receives a response (a disconnected or
 	 * wedged server) would otherwise be retained for the whole session.
 	 */
-	public sentMessages = new LruCache<string | number, RequestMessage>({ capacity: 512 });
-	private readonly requestStarts = new LruCache<string | number, number>({ capacity: 512 });
+	public sentMessages = createLruCache<string | number, RequestMessage>({ capacity: 512 });
+	private readonly requestStarts = createLruCache<string | number, number>({ capacity: 512 });
 	private rejected = false;
 
 	events = new EventEmitter();

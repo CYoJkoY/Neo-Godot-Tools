@@ -6,7 +6,7 @@
  * comments elsewhere in the file survive untouched.
  */
 
-import { LruCache } from "../utils/lru_cache.js";
+import { createLruCache } from "../utils/lru_cache.js";
 import { VariantValue, parseVariant } from "./values.js";
 
 /** Attributes a `[...]` section header may carry. */
@@ -233,7 +233,7 @@ export interface DocumentParseCache {
 }
 
 export function createDocumentParseCache(capacity = 64): DocumentParseCache {
-	const entries = new LruCache<string, { version: number; parsed: ResourceDocument }>({ capacity });
+	const entries = createLruCache<string, { version: number; parsed: ResourceDocument }>({ capacity });
 	return {
 		parse(uri, version, text) {
 			const cached = entries.get(uri);

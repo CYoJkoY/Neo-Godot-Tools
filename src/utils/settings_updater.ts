@@ -35,46 +35,39 @@ const LEGACY_NAMESPACE_SETTINGS = [
 function hasExplicitValue(configuration: vscode.WorkspaceConfiguration, setting: string): boolean {
 	const inspection = configuration.inspect(setting);
 	if (!inspection) return false;
-	return inspection.globalValue !== undefined
-		|| inspection.workspaceValue !== undefined
-		|| inspection.workspaceFolderValue !== undefined
-		|| inspection.globalLanguageValue !== undefined
-		|| inspection.workspaceLanguageValue !== undefined
-		|| inspection.workspaceFolderLanguageValue !== undefined;
+	return (
+		inspection.globalValue !== undefined ||
+		inspection.workspaceValue !== undefined ||
+		inspection.workspaceFolderValue !== undefined ||
+		inspection.globalLanguageValue !== undefined ||
+		inspection.workspaceLanguageValue !== undefined ||
+		inspection.workspaceFolderLanguageValue !== undefined
+	);
+}
+
+/** Copies an inherited value into `targetKey` unless it is already set explicitly there. */
+function migrate_value(configuration: vscode.WorkspaceConfiguration, sourceKey: string, targetKey: string): boolean {
+	const value = configuration.get(sourceKey);
+	if (value === undefined || hasExplicitValue(configuration, targetKey)) return false;
+	configuration.update(targetKey, value, true);
+	return true;
 }
 
 function updatePreviousNamespaceSettings(): boolean {
-	let settings_changed = false;
-	const legacyConfiguration = vscode.workspace.getConfiguration("neoGodotTools");
-	const currentConfiguration = vscode.workspace.getConfiguration("neoGodotTools");
-	for (const setting of LEGACY_NAMESPACE_SETTINGS) {
-		const value = legacyConfiguration.get(setting);
-		if (value === undefined || hasExplicitValue(currentConfiguration, setting)) {
-			continue;
-		}
-		currentConfiguration.update(setting, value, true);
-		settings_changed = true;
-	}
-	return settings_changed;
+	const configuration = vscode.workspace.getConfiguration("neoGodotTools");
+	return LEGACY_NAMESPACE_SETTINGS.map((setting) => migrate_value(configuration, setting, setting)).some(
+		(changed) => changed,
+	);
 }
 
-export function updateOldStyleSettings() {
+export function updateOldStyleSettings(): void {
 	const configuration = vscode.workspace.getConfiguration();
-	let settings_changed = updatePreviousNamespaceSettings();
-	for (const [old_style_key, new_style_key] of LEGACY_SETTING_CONVERSIONS) {
-		const value = configuration.get(old_style_key);
-		if (value === undefined || hasExplicitValue(configuration, new_style_key)) {
-			continue;
-		}
-		configuration.update(new_style_key, value, true);
-		settings_changed = true;
-	}
-	if (settings_changed) {
-		vscode.window.showInformationMessage(
-			`Neo Godot Tools settings have been updated to the current format.`,
-			"Okay"
-		);
-	}
+	const namespaceChanged = updatePreviousNamespaceSettings();
+	const legacyChanged = LEGACY_SETTING_CONVERSIONS.map(([oldStyleKey, newStyleKey]) =>
+		migrate_value(configuration, oldStyleKey, newStyleKey),
+	).some((changed) => changed);
+	if (!namespaceChanged && !legacyChanged) return;
+	vscode.window.showInformationMessage("Neo Godot Tools settings have been updated to the current format.", "Okay");
 }
 
 /**
@@ -82,8 +75,7 @@ export function updateOldStyleSettings() {
  * which persists across restarts & updates.
  */
 export function updateStoredVersion(context: vscode.ExtensionContext) {
-	const syncedVersion: string = vscode.extensions.getExtension(context.extension.id)
-		?.packageJSON.version;
+	const syncedVersion: string = vscode.extensions.getExtension(context.extension.id)?.packageJSON.version;
 	context.globalState.update("previousVersion", syncedVersion);
 }
 

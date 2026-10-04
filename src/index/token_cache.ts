@@ -1,5 +1,5 @@
 import { GDScriptToken, lexGDScript } from "../analyzer/index.js";
-import { LruCache } from "../utils/lru_cache.js";
+import { createLruCache } from "../utils/lru_cache.js";
 
 /**
  * Lexed tokens of an indexed file, shared by every consumer that needs them.
@@ -17,7 +17,7 @@ interface CachedTokens {
 }
 
 /** Files kept in memory; bounded so long sessions cannot grow without limit. */
-const cache = new LruCache<string, CachedTokens>({ capacity: 256 });
+const cache = createLruCache<string, CachedTokens>({ capacity: 256 });
 
 export function tokensFor(uri: string, source: string, fingerprint: string): GDScriptToken[] {
 	const cached = cache.get(uri);

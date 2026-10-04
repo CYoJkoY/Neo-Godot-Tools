@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { get_extension_uri } from "../utils";
-import { LruCache } from "../utils/lru_cache";
+import { createLruCache } from "../utils/lru_cache";
 import { yieldToEventLoop } from "../utils/scheduling";
 import type { Scene, SceneNode } from "./types";
 
@@ -15,7 +15,7 @@ const CLASS_INDEX_TTL_MS = 60_000;
  * permanent; the bound only keeps a project with thousands of distinct classes
  * from growing the map forever.
  */
-const iconCache = new LruCache<string, boolean>({ capacity: 2048 });
+const iconCache = createLruCache<string, boolean>({ capacity: 2048 });
 
 function icon_exists(className: string): boolean {
 	if (!className) return false;
@@ -152,7 +152,7 @@ class ClassNameIndex {
 }
 
 const classIndex = new ClassNameIndex();
-const baseClassCache = new LruCache<string, { base: string | undefined; mtime: number }>({ capacity: 512 });
+const baseClassCache = createLruCache<string, { base: string | undefined; mtime: number }>({ capacity: 512 });
 
 /** Invalidate cached custom-class metadata after a script file changed. */
 export function invalidateNodeIconCaches(): void {

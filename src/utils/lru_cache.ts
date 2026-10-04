@@ -14,67 +14,65 @@ export interface LruCacheOptions {
 	ttlMs?: number;
 }
 
+export interface LruCache<K, V> {
+	readonly size: number;
+	has(key: K): boolean;
+	/** `undefined` when absent, stale, or evicted. */
+	get(key: K): V | undefined;
+	set(key: K, value: V): void;
+	delete(key: K): void;
+	clear(): void;
+	/** Keys in insertion order, least recently used first. */
+	keys(): IterableIterator<K>;
+}
+
 interface Entry<V> {
 	value: V;
 	storedAt: number;
 }
 
-export class LruCache<K, V> {
-	private readonly entries = new Map<K, Entry<V>>();
-	private readonly capacity: number;
-	private readonly ttlMs: number | undefined;
+export function createLruCache<K, V>(options: LruCacheOptions = {}): LruCache<K, V> {
+	const capacity = Math.max(1, options.capacity ?? 256);
+	const ttlMs = options.ttlMs;
+	const entries = new Map<K, Entry<V>>();
 
-	constructor(options: LruCacheOptions = {}) {
-		this.capacity = Math.max(1, options.capacity ?? 256);
-		this.ttlMs = options.ttlMs;
-	}
-
-	get size(): number {
-		return this.entries.size;
-	}
-
-	has(key: K): boolean {
-		return this.lookup(key) !== undefined;
-	}
-
-	get(key: K): V | undefined {
-		return this.lookup(key)?.value;
-	}
-
-	set(key: K, value: V): void {
-		this.entries.delete(key);
-		this.entries.set(key, { value, storedAt: Date.now() });
-		while (this.entries.size > this.capacity) {
-			const oldest = this.entries.keys().next();
-			if (oldest.done) break;
-			this.entries.delete(oldest.value);
-		}
-	}
-
-	delete(key: K): void {
-		this.entries.delete(key);
-	}
-
-	clear(): void {
-		this.entries.clear();
-	}
-
-	/** Entries in insertion order, least recently used first. */
-	*keys(): IterableIterator<K> {
-		yield* this.entries.keys();
-	}
+	const dropOldest = (): void => {
+		const oldest = entries.keys().next();
+		if (!oldest.done) entries.delete(oldest.value);
+	};
 
 	/** Entry for `key`, refreshed by recency, or `undefined` when absent or stale. */
-	private lookup(key: K): Entry<V> | undefined {
-		const entry = this.entries.get(key);
-		if (!entry) return undefined;
-		if (this.ttlMs !== undefined && Date.now() - entry.storedAt > this.ttlMs) {
-			this.entries.delete(key);
+	const lookup = (key: K): Entry<V> | undefined => {
+		const entry = entries.get(key);
+		if (entry === undefined) return undefined;
+		if (ttlMs !== undefined && Date.now() - entry.storedAt > ttlMs) {
+			entries.delete(key);
 			return undefined;
 		}
 		// Re-insert so the eviction order reflects recency.
-		this.entries.delete(key);
-		this.entries.set(key, entry);
+		entries.delete(key);
+		entries.set(key, entry);
 		return entry;
-	}
+	};
+
+	return {
+		get size(): number {
+			return entries.size;
+		},
+		has: (key) => lookup(key) !== undefined,
+		get: (key) => lookup(key)?.value,
+		set: (key, value) => {
+			entries.delete(key);
+			entries.set(key, { value, storedAt: Date.now() });
+			// Re-inserting an existing key cannot grow the map past capacity + 1.
+			if (entries.size > capacity) dropOldest();
+		},
+		delete: (key) => {
+			entries.delete(key);
+		},
+		clear: () => {
+			entries.clear();
+		},
+		keys: () => entries.keys(),
+	};
 }

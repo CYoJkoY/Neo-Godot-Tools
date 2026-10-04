@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import { TextDocument, Uri, workspace } from "vscode";
 import { createLogger } from "../utils";
-import { LruCache } from "../utils/lru_cache";
+import { createLruCache } from "../utils/lru_cache";
 import { parseNodeProperties } from "./properties";
 import { Scene, SceneNode, SceneResource } from "./types";
 
@@ -18,7 +18,7 @@ const log = createLogger("scenes.parser");
  * visible without paying that cost per node.
  */
 const SCRIPT_TYPE_CACHE_TTL_MS = 5_000;
-const scriptTypeCache = new LruCache<string, { type: string | undefined }>({
+const scriptTypeCache = createLruCache<string, { type: string | undefined }>({
 	capacity: 512,
 	ttlMs: SCRIPT_TYPE_CACHE_TTL_MS,
 });

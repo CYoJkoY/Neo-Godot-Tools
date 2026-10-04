@@ -26,7 +26,7 @@ interface WebviewMessage {
 	metaType?: string;
 	subType?: string;
 }
-import { LruCache } from "../utils/lru_cache";
+import { createLruCache } from "../utils/lru_cache";
 import { withTimeout } from "../utils/scheduling.js";
 import { validateResourceDocument } from "./diagnostics.js";
 import {
@@ -125,7 +125,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private readonly editors = new Map<string, Set<vscode.WebviewPanel>>();
 	private readonly syncedVersions = new Map<string, number>();
 	private readonly modelGenerations = new WeakMap<vscode.Webview, number>();
-	private readonly nativePropertiesCache = new LruCache<string, Promise<LspPropertyInfo[] | undefined>>({
+	private readonly nativePropertiesCache = createLruCache<string, Promise<LspPropertyInfo[] | undefined>>({
 		capacity: 64,
 	});
 	private readonly parsedDocuments = createDocumentParseCache();
