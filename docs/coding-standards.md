@@ -84,13 +84,13 @@ outside the ratchet — fixtures legitimately collect into arrays and mutate loc
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
 | `class` declarations | 127 | debugger, tools, providers, the parser cursor (§5) |
-| `let` / `var` declarations | 330 | debugger, resource inspector, and the lexer/parser cursors |
-| `for` loops | 247 | debugger, resource inspector |
-| `while` / `do` loops | 41 | protocol loops, the lexer/parser cursors (§5) |
+| `let` / `var` declarations | 318 | debugger, resource inspector, and the lexer/parser cursors |
+| `for` loops | 229 | debugger, resource inspector |
+| `while` / `do` loops | 40 | protocol loops, the lexer/parser cursors (§5) |
 | `} else` branches | 187 | debugger, resource inspector |
 | `throw` statements | 40 | parameter validation and protocol errors |
 
-Total tracked constructs: 972 in 121 source files; 32 loops are justified with `// perf:` (§5).
+Total tracked constructs: 941 in 121 source files; 32 loops are justified with `// perf:` (§5).
 
 `as` assertions and `readonly` coverage are not ratcheted — they are reviewed per file during the §6
 migration — and the census strips comments and strings, so prose such as "renders a value as text"
@@ -101,7 +101,7 @@ The 2026-10-04 migration of §6 step 2 took the total from 1091 to 1025: `src/ut
 class-free, and `src/analyzer` lost the `else` chains and mutable declaration locals, with its
 scanning loops recorded under `// perf:`.
 
-Step 3 started from `src/index` and took the total from 1025 to 972. The seven index classes
+Step 3 started from `src/index` and took the total from 1025 to 941. The seven index classes
 (`FileIndex`, `SymbolIndex`, `DependencyGraph`, `TypeResolutionIndex`, `BindingIndex`,
 `ReferenceIndex`, `InheritedMemberResolver`) are now `create*` factories over module-local state,
 so callers depend on an exported interface instead of a class. The query helpers followed:
@@ -109,10 +109,12 @@ so callers depend on an exported interface instead of a class. The query helpers
 `control_flow.ts` (16 constructs -> 0: line grouping, branch chains and post-branch values are
 `map`/`filter`/`reduce` pipelines over the line list) and the cursor scans in `expression.ts`,
 which keep their loops under `// perf:` because they are the semantic query primitives, and the
-source hash in `semantic_snapshot.ts` (one pass per edit, `// perf:`). The remaining `let`/`for`
-load in this area sits in the two resolution passes (`type_resolution.ts` 31, `bindings.ts` 23),
-whose loops are cursor scans over the token stream; they are rewritten pass by pass, and each
-surviving scan gets its `// perf:` reason.
+source hash in `semantic_snapshot.ts` (one pass per edit, `// perf:`). The resolver followed:
+`type_resolution.ts` went from 31 constructs to 0 - the declaration walks are `reduce`/`flatMap`
+pre-order traversals, line statements are grouped in a `Map`, and qualified names and access
+chains are folds - differentially verified against the previous implementation (138 000 probes
+over every `*.gd` fixture, zero differences, before and after `invalidate`). What remains in this
+area is `bindings.ts` (23 constructs), rewritten next.
 
 ## 5. Exceptions (deliberate, with reasons)
 

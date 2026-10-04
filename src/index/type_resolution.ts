@@ -99,18 +99,16 @@ function findDeclaration(
 	name: string,
 ): GDScriptVariable | GDScriptConstant | undefined {
 	if (!file) return undefined;
-	const visit = (declarations: GDScriptDeclaration[]): GDScriptVariable | GDScriptConstant | undefined => {
-		for (const declaration of declarations) {
+	// Pre-order walk: a nested declaration of an earlier class wins over a later
+	// top-level one, which is what GDScript name lookup does.
+	const search = (declarations: GDScriptDeclaration[]): GDScriptVariable | GDScriptConstant | undefined =>
+		declarations.reduce<GDScriptVariable | GDScriptConstant | undefined>((found, declaration) => {
+			if (found) return found;
 			if ((declaration.kind === "variable" || declaration.kind === "constant") && declaration.name === name)
 				return declaration;
-			if (declaration.kind === "class") {
-				const nested = visit(declaration.declarations);
-				if (nested) return nested;
-			}
-		}
-		return undefined;
-	};
-	return visit(file.ast.declarations);
+			return declaration.kind === "class" ? search(declaration.declarations) : undefined;
+		}, undefined);
+	return search(file.ast.declarations);
 }
 
 function findScriptClassName(file: ReturnType<FileIndex["get"]>): string | undefined {
@@ -142,38 +140,29 @@ function topLevelCall(expression: string): { name: string } | undefined {
 	return match ? { name: match[1] } : undefined;
 }
 function findFunctions(declarations: GDScriptDeclaration[], name: string): GDScriptFunction[] {
-	const result: GDScriptFunction[] = [];
-	for (const declaration of declarations) {
-		if (declaration.kind === "function" && declaration.name === name) result.push(declaration);
-		if (declaration.kind === "class") result.push(...findFunctions(declaration.declarations, name));
-	}
-	return result;
+	return declarations.flatMap((declaration) => {
+		const own = declaration.kind === "function" && declaration.name === name ? [declaration] : [];
+		return declaration.kind === "class" ? [...own, ...findFunctions(declaration.declarations, name)] : own;
+	});
 }
 function findFunctionAt(declarations: GDScriptDeclaration[], offset: number): GDScriptFunction | undefined {
-	for (const declaration of declarations) {
+	return declarations.reduce<GDScriptFunction | undefined>((found, declaration) => {
+		if (found) return found;
 		if (declaration.kind === "function" && declaration.range.start.offset === offset) return declaration;
-		if (declaration.kind === "class") {
-			const nested = findFunctionAt(declaration.declarations, offset);
-			if (nested) return nested;
-		}
-	}
-	return undefined;
+		return declaration.kind === "class" ? findFunctionAt(declaration.declarations, offset) : undefined;
+	}, undefined);
 }
 function findContainingFunction(declarations: GDScriptDeclaration[], offset: number): GDScriptFunction | undefined {
-	for (const declaration of declarations) {
-		if (
-			declaration.kind === "function" &&
-			declaration.bodyRange &&
-			declaration.bodyRange.start.offset <= offset &&
-			offset <= declaration.bodyRange.end.offset
-		)
-			return declaration;
-		if (declaration.kind === "class") {
-			const nested = findContainingFunction(declaration.declarations, offset);
-			if (nested) return nested;
-		}
-	}
-	return undefined;
+	const contains = (declaration: GDScriptDeclaration): declaration is GDScriptFunction =>
+		declaration.kind === "function" &&
+		Boolean(declaration.bodyRange) &&
+		declaration.bodyRange!.start.offset <= offset &&
+		offset <= declaration.bodyRange!.end.offset;
+	return declarations.reduce<GDScriptFunction | undefined>((found, declaration) => {
+		if (found) return found;
+		if (contains(declaration)) return declaration;
+		return declaration.kind === "class" ? findContainingFunction(declaration.declarations, offset) : undefined;
+	}, undefined);
 }
 function splitConditional(expression: string): [string, string] | undefined {
 	const match = expression.match(/^(.*?)\s+if\s+.*?\s+else\s+(.*?)$/s);
@@ -185,6 +174,23 @@ function tokenText(tokens: GDScriptToken[]): string {
 		.join(" ")
 		.trim();
 }
+/** Appends `value` to the list under `key`, creating the list on first use. */
+function appendToGroup<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+	const entries = map.get(key);
+	if (entries) {
+		entries.push(value);
+		return;
+	}
+	map.set(key, [value]);
+}
+
+/** Index of the `=` assigning to the name at `nameIndex`, or `tokens.length`. */
+function equalsIndex(tokens: GDScriptToken[], nameIndex: number): number {
+	if (tokens[nameIndex + 1]?.value !== ":") return nameIndex + 1;
+	const found = tokens.findIndex((token, index) => index > nameIndex + 1 && token.value === "=");
+	return found === -1 ? tokens.length : found;
+}
+
 function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 	if (!tokens.length) return undefined;
 	if (tokens[0].value === "return") {
@@ -196,14 +202,10 @@ function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 	const nameIndex = tokens[0].value === "var" || tokens[0].value === "const" ? 1 : 0;
 	const name = tokens[nameIndex];
 	if (!name || name.kind !== "identifier") return undefined;
-	let equalsIndex = nameIndex + 1;
-	if (tokens[equalsIndex]?.value === ":") {
-		equalsIndex++;
-		while (equalsIndex < tokens.length && tokens[equalsIndex].value !== "=") equalsIndex++;
-	}
-	const isInferredAssignment = tokens[equalsIndex]?.value === ":=";
-	if (!isInferredAssignment && tokens[equalsIndex]?.value !== "=") return undefined;
-	const expressionTokens = tokens.slice(equalsIndex + 1);
+	const equals = equalsIndex(tokens, nameIndex);
+	const isInferredAssignment = tokens[equals]?.value === ":=";
+	if (!isInferredAssignment && tokens[equals]?.value !== "=") return undefined;
+	const expressionTokens = tokens.slice(equals + 1);
 	return {
 		kind: "assignment",
 		name: name.value,
@@ -217,29 +219,38 @@ function collectBodyStatements(
 	bodyRange: GDScriptFunction["bodyRange"],
 ): LocalStatement[] {
 	if (!bodyRange) return [];
-	const result: LocalStatement[] = [];
-	let lineTokens: GDScriptToken[] = [];
-	let currentLine = -1;
-	const flush = () => {
-		const statement = parseStatement(lineTokens);
-		if (statement) result.push(statement);
-		lineTokens = [];
-	};
-	for (const token of tokens) {
-		if (token.kind === "eof") break;
-		if (token.start < bodyRange.start.offset) continue;
-		if (token.end > bodyRange.end.offset) break;
-		if (token.kind === "newline") {
-			flush();
-			currentLine = -1;
-			continue;
-		}
-		if (currentLine !== -1 && token.line !== currentLine) flush();
-		currentLine = token.line;
-		lineTokens.push(token);
-	}
-	flush();
-	return result;
+	// Tokens are ordered, so filtering to the body span is the cursor walk the
+	// old accumulator did, and grouping by line keeps one statement per line.
+	const lines = new Map<number, GDScriptToken[]>();
+	tokens
+		.filter(
+			(token) =>
+				token.kind !== "eof" &&
+				token.kind !== "newline" &&
+				token.start >= bodyRange.start.offset &&
+				token.end <= bodyRange.end.offset,
+		)
+		.map((token) => appendToGroup(lines, token.line, token));
+	return [...lines.values()]
+		.map((lineTokens) => parseStatement(lineTokens))
+		.filter((statement): statement is LocalStatement => statement !== undefined);
+}
+
+/** `own` first, then inherited members whose names are not declared yet. */
+function mergeMembers(own: readonly IndexedSymbol[], inherited: readonly IndexedSymbol[]): IndexedSymbol[] {
+	const names = new Set(own.map((symbol) => symbol.name));
+	const merged = [...own];
+	inherited.map((symbol) => {
+		if (names.has(symbol.name)) return;
+		names.add(symbol.name);
+		merged.push(symbol);
+	});
+	return merged;
+}
+
+/** Deletes every entry whose key/value matches; the map is the only state to touch. */
+function deleteMatching<K, V>(map: Map<K, V>, matches: (key: K, value: V) => boolean): void {
+	[...map.entries()].filter(([key, value]) => matches(key, value)).map(([key]) => map.delete(key));
 }
 
 function normalizeScriptReference(value: string): string {
@@ -397,13 +408,14 @@ export function createTypeResolutionIndex(
 	const resolveContainingClass = (uri: string, offset: number): ResolvedType | undefined => {
 		const file = files.get(uri);
 		if (!file) return undefined;
-		let best: IndexedSymbol | undefined;
-		for (const symbol of file.symbols) {
-			if (symbol.kind !== "class") continue;
-			if (symbol.range.start.offset > offset || symbol.range.end.offset < offset) continue;
-			if (!best || symbol.range.start.offset > best.range.start.offset) best = symbol;
-		}
-		return best ? { name: best.name, uri, symbol: best, builtin: false } : undefined;
+		// Single pass with no intermediate array: this runs for every `self` and
+		// member receiver lookup.
+		const innermost = file.symbols.reduce<IndexedSymbol | undefined>((best, symbol) => {
+			if (symbol.kind !== "class") return best;
+			if (symbol.range.start.offset > offset || symbol.range.end.offset < offset) return best;
+			return !best || symbol.range.start.offset > best.range.start.offset ? symbol : best;
+		}, undefined);
+		return innermost ? { name: innermost.name, uri, symbol: innermost, builtin: false } : undefined;
 	};
 
 	/**
@@ -477,15 +489,18 @@ export function createTypeResolutionIndex(
 
 	/** `A.B`, `A.B.C`: walks the members of `A` until the last name. */
 	const resolveQualifiedName = (reference: string): ResolvedType | undefined => {
-		const parts = reference.split(".").filter(Boolean);
-		if (parts.length < 2) return undefined;
-		let current = resolveName(parts[0]);
-		for (let index = 1; index < parts.length && current; index++) {
-			const member = getMember(current, parts[index]);
-			if (!member) return undefined;
-			current = memberType(current, member);
-		}
-		return current;
+		const [head, ...members] = reference.split(".").filter(Boolean);
+		if (!head || !members.length) return undefined;
+		return members.reduce<ResolvedType | undefined>(
+			(current, name) => (current ? memberOf(current, name) : undefined),
+			resolveName(head),
+		);
+	};
+
+	/** Member `name` of `type` as a value, or `undefined` when it has no such member. */
+	const memberOf = (type: ResolvedType, name: string): ResolvedType | undefined => {
+		const member = getMember(type, name);
+		return member ? memberType(type, member) : undefined;
 	};
 
 	/**
@@ -494,24 +509,27 @@ export function createTypeResolutionIndex(
 	 * difference between "unknown" and "the wrong symbol".
 	 */
 	const resolveChain = (uri: string, offset: number, chain: readonly ChainLink[]): ResolvedType | undefined => {
-		let current: ResolvedType | undefined;
-		for (let index = 0; index < chain.length; index++) {
-			const link = chain[index];
-			if (index === 0) {
-				current = link.call
-					? resolveCallResult(uri, offset, link.name)
-					: resolveReceiver(uri, offset, link.name);
-				if (!current) return undefined;
-				continue;
-			}
-			if (!current) return undefined;
-			// `Type.new(...)` constructs the type itself rather than a member.
-			if (link.call && link.name === "new" && isClassLike(current)) continue;
-			const member = getMember(current, link.name);
-			if (!member) return undefined;
-			current = link.call ? resolveMemberReturnType(current, member) : memberType(current, member);
-		}
-		return current;
+		// One reduce over the caller's array: destructuring `[first, ...rest]`
+		// would copy the chain on every expression lookup.
+		return chain.reduce<ResolvedType | undefined>(
+			(current, link, index) =>
+				index === 0 ? resolveChainStart(uri, offset, link) : resolveChainLink(current, link),
+			undefined,
+		);
+	};
+
+	/** First link of a chain: a call resolves its result, anything else a receiver. */
+	const resolveChainStart = (uri: string, offset: number, link: ChainLink): ResolvedType | undefined =>
+		link.call ? resolveCallResult(uri, offset, link.name) : resolveReceiver(uri, offset, link.name);
+
+	/** One link of a chain: a missing receiver or member ends the walk. */
+	const resolveChainLink = (current: ResolvedType | undefined, link: ChainLink): ResolvedType | undefined => {
+		if (!current) return undefined;
+		// `Type.new(...)` constructs the type itself rather than a member.
+		if (link.call && link.name === "new" && isClassLike(current)) return current;
+		const member = getMember(current, link.name);
+		if (!member) return undefined;
+		return link.call ? resolveMemberReturnType(current, member) : memberType(current, member);
 	};
 
 	/** Result type of `name(...)`, resolving both functions and constructors. */
@@ -589,10 +607,7 @@ export function createTypeResolutionIndex(
 				? collectClassMembers(base.uri, base.symbol, visited)
 				: collectMembers(base.uri, visited)
 			: [];
-		const result = [...own];
-		for (const symbol of inherited)
-			if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
-		return result;
+		return mergeMembers(own, inherited);
 	};
 
 	const classMemberSignature = (uri: string, classSymbol: IndexedSymbol, visited: Set<string>): string => {
@@ -621,18 +636,17 @@ export function createTypeResolutionIndex(
 
 	const invalidate = (uris: Iterable<string>): void => {
 		const affected = new Set(uris);
-		for (const key of statementCache.keys()) {
+		deleteMatching(statementCache, (key) => {
 			const marker = key.indexOf(":function:");
-			if (marker >= 0 && affected.has(key.slice(0, marker))) statementCache.delete(key);
-		}
-		for (const [key] of memberCache) {
+			return marker >= 0 && affected.has(key.slice(0, marker));
+		});
+		deleteMatching(memberCache, (key) => {
 			const marker = key.indexOf("#");
-			const keyUri = marker >= 0 ? key.slice(0, marker) : key;
-			if (affected.has(keyUri)) memberCache.delete(key);
-		}
-		for (const [name, cached] of nameCache)
-			if (cached.value?.uri && affected.has(cached.value.uri)) nameCache.delete(name);
-		if (affected.size) for (const [name, cached] of nameCache) if (cached.value === null) nameCache.delete(name);
+			return affected.has(marker >= 0 ? key.slice(0, marker) : key);
+		});
+		deleteMatching(nameCache, (_name, cached) =>
+			cached.value === null ? affected.size > 0 : Boolean(cached.value.uri && affected.has(cached.value.uri)),
+		);
 	};
 
 	const clear = (): void => {
@@ -680,11 +694,7 @@ export function createTypeResolutionIndex(
 		// `class_name` is the type itself, not one of its members.
 		const own = file.symbols.filter((symbol) => !symbol.containerName && symbol.kind !== "class_name");
 		const base = resolveExtends(file.ast.declarations);
-		const inherited = base?.uri ? collectMembers(base.uri, visited) : [];
-		const result = [...own];
-		for (const symbol of inherited)
-			if (!result.some((candidate) => candidate.name === symbol.name)) result.push(symbol);
-		return result;
+		return mergeMembers(own, base?.uri ? collectMembers(base.uri, visited) : []);
 	};
 
 	const resolveExtends = (declarations: GDScriptDeclaration[]): ResolvedType | undefined => {
@@ -798,24 +808,36 @@ export function createTypeResolutionIndex(
 		const functionDeclaration = findContainingFunction(file.ast.declarations, offset);
 		if (!functionDeclaration) return undefined;
 		const controlFlow = collectControlFlowAssignments(file.source, functionDeclaration.bodyRange, name, offset);
-		if (controlFlow !== undefined) {
-			if (!controlFlow.length) return undefined;
-			let resolved: ResolvedType | undefined;
-			for (const expression of controlFlow) {
-				const type = resolveExpressionType(uri, expression, offset, new Set(visited));
-				if (!type) return undefined;
-				if (resolved && resolved.name !== type.name) return undefined;
-				resolved = type;
-			}
-			if (resolved) return resolved;
-		}
-		const statements = getBodyStatements(uri, functionDeclaration);
-		let latest: LocalStatement | undefined;
-		for (const statement of statements)
-			if (statement.kind === "assignment" && statement.name === name && statement.offset <= offset)
-				latest = statement;
+		// Relevant control flow with no safe branch assignment is an unknown type.
+		if (controlFlow !== undefined)
+			return controlFlow.length
+				? sharedExpressionType(
+						uri,
+						controlFlow.map((expression) => ({ expression, offset })),
+						visited,
+					)
+				: undefined;
+		const latest = getBodyStatements(uri, functionDeclaration)
+			.filter(
+				(statement): statement is Extract<LocalStatement, { kind: "assignment" }> =>
+					statement.kind === "assignment" && statement.name === name && statement.offset <= offset,
+			)
+			.at(-1);
 		if (!latest?.expression || latest.expressionOffset === undefined) return undefined;
 		return resolveExpressionType(uri, latest.expression, latest.expressionOffset, visited);
+	};
+
+	/** Type every expression shares, or `undefined` when one is unknown or they disagree. */
+	const sharedExpressionType = (
+		uri: string,
+		expressions: readonly { expression: string; offset: number }[],
+		visited: Set<string>,
+	): ResolvedType | undefined => {
+		const types = expressions
+			.map((item) => resolveExpressionType(uri, item.expression, item.offset, new Set(visited)))
+			.filter((type): type is ResolvedType => type !== undefined);
+		if (types.length !== expressions.length) return undefined;
+		return types.every((type) => type.name === types[0].name) ? types[0] : undefined;
 	};
 
 	const resolveFunctionReturnTypeForSymbol = (
@@ -827,16 +849,15 @@ export function createTypeResolutionIndex(
 		const declaration = findFunctionAt(file.ast.declarations, member.range.start.offset);
 		if (!declaration) return resolveFunctionReturnType(member.uri, member.name, visited);
 		if (declaration.returnType) return resolveTypeReference(declaration.returnType);
-		const returns = getBodyStatements(member.uri, declaration).filter((statement) => statement.kind === "return");
+		const returns = getBodyStatements(member.uri, declaration).filter(
+			(statement): statement is Extract<LocalStatement, { kind: "return" }> => statement.kind === "return",
+		);
 		if (!returns.length) return undefined;
-		let resolved: ResolvedType | undefined;
-		for (const item of returns) {
-			const type = resolveExpressionType(member.uri, item.expression, item.expressionOffset, visited);
-			if (!type) return undefined;
-			if (resolved && resolved.name !== type.name) return undefined;
-			resolved = type;
-		}
-		return resolved;
+		return sharedExpressionType(
+			member.uri,
+			returns.map((item) => ({ expression: item.expression, offset: item.expressionOffset })),
+			visited,
+		);
 	};
 
 	const resolveFunctionReturnType = (uri: string, name: string, visited: Set<string>): ResolvedType | undefined => {
@@ -853,14 +874,11 @@ export function createTypeResolutionIndex(
 			(statement): statement is Extract<LocalStatement, { kind: "return" }> => statement.kind === "return",
 		);
 		if (!returns.length) return undefined;
-		let resolved: ResolvedType | undefined;
-		for (const item of returns) {
-			const type = resolveExpressionType(uri, item.expression, item.expressionOffset, visited);
-			if (!type) return undefined;
-			if (resolved && resolved.name !== type.name) return undefined;
-			resolved = type;
-		}
-		return resolved;
+		return sharedExpressionType(
+			uri,
+			returns.map((item) => ({ expression: item.expression, offset: item.expressionOffset })),
+			visited,
+		);
 	};
 
 	return {

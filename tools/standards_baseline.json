@@ -542,10 +542,10 @@
 		"counts": {
 			"class": 0,
 			"else": 0,
-			"for": 18,
-			"let": 12,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
-			"while": 1
+			"while": 0
 		},
 		"perf": 0
 	},
