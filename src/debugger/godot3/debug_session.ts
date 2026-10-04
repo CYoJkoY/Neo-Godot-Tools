@@ -125,20 +125,18 @@ export class GodotDebugSession extends LoggingDebugSession {
 	) {
 		await debug.activeDebugSession?.customRequest("scopes", { frameId: 0 });
 
-		if (this.all_scopes) {
-			try {
-				const variable = this.get_variable(args.expression, undefined, 0, undefined);
-				if (variable.variable && variable.index !== undefined) {
-					const parsed_variable = parse_variable(variable.variable);
-					response.body = {
-						result: parsed_variable.value,
-						variablesReference: !is_variable_built_in_type(variable.variable) ? variable.index : 0,
-					};
-				}
-			} catch (error) {
-				response.success = false;
-				response.message = (error as Error).toString();
+		try {
+			const variable = this.get_variable(args.expression, undefined, 0, undefined);
+			if (variable.variable && variable.index !== undefined) {
+				const parsed_variable = parse_variable(variable.variable);
+				response.body = {
+					result: parsed_variable.value,
+					variablesReference: !is_variable_built_in_type(variable.variable) ? variable.index : 0,
+				};
 			}
+		} catch (error) {
+			response.success = false;
+			response.message = (error as Error).toString();
 		}
 
 		if (!response.body) {
@@ -268,14 +266,6 @@ export class GodotDebugSession extends LoggingDebugSession {
 		response: DebugProtocol.VariablesResponse,
 		args: DebugProtocol.VariablesArguments,
 	) {
-		if (!this.all_scopes) {
-			response.body = {
-				variables: [],
-			};
-			this.sendResponse(response);
-			return;
-		}
-
 		const reference = this.all_scopes[args.variablesReference];
 		let variables: DebugProtocol.Variable[];
 

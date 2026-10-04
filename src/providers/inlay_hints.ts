@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import {
 	CancellationToken,
+	Disposable,
 	DocumentSymbol,
 	Event,
 	EventEmitter,
@@ -66,6 +67,9 @@ export class GDInlayHintsProvider implements InlayHintsProvider {
 	public parser = new SceneParser();
 
 	private _onDidChangeInlayHints = new EventEmitter<void>();
+	private statusChanged?: Disposable;
+	private refreshTimer?: ReturnType<typeof setTimeout>;
+
 	get onDidChangeInlayHints(): Event<void> {
 		return this._onDidChangeInlayHints.event;
 	}
@@ -76,16 +80,29 @@ export class GDInlayHintsProvider implements InlayHintsProvider {
 			{ language: "gdscene", scheme: "file" },
 			{ language: "gdscript", scheme: "file" },
 		];
-		context.subscriptions.push(vscode.languages.registerInlayHintsProvider(selector, this));
+		context.subscriptions.push(vscode.languages.registerInlayHintsProvider(selector, this), this);
 
-		globals.lsp?.onStatusChanged((status) => {
+		this.statusChanged = globals.lsp?.onStatusChanged((status) => {
 			this._onDidChangeInlayHints.fire();
-			if (status === ManagerStatus.CONNECTED) {
-				setTimeout(() => {
-					this._onDidChangeInlayHints.fire();
-				}, 250);
-			}
+			if (status === ManagerStatus.CONNECTED) this.scheduleRefresh();
 		});
+	}
+
+	/** The engine sends its scene data slightly after the handshake, so refresh once more. */
+	private scheduleRefresh(): void {
+		if (this.refreshTimer) clearTimeout(this.refreshTimer);
+		this.refreshTimer = setTimeout(() => {
+			this.refreshTimer = undefined;
+			this._onDidChangeInlayHints.fire();
+		}, 250);
+	}
+
+	dispose(): void {
+		if (this.refreshTimer) clearTimeout(this.refreshTimer);
+		this.refreshTimer = undefined;
+		this.statusChanged?.dispose();
+		this.statusChanged = undefined;
+		this._onDidChangeInlayHints.dispose();
 	}
 
 	buildHint(start: Position, detail: string): InlayHint {

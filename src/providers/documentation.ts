@@ -25,6 +25,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 	public htmlDb = new Map<string, string>();
 
 	private ready = false;
+	private markCapabilitiesReady?: () => void;
 
 	constructor(context: ExtensionContext) {
 		const options = {
@@ -59,6 +60,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 			}
 		}
 		this.ready = true;
+		this.markCapabilitiesReady?.();
 	}
 
 	public async list_native_classes() {
@@ -79,10 +81,24 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 		return { uri: uri, dispose: () => {} };
 	}
 
+	/**
+	 * Resolves when `gdscript/capabilities` has arrived, or when the editor is
+	 * closed: polling for it burned a timer per open panel and kept the panel
+	 * waiting forever while Godot was not running.
+	 */
+	private waitForCapabilities(token: CancellationToken): Promise<void> {
+		if (this.ready) return Promise.resolve();
+		const ready = new Promise<void>((resolve) => {
+			this.markCapabilitiesReady = resolve;
+		});
+		const cancelled = new Promise<void>((resolve) => token.onCancellationRequested(resolve));
+		return Promise.race([ready, cancelled]);
+	}
+
 	public async resolveCustomEditor(
 		document: CustomDocument,
 		panel: WebviewPanel,
-		_token: CancellationToken,
+		token: CancellationToken,
 	): Promise<void> {
 		const className = document.uri.path.split(".")[0];
 		const target = document.uri.fragment;
@@ -92,9 +108,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 			enableScripts: true,
 		};
 
-		while (!this.ready) {
-			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
+		await this.waitForCapabilities(token);
 
 		symbol = this.symbolDb.get(className);
 
