@@ -1,14 +1,14 @@
+import * as fs from "node:fs";
 import {
-    Breakpoint,
-    InitializedEvent,
-    LoggingDebugSession,
-    Source,
-    TerminatedEvent,
-    Thread,
+	Breakpoint,
+	InitializedEvent,
+	LoggingDebugSession,
+	Source,
+	TerminatedEvent,
+	Thread,
 } from "@vscode/debugadapter";
 import { DebugProtocol } from "@vscode/debugprotocol";
 import { Subject } from "await-notify";
-import * as fs from "node:fs";
 import { createLogger } from "../../utils";
 import { GodotDebugData } from "../debug_runtime";
 import { AttachRequestArguments, LaunchRequestArguments } from "../debugger";
@@ -22,8 +22,9 @@ const log = createLogger("debugger.session", { output: "Godot Debugger" });
 export class GodotDebugSession extends LoggingDebugSession {
 	public controller = new ServerController(this);
 	public debug_data = new GodotDebugData(this);
-	public sceneTree: SceneTreeProvider;
-	public inspector: InspectorProvider;
+	/** Injected by `GodotDebugger` when the session is created. */
+	public sceneTree?: SceneTreeProvider;
+	public inspector?: InspectorProvider;
 	private configuration_done: Subject = new Subject();
 	private mode: "launch" | "attach" | "" = "";
 
@@ -38,11 +39,11 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.controller.setProjectVersion(projectVersion);
 	}
 
-	public dispose() {
+	public override dispose() {
 		this.controller.stop();
 	}
 
-	protected initializeRequest(
+	protected override initializeRequest(
 		response: DebugProtocol.InitializeResponse,
 		args: DebugProtocol.InitializeRequestArguments,
 	) {
@@ -74,7 +75,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendEvent(new InitializedEvent());
 	}
 
-	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments) {
+	protected override async launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments) {
 		log.info("launchRequest", args);
 		await this.configuration_done.wait(1000);
 
@@ -86,7 +87,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected async attachRequest(response: DebugProtocol.AttachResponse, args: AttachRequestArguments) {
+	protected override async attachRequest(response: DebugProtocol.AttachResponse, args: AttachRequestArguments) {
 		log.info("attachRequest", args);
 		await this.configuration_done.wait(1000);
 
@@ -98,7 +99,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	public configurationDoneRequest(
+	public override configurationDoneRequest(
 		response: DebugProtocol.ConfigurationDoneResponse,
 		args: DebugProtocol.ConfigurationDoneArguments,
 	) {
@@ -107,26 +108,29 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments) {
+	protected override continueRequest(
+		response: DebugProtocol.ContinueResponse,
+		args: DebugProtocol.ContinueArguments,
+	) {
 		log.info("continueRequest", args);
 		response.body = { allThreadsContinued: true };
 		this.controller.continue();
 		this.sendResponse(response);
 	}
 
-	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments) {
+	protected override nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments) {
 		log.info("nextRequest", args);
 		this.controller.next();
 		this.sendResponse(response);
 	}
 
-	protected pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments) {
+	protected override pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments) {
 		log.info("pauseRequest", args);
 		this.controller.break();
 		this.sendResponse(response);
 	}
 
-	protected setBreakPointsRequest(
+	protected override setBreakPointsRequest(
 		response: DebugProtocol.SetBreakpointsResponse,
 		args: DebugProtocol.SetBreakpointsArguments,
 	) {
@@ -166,19 +170,22 @@ export class GodotDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments) {
+	protected override stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments) {
 		log.info("stepInRequest", args);
 		this.controller.step();
 		this.sendResponse(response);
 	}
 
-	protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments) {
+	protected override stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments) {
 		log.info("stepOutRequest", args);
 		this.controller.step_out();
 		this.sendResponse(response);
 	}
 
-	protected terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments) {
+	protected override terminateRequest(
+		response: DebugProtocol.TerminateResponse,
+		args: DebugProtocol.TerminateArguments,
+	) {
 		log.info("terminateRequest", args);
 		if (this.mode === "launch") {
 			this.controller.stop();
@@ -187,14 +194,17 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected threadsRequest(response: DebugProtocol.ThreadsResponse) {
+	protected override threadsRequest(response: DebugProtocol.ThreadsResponse) {
 		log.info("threadsRequest");
 		response.body = { threads: [new Thread(0, "thread_1")] };
 		log.info("threadsRequest response", response);
 		this.sendResponse(response);
 	}
 
-	protected stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments) {
+	protected override stackTraceRequest(
+		response: DebugProtocol.StackTraceResponse,
+		args: DebugProtocol.StackTraceArguments,
+	) {
 		log.info("stackTraceRequest", args);
 		if (this.debug_data.last_frame) {
 			response.body = {
@@ -215,11 +225,13 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected async scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments) {
+	protected override async scopesRequest(
+		response: DebugProtocol.ScopesResponse,
+		args: DebugProtocol.ScopesArguments,
+	) {
 		log.info("scopesRequest", args);
 
-		if (this.variables_manager === undefined)
-			return; // not inside a debug_enter/debug_exit
+		if (this.variables_manager === undefined) return; // not inside a debug_enter/debug_exit
 
 		// this.variables_manager.variablesFrameId = args.frameId;
 
@@ -244,14 +256,13 @@ export class GodotDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected async variablesRequest(
+	protected override async variablesRequest(
 		response: DebugProtocol.VariablesResponse,
 		args: DebugProtocol.VariablesArguments,
 	) {
 		log.info("variablesRequest", args);
 
-		if (this.variables_manager === undefined)
-			return; // not inside a debug_enter/debug_exit
+		if (this.variables_manager === undefined) return; // not inside a debug_enter/debug_exit
 
 		try {
 			const variables = await this.variables_manager.get_vscode_object(args.variablesReference);
@@ -262,18 +273,20 @@ export class GodotDebugSession extends LoggingDebugSession {
 		} catch (error) {
 			log.error("variablesRequest", error);
 			response.success = false;
-			response.message = error.toString();
+			response.message = `${error}`;
 		}
 
 		log.info("variablesRequest response", response);
 		this.sendResponse(response);
 	}
 
-	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments) {
+	protected override async evaluateRequest(
+		response: DebugProtocol.EvaluateResponse,
+		args: DebugProtocol.EvaluateArguments,
+	) {
 		log.info("evaluateRequest", args);
 
-		if (this.variables_manager === undefined)
-			return; // not inside a debug_enter/debug_exit
+		if (this.variables_manager === undefined) return; // not inside a debug_enter/debug_exit
 
 		try {
 			const parsed_variable = await this.variables_manager.get_vscode_variable_by_name(
@@ -286,7 +299,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 			};
 		} catch (error) {
 			response.success = false;
-			response.message = error.toString();
+			response.message = `${error}`;
 			response.body = {
 				result: "null",
 				variablesReference: 0,

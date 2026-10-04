@@ -1,16 +1,11 @@
 import * as vscode from "vscode";
 import { format_document_async } from "./textmate";
-import { createLogger } from "../utils";
-
-const log = createLogger("formatter");
 
 export class FormattingProvider implements vscode.DocumentFormattingEditProvider {
-	constructor(private context: vscode.ExtensionContext) {
+	constructor(context: vscode.ExtensionContext) {
 		const selector = { language: "gdscript", scheme: "file" };
 
-		context.subscriptions.push(
-			vscode.languages.registerDocumentFormattingEditProvider(selector, this),
-		);
+		context.subscriptions.push(vscode.languages.registerDocumentFormattingEditProvider(selector, this));
 	}
 
 	public provideDocumentFormattingEdits(document: vscode.TextDocument) {

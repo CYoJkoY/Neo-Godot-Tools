@@ -1,34 +1,30 @@
 import * as vscode from "vscode";
 import {
-	Uri,
-	Range,
-	Position,
-	type TextDocument,
 	type CancellationToken,
 	DocumentLink,
 	type DocumentLinkProvider,
 	type ExtensionContext,
+	Position,
+	Range,
+	type TextDocument,
+	Uri,
 } from "vscode";
 import { SceneParser } from "../scene_tools";
-import { convert_resource_path_to_uri, convert_uids_to_uris, createLogger } from "../utils";
-
-const log = createLogger("providers.document_links");
+import { convert_resource_path_to_uri, convert_uids_to_uris } from "../utils";
 
 export class GDDocumentLinkProvider implements DocumentLinkProvider {
 	public parser = new SceneParser();
 
-	constructor(private context: ExtensionContext) {
+	constructor(context: ExtensionContext) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },
 			{ language: "gdscript", scheme: "file" },
 		];
-		context.subscriptions.push(
-			vscode.languages.registerDocumentLinkProvider(selector, this),
-		);
+		context.subscriptions.push(vscode.languages.registerDocumentLinkProvider(selector, this));
 	}
 
-	async provideDocumentLinks(document: TextDocument, token: CancellationToken): Promise<DocumentLink[]> {
+	async provideDocumentLinks(document: TextDocument, _token: CancellationToken): Promise<DocumentLink[]> {
 		const scene = this.parser.parse_scene(document);
 		const text = document.getText();
 		const path = document.uri.fsPath;

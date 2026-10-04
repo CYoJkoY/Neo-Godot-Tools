@@ -1,191 +1,178 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
+import { createBindingIndex } from "../../index/bindings.js";
+import { createFileIndex } from "../../index/file_index.js";
+import { createSymbolIndex } from "../../index/symbol_index.js";
+import { createTypeResolutionIndex } from "../../index/type_resolution.js";
 import { SemanticQueryEngine } from "./query_engine.js";
-import type { BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
 
-const uri = "file:///project/player.gd";
-const variable: IndexedSymbol = {
-	name: "player",
-	kind: "variable",
-	uri,
-	range: { start: { offset: 0, line: 0, character: 0 }, end: { offset: 6, line: 0, character: 6 } },
-	type: "Player",
-};
-const playerType: ResolvedType = { name: "Player", uri, symbol: variable, builtin: false };
+/**
+ * These tests exercise the query engine against the real indexes.
+ *
+ * Earlier revisions replaced the indexes with object literals; the engine then
+ * passed its own plumbing but nothing about GDScript. A stub also cannot notice
+ * an index API change, which is how the tests kept "passing" after the receiver
+ * resolution was rewritten.
+ */
 
-function engineFor(source: string, options?: {
-	fileSymbols?: IndexedSymbol[];
-	binding?: { name: string; uri: string; declarationRange: IndexedSymbol["range"]; kind: "member" | "local" | "parameter" | "function"; type?: string; id?: string };
-	visibleBindings?: Array<{ name: string; uri: string; declarationRange: IndexedSymbol["range"]; kind: "member" | "local" | "parameter" | "function"; type?: string; id?: string }>;
-	workspace?: IndexedSymbol[];
-	resolvedType?: ResolvedType;
-	members?: IndexedSymbol[];
-	references?: Array<{ bindingId: string; name: string; uri: string; range: IndexedSymbol["range"] }>;
-	symbolSignature?: { value: string };
-	workspaceSignature?: { value: string };
-}): SemanticQueryEngine {
-	const file = {
-		uri,
-		version: 1,
-		source,
-		sourceFingerprint: `source:${source}`,
-		apiFingerprint: `api:${source}`,
-		ast: {} as never,
-		diagnostics: [],
-		symbols: options?.fileSymbols ?? [variable],
-	};
-	const files = { get: () => file } as unknown as FileIndex;
-	const symbols = {
-		find: () => options?.workspace ?? [],
-		signature: () => options?.symbolSignature?.value ?? "symbols",
-		workspaceSymbols: () => options?.workspace ?? [],
-		workspaceSignature: () => options?.workspaceSignature?.value ?? "workspace",
-	} as unknown as SymbolIndex;
-	const bindings = {
-		getBinding: () => options?.binding,
-		getVisibleBindings: () => options?.visibleBindings ?? [],
-		findReferences: () => options?.references ?? [],
-	} as unknown as BindingIndex;
-	const types = {
-		resolveReceiver: () => options?.resolvedType,
-		resolveName: (name: string) => name === "Player" ? playerType : undefined,
-		getMember: (_type: ResolvedType, name: string) => options?.members?.find((member) => member.name === name),
-		getMembers: () => options?.members ?? [],
-	} as unknown as TypeResolutionIndex;
-	return new SemanticQueryEngine(files, symbols, bindings, types);
+const URI = "file:///workspace/player.gd";
+
+function createEngine(source: string, extra: Record<string, string> = {}) {
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	for (const [uri, text] of Object.entries({ [URI]: source, ...extra })) {
+		files.update(uri, text, 1);
+		symbols.update(uri);
+		bindings.update(uri);
+	}
+	const types = createTypeResolutionIndex(files, symbols, bindings);
+	return { engine: new SemanticQueryEngine(files, symbols, bindings, types), files, symbols, bindings, types };
 }
 
+/** Offset in the middle of the `occurrence`-th `word` of the source. */
+function wordOffset(source: string, word: string, occurrence = 0): number {
+	let start = -1;
+	for (let index = 0; index <= occurrence; index++) start = source.indexOf(word, start + 1);
+	assert.ok(start >= 0, `word ${JSON.stringify(word)} not found`);
+	return start + Math.floor(word.length / 2);
+}
+
+const SOURCE = `class_name Player
+extends Node
+
+var health: int = 100
+
+func heal(amount: int) -> void:
+	health += amount
+`;
+
 describe("SemanticQueryEngine", () => {
-	it("returns exact confidence for a bound symbol", () => {
-		const engine = engineFor("player", {
-			binding: {
-				name: "player",
-				uri,
-				declarationRange: variable.range,
-				kind: "member",
-				type: "Player",
-			},
-		});
-		const result = engine.getSymbol(uri, { offset: 2 });
+	it("resolves a declared member to its declaration", () => {
+		const { engine } = createEngine(SOURCE);
+		const result = engine.getDefinition(URI, { offset: wordOffset(SOURCE, "health", 1) });
 		assert.equal(result.confidence, "exact");
-		assert.equal(result.value?.name, "player");
+		assert.equal(result.value?.name, "health");
+		assert.equal(result.value?.kind, "variable");
 	});
 
-	it("returns the cached symbol result until its URI is invalidated", () => {
-		const engine = engineFor("player", {
-			binding: {
-				name: "player",
-				uri,
-				declarationRange: variable.range,
-				kind: "member",
-				type: "Player",
-			},
+	it("returns unknown confidence for a name that is not in the project", () => {
+		const { engine } = createEngine("class_name Player\nfunc heal():\n\tnot_a_symbol\n");
+		assert.equal(
+			engine.getDefinition(URI, {
+				offset: wordOffset("class_name Player\nfunc heal():\n\tnot_a_symbol\n", "not_a_symbol"),
+			}).confidence,
+			"unknown",
+		);
+	});
+
+	it("returns partial confidence when a name is ambiguous in the workspace", () => {
+		const { engine } = createEngine("extends Node\nfunc use():\n\tmove_to()\n", {
+			"file:///workspace/a.gd": "class_name A\nfunc move_to():\n\tpass\n",
+			"file:///workspace/b.gd": "class_name B\nfunc move_to():\n\tpass\n",
 		});
-		const first = engine.getSymbol(uri, { offset: 2 });
-		assert.equal(engine.getSymbol(uri, { offset: 2 }), first);
-		engine.invalidate([uri]);
-		assert.notEqual(engine.getSymbol(uri, { offset: 2 }), first);
+		const source = "extends Node\nfunc use():\n\tmove_to()\n";
+		const result = engine.getDefinition(URI, { offset: wordOffset(source, "move_to") });
+		assert.equal(result.confidence, "partial");
+		assert.equal(result.value, undefined);
 	});
 
-	it("invalidates a symbol cache entry when its global symbol dependency changes", () => {
-		const dependency = { value: "v1" };
-		const engine = engineFor("player", { symbolSignature: dependency });
-		const first = engine.getSymbol(uri, { offset: 2 });
-		assert.equal(engine.getSymbol(uri, { offset: 2 }), first);
-		dependency.value = "v2";
-		assert.notEqual(engine.getSymbol(uri, { offset: 2 }), first);
+	it("reuses a cached result until the file changes", () => {
+		const { engine, files, symbols, bindings } = createEngine(SOURCE);
+		const offset = wordOffset(SOURCE, "health", 1);
+		const first = engine.getDefinition(URI, { offset });
+		assert.equal(engine.getDefinition(URI, { offset }), first, "an unchanged file must reuse its result");
+
+		const edited = SOURCE.replace("var health: int = 100", "var health: int = 200");
+		files.update(URI, edited, 2);
+		symbols.update(URI);
+		bindings.update(URI);
+		engine.invalidate([URI]);
+		assert.notEqual(engine.getDefinition(URI, { offset }), first, "an edited file must re-resolve");
 	});
 
-	it("returns partial confidence for an ambiguous symbol", () => {
-		const first = { ...variable, uri: "file:///project/player.gd" };
-		const second = { ...variable, uri: "file:///project/enemy.gd" };
-		const engine = engineFor("player", { fileSymbols: [], workspace: [first, second] });
-		assert.equal(engine.getSymbol(uri, { offset: 3 }).confidence, "partial");
+	it("returns members of a resolved type", () => {
+		const { engine, types } = createEngine(SOURCE);
+		const type = types.resolveName("Player");
+		assert.ok(type);
+		const members = engine.getMembers(type);
+		assert.equal(members.confidence, "exact");
+		assert.deepEqual(members.value?.map((symbol) => symbol.name).sort(), ["heal", "health"]);
 	});
 
-	it("returns unknown confidence when no semantic information is available", () => {
-		const engine = engineFor("unknown_name", { fileSymbols: [] });
-		assert.equal(engine.getSymbol(uri, { offset: 4 }).confidence, "unknown");
-	});
-
-	it("resolves named types and exposes their members", () => {
-		const member: IndexedSymbol = { ...variable, name: "move", kind: "function" };
-		const engine = engineFor("Player", { members: [member] });
-		const type = engine.getType(uri, { offset: 2 }, "Player");
-		assert.equal(type.confidence, "exact");
-		assert.deepEqual(engine.getMembers(type.value!).value, [member]);
-	});
-
-	it("uses the same local resolution boundary for hover", () => {
-		const engine = engineFor("player", {
-			binding: {
-				name: "player",
-				uri,
-				declarationRange: variable.range,
-				kind: "member",
-				type: "Player",
-			},
+	it("completes local members before workspace symbols and builtins", () => {
+		const source = "extends Node\nvar player_health := 1\nfunc use():\n\tplayer_\n";
+		const { engine } = createEngine(source, {
+			"file:///workspace/other.gd": "class_name Other\nvar player_count := 1\n",
 		});
-		const result = engine.getHover(uri, { offset: 2 });
+		// Completion looks at the word the cursor sits in: place it right after
+		// the typed prefix, exactly like the editor does.
+		const result = engine.getCompletions(URI, { offset: source.indexOf("player_\n") + "player_".length });
 		assert.equal(result.confidence, "exact");
-		assert.equal(result.value?.name, "player");
+		const names = result.value?.map((item) => item.name) ?? [];
+		assert.equal(names[0], "player_health", "locals must precede workspace symbols");
+		assert.ok(names.includes("player_count"));
 	});
 
-	it("returns exact references for a bound symbol and filters its declaration when requested", () => {
-		const declaration = { bindingId: "player-binding", name: "player", uri, range: variable.range };
-		const reference = { bindingId: "player-binding", name: "player", uri, range: { start: { offset: 20, line: 2, character: 0 }, end: { offset: 26, line: 2, character: 6 } } };
-		const engine = engineFor("player", {
-			binding: {
-				id: "player-binding",
-				name: "player",
-				uri,
-				declarationRange: variable.range,
-				kind: "member",
-			},
-			references: [declaration, reference],
+	it("completes members of a receiver expression", () => {
+		const source =
+			"class_name Player\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
+		const { engine } = createEngine(source);
+		const result = engine.getCompletions(URI, {
+			offset: source.lastIndexOf("Worker.new().") + "Worker.new().".length,
 		});
-		assert.deepEqual(engine.getReferences(uri, { offset: 2 }, true).value, [declaration, reference]);
-		assert.deepEqual(engine.getReferences(uri, { offset: 2 }, false).value, [reference]);
-	});
-
-	it("returns local and workspace completion candidates with local names taking precedence", () => {
-		const local = { ...variable, name: "player" };
-		const duplicate = { ...variable, name: "player", uri: "file:///project/enemy.gd" };
-		const workspace = { ...variable, name: "print_player", uri: "file:///project/util.gd" };
-		const engine = engineFor("pl", {
-			visibleBindings: [{ name: "player", uri, declarationRange: variable.range, kind: "local", type: "Player" }],
-			workspace: [duplicate, workspace],
-			fileSymbols: [local],
-		});
-		const result = engine.getCompletions(uri, { offset: 2 });
 		assert.equal(result.confidence, "exact");
-		assert.deepEqual(result.value?.map((item) => item.name), ["player", "print_player"]);
+		assert.deepEqual(result.value?.map((item) => item.name).sort(), ["run", "speed"]);
 	});
 
-	it("returns cached completion results until its URI is invalidated", () => {
-		const engine = engineFor("pl", {
-			visibleBindings: [{ name: "player", uri, declarationRange: variable.range, kind: "local", type: "Player" }],
+	it("invalidates a cached completion when the workspace candidate set changes", () => {
+		const source = "extends Node\nfunc use():\n\tpla\n";
+		const { engine, files, symbols, bindings } = createEngine(source, {
+			"file:///workspace/other.gd": "class_name Other\nvar player_count := 1\n",
 		});
-		const first = engine.getCompletions(uri, { offset: 2 });
-		assert.equal(engine.getCompletions(uri, { offset: 2 }), first);
-		engine.invalidate([uri]);
-		assert.notEqual(engine.getCompletions(uri, { offset: 2 }), first);
-	});
+		const offset = source.indexOf("pla\n") + "pla".length;
+		const first = engine.getCompletions(URI, { offset });
+		assert.ok(first.value?.some((item) => item.name === "player_count"));
 
-	it("invalidates completion cache entries when the workspace candidate set changes", () => {
-		const dependency = { value: "v1" };
-		const engine = engineFor("pl", { workspaceSignature: dependency });
-		const first = engine.getCompletions(uri, { offset: 2 });
-		assert.equal(engine.getCompletions(uri, { offset: 2 }), first);
-		dependency.value = "v2";
-		assert.notEqual(engine.getCompletions(uri, { offset: 2 }), first);
+		const other = "file:///workspace/other.gd";
+		files.update(other, "class_name Other\nvar player_score := 1\n", 2);
+		symbols.update(other);
+		bindings.update(other);
+		engine.invalidate([other]);
+		const second = engine.getCompletions(URI, { offset });
+		assert.notEqual(second, first);
+		assert.ok(second.value?.some((item) => item.name === "player_score"));
+		assert.equal(
+			second.value?.some((item) => item.name === "player_count"),
+			false,
+		);
 	});
+});
 
-	it("returns member completions from a resolved receiver", () => {
-		const move: IndexedSymbol = { ...variable, name: "move", kind: "function" };
-		const engine = engineFor("player.mo", { resolvedType: playerType, members: [move] });
-		const result = engine.getCompletions(uri, { offset: 8 });
+describe("SemanticQueryEngine references", () => {
+	it("returns declarations and references for a bound member", () => {
+		const source = "class_name Player\nvar health: int\nfunc heal():\n\thealth = 1\n";
+		const { engine } = createEngine(source);
+		const all = engine.getReferences(URI, { offset: wordOffset(source, "health", 1) }, true);
+		assert.equal(all.confidence, "exact");
+		assert.deepEqual(
+			all.value?.map((reference) => reference.range.start.line),
+			[1, 3],
+		);
+
+		const uses = engine.getReferences(URI, { offset: wordOffset(source, "health", 1) }, false);
+		assert.deepEqual(
+			uses.value?.map((reference) => reference.range.start.line),
+			[3],
+		);
+	});
+});
+
+describe("SemanticQueryEngine hover", () => {
+	it("returns the declaration for a hovered symbol", () => {
+		const { engine } = createEngine(SOURCE);
+		const result = engine.getHover(URI, { offset: wordOffset(SOURCE, "health", 1) });
 		assert.equal(result.confidence, "exact");
-		assert.deepEqual(result.value?.map((item) => item.name), ["move"]);
+		assert.equal(result.value?.name, "health");
 	});
 });

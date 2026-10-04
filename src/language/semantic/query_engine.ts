@@ -1,6 +1,14 @@
 import { GDScriptDeclaration } from "../../analyzer/index.js";
-import { Binding, BindingIndex, FileIndex, IndexedSymbol, SymbolIndex, TypeResolutionIndex, ResolvedType } from "../../index/index.js";
-import { InheritedMemberResolver } from "../../index/inherited_member_resolution.js";
+import {
+	Binding,
+	BindingIndex,
+	FileIndex,
+	IndexedSymbol,
+	ResolvedType,
+	SymbolIndex,
+	TypeResolutionIndex,
+} from "../../index/index.js";
+import { InheritedMemberResolver, createInheritedMemberResolver } from "../../index/inherited_member_resolution.js";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./builtin_symbols.js";
 
 export type ResolutionConfidence = "exact" | "inferred" | "partial" | "unknown";
@@ -52,7 +60,12 @@ function wordAt(source: string, offset: number): { name: string; start: number; 
 
 function findContainingFunctionName(declarations: GDScriptDeclaration[], offset: number): string | undefined {
 	for (const declaration of declarations) {
-		if (declaration.kind === "function" && declaration.bodyRange && declaration.bodyRange.start.offset <= offset && offset <= declaration.bodyRange.end.offset) {
+		if (
+			declaration.kind === "function" &&
+			declaration.bodyRange &&
+			declaration.bodyRange.start.offset <= offset &&
+			offset <= declaration.bodyRange.end.offset
+		) {
 			return declaration.name;
 		}
 		if (declaration.kind === "class") {
@@ -66,7 +79,10 @@ function findContainingFunctionName(declarations: GDScriptDeclaration[], offset:
 function symbolFromBinding(binding: Binding): IndexedSymbol {
 	return {
 		name: binding.name,
-		kind: binding.kind === "member" || binding.kind === "local" || binding.kind === "parameter" ? "variable" : binding.kind,
+		kind:
+			binding.kind === "member" || binding.kind === "local" || binding.kind === "parameter"
+				? "variable"
+				: binding.kind,
 		uri: binding.uri,
 		range: binding.declarationRange,
 		type: binding.type,
@@ -89,7 +105,10 @@ function completionFromSymbol(symbol: IndexedSymbol, priority: number): Semantic
 
 export class SemanticQueryEngine {
 	private readonly symbolCache = new Map<string, CacheEntry<ResolutionResult<IndexedSymbol>>>();
-	private readonly completionCache = new Map<string, CacheEntry<ResolutionResult<readonly SemanticCompletionItem[]>>>();
+	private readonly completionCache = new Map<
+		string,
+		CacheEntry<ResolutionResult<readonly SemanticCompletionItem[]>>
+	>();
 	private readonly inheritedMembers: InheritedMemberResolver;
 
 	constructor(
@@ -98,7 +117,7 @@ export class SemanticQueryEngine {
 		private readonly bindings: BindingIndex,
 		private readonly types: TypeResolutionIndex,
 	) {
-		this.inheritedMembers = new InheritedMemberResolver(files, symbols);
+		this.inheritedMembers = createInheritedMemberResolver(files, symbols);
 	}
 
 	getSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {
@@ -118,7 +137,11 @@ export class SemanticQueryEngine {
 		return this.getSymbol(uri, position);
 	}
 
-	getReferences(uri: string, position: SemanticPosition, includeDeclaration: boolean): ResolutionResult<ReturnType<BindingIndex["findReferences"]>> {
+	getReferences(
+		uri: string,
+		position: SemanticPosition,
+		includeDeclaration: boolean,
+	): ResolutionResult<ReturnType<BindingIndex["findReferences"]>> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
 		const word = wordAt(file.source, position.offset);
@@ -127,7 +150,7 @@ export class SemanticQueryEngine {
 		if (!binding) return { confidence: "unknown" };
 		const references = this.bindings.findReferences(binding.id).filter((reference) => {
 			if (includeDeclaration) return true;
-			return reference.uri !== binding.uri || reference.range.start.offset !== binding.declarationRange.start.offset;
+			return reference.uri !== binding.uri || reference.range.start.offset !== binding.nameOffset;
 		});
 		return { value: references, confidence: "exact" };
 	}
@@ -205,14 +228,21 @@ export class SemanticQueryEngine {
 		if (memberReceiver) {
 			const receiver = this.types.resolveReceiver(uri, word!.start, memberReceiver.name);
 			if (receiver?.uri) this.captureFile(files, receiver.uri);
-			return { files, symbolQueries: new Map([[memberReceiver.name, this.symbols.signature(memberReceiver.name)]]), workspaceQueries };
+			return {
+				files,
+				symbolQueries: new Map([[memberReceiver.name, this.symbols.signature(memberReceiver.name)]]),
+				workspaceQueries,
+			};
 		}
 		const prefix = word?.name ?? "";
 		workspaceQueries.set(prefix, this.symbols.workspaceSignature(prefix));
 		return { files, symbolQueries: new Map(), workspaceQueries };
 	}
 
-	private memberReceiver(file: ReturnType<FileIndex["get"]>, word: { name: string; start: number; end: number } | undefined): { name: string } | undefined {
+	private memberReceiver(
+		file: ReturnType<FileIndex["get"]>,
+		word: { name: string; start: number; end: number } | undefined,
+	): { name: string } | undefined {
 		if (!file || !word) return undefined;
 		const prefix = file.source.slice(0, word.start);
 		const match = prefix.match(/([A-Za-z_]\w*)\.$/);
@@ -221,14 +251,29 @@ export class SemanticQueryEngine {
 		return undefined;
 	}
 
+	/** Member `name` of a resolved receiver type, honouring its kind. */
+	private memberOf(receiver: ResolvedType, name: string): IndexedSymbol | undefined {
+		if (receiver.symbol?.kind === "enum") return this.types.getMember(receiver, name);
+		const uri = receiver.uri;
+		if (!uri) return undefined;
+		if (receiver.symbol?.kind === "class") {
+			return (
+				this.inheritedMembers.resolveInClass(uri, receiver.symbol, name) ?? this.types.getMember(receiver, name)
+			);
+		}
+		return this.inheritedMembers.resolve(uri, name) ?? this.types.getMember(receiver, name);
+	}
+
 	private captureFile(target: Map<string, string>, uri: string): void {
 		target.set(uri, this.snapshot(uri));
 	}
 
 	private dependenciesValid(dependencies: QueryDependencySnapshot): boolean {
 		for (const [uri, snapshot] of dependencies.files) if (this.snapshot(uri) !== snapshot) return false;
-		for (const [name, signature] of dependencies.symbolQueries) if (this.symbols.signature(name) !== signature) return false;
-		for (const [query, signature] of dependencies.workspaceQueries) if (this.symbols.workspaceSignature(query) !== signature) return false;
+		for (const [name, signature] of dependencies.symbolQueries)
+			if (this.symbols.signature(name) !== signature) return false;
+		for (const [query, signature] of dependencies.workspaceQueries)
+			if (this.symbols.workspaceSignature(query) !== signature) return false;
 		return true;
 	}
 
@@ -244,28 +289,22 @@ export class SemanticQueryEngine {
 		const word = wordAt(source, position.offset);
 		if (!word) return { confidence: "unknown" };
 
-		const prefix = source.slice(0, word.start);
 		const after = source.slice(word.end);
 		if (word.name === "super" && /^\s*\(/.test(after)) {
 			const functionName = findContainingFunctionName(file.ast.declarations, word.start);
 			const parent = this.types.resolveReceiver(uri, word.start, "super");
-			const member = functionName && parent?.uri ? this.inheritedMembers.resolve(parent.uri, functionName) : undefined;
+			const member =
+				functionName && parent?.uri ? this.inheritedMembers.resolve(parent.uri, functionName) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (parent) return { confidence: "partial" };
 		}
 
-		const memberMatch = prefix.match(/([A-Za-z_]\w*)\.$/);
-		const shorthandMember = !memberMatch && prefix.endsWith(".");
-		if (memberMatch || shorthandMember) {
-			const receiverName = memberMatch?.[1] ?? "super";
-			const receiver = this.types.resolveReceiver(uri, word.start, receiverName);
-			const member = receiver
-				? receiver.symbol?.kind === "enum"
-					? this.types.getMember(receiver, word.name)
-					: receiver.symbol?.kind === "class"
-						? this.inheritedMembers.resolveInClass(receiver.uri ?? "", receiver.symbol, word.name)
-						: this.inheritedMembers.resolve(receiver.uri ?? "", word.name)
-				: undefined;
+		// `receiver.member`: the receiver may be an identifier, a class name, a
+		// nested class (`Outer.Inner.mode`) or the result of a call
+		// (`Worker.new().run()`), so the receiver is resolved as an expression.
+		if (this.types.hasMemberAccessAt(uri, word.start)) {
+			const receiver = this.types.resolveReceiverExpression(uri, word.start);
+			const member = receiver ? this.memberOf(receiver, word.name) : undefined;
 			if (member) return { value: member, confidence: "exact" };
 			if (receiver) return { confidence: "partial" };
 		}
@@ -282,25 +321,17 @@ export class SemanticQueryEngine {
 		return { confidence: "unknown" };
 	}
 
-	private resolveCompletions(uri: string, position: SemanticPosition): ResolutionResult<readonly SemanticCompletionItem[]> {
+	private resolveCompletions(
+		uri: string,
+		position: SemanticPosition,
+	): ResolutionResult<readonly SemanticCompletionItem[]> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
 		const source = file.source;
 		const word = wordAt(source, position.offset);
 		const wordStart = word?.start ?? position.offset;
-		const prefix = source.slice(0, wordStart);
-		const memberMatch = prefix.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\.$/);
-		if (memberMatch) {
-			const receiver = this.types.resolveReceiver(uri, wordStart, memberMatch[1]);
-			if (!receiver || receiver.builtin) return { confidence: "unknown" };
-			const members = this.types.getMembers(receiver);
-			if (!members.length) return { confidence: "unknown" };
-			const memberPrefix = word?.name ?? "";
-			const filtered = members.filter((member) => member.name.startsWith(memberPrefix));
-			return { value: filtered.map((member, index) => completionFromSymbol(member, index)), confidence: "exact" };
-		}
-		if (prefix.endsWith(".")) {
-			const receiver = this.types.resolveReceiver(uri, wordStart, "super");
+		if (this.types.hasReceiverBeforeDot(uri, wordStart)) {
+			const receiver = this.types.resolveReceiverBeforeDot(uri, wordStart);
 			if (!receiver || receiver.builtin) return { confidence: "unknown" };
 			const members = this.types.getMembers(receiver);
 			if (!members.length) return { confidence: "unknown" };
@@ -318,15 +349,26 @@ export class SemanticQueryEngine {
 			.filter((binding) => binding.name.startsWith(completionPrefix))
 			.map((binding, index) => completionFromSymbol(symbolFromBinding(binding), index));
 		const localNames = new Set(localItems.map((item) => item.name));
-		const workspaceItems = this.symbols.workspaceSymbols(completionPrefix)
+		const workspaceItems = this.symbols
+			.workspaceSymbols(completionPrefix)
 			// Members of named enums are only valid after `EnumName.`.
 			.filter((symbol) => !(symbol.kind === "enum_member" && symbol.containerName))
 			.filter((symbol) => !localNames.has(symbol.name))
-			.sort((left, right) => left.name.localeCompare(right.name) || left.uri.localeCompare(right.uri) || left.range.start.offset - right.range.start.offset)
+			.sort(
+				(left, right) =>
+					left.name.localeCompare(right.name) ||
+					left.uri.localeCompare(right.uri) ||
+					left.range.start.offset - right.range.start.offset,
+			)
 			.map((symbol, index) => completionFromSymbol(symbol, localItems.length + index));
 		const builtinItems = resolveBuiltinSymbols(completionPrefix)
-			.filter(({ builtin }) => !localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name))
-			.map(({ symbol }, index) => completionFromSymbol(symbol, localItems.length + workspaceItems.length + index));
+			.filter(
+				({ builtin }) =>
+					!localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name),
+			)
+			.map(({ symbol }, index) =>
+				completionFromSymbol(symbol, localItems.length + workspaceItems.length + index),
+			);
 		const items = [...localItems, ...workspaceItems, ...builtinItems];
 		if (!items.length) return { confidence: "unknown" };
 		return { value: items, confidence: "exact" };

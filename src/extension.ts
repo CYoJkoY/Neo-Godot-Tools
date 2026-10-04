@@ -1,34 +1,51 @@
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { attemptSettingsUpdate, clean_godot_path } from "./utils";
-import {
-	GDInlayHintsProvider, GDHoverProvider, GDDocumentDropEditProvider, GDDocumentLinkProvider,
-	GDSemanticTokensProvider, GDCompletionItemProvider, GDDocumentationProvider, GDDefinitionProvider,
-	GDDocumentSymbolProvider, GDReferenceProvider, GDRenameProvider, GDWorkspaceSymbolProvider,
-	GDSignatureHelpProvider, GDTaskProvider,
-} from "./providers";
-import { ClientConnectionManager } from "./lsp";
-import { ScenePreviewProvider } from "./scene_tools";
-import { ResourceInspectorProvider } from "./resource_inspector/provider";
 import { GodotDebugger } from "./debugger";
 import { DebugServer } from "./dev/debug_server";
-import { FormattingProvider } from "./formatter";
-import { LanguageService } from "./language/service";
+import { CompletionFallback } from "./fallback/completion";
 import { DefinitionFallback } from "./fallback/definition";
+import { HoverFallback } from "./fallback/hover";
 import { ReferencesFallback } from "./fallback/references";
 import { RenameFallback } from "./fallback/rename";
-import { CompletionFallback } from "./fallback/completion";
-import { HoverFallback } from "./fallback/hover";
 import { SignatureHelpFallback } from "./fallback/signature_help";
+import { FormattingProvider } from "./formatter";
+import { LanguageService } from "./language/service";
+import { ClientConnectionManager } from "./lsp";
 import {
-	get_configuration, find_file, find_project_file, register_command, set_context, get_editor_data_dir,
-	get_project_dir, get_project_version, verify_godot_version, convert_uri_to_resource_path, is_debug_mode,
+	GDCompletionItemProvider,
+	GDDefinitionProvider,
+	GDDocumentDropEditProvider,
+	GDDocumentLinkProvider,
+	GDDocumentSymbolProvider,
+	GDDocumentationProvider,
+	GDHoverProvider,
+	GDInlayHintsProvider,
+	GDReferenceProvider,
+	GDRenameProvider,
+	GDSemanticTokensProvider,
+	GDSignatureHelpProvider,
+	GDTaskProvider,
+	GDWorkspaceSymbolProvider,
+} from "./providers";
+import { ResourceInspectorProvider } from "./resource_inspector/provider";
+import { ScenePreviewProvider } from "./scene_tools";
+import { attemptSettingsUpdate, clean_godot_path } from "./utils";
+import {
+	convert_uri_to_resource_path,
+	find_file,
+	get_configuration,
+	get_editor_data_dir,
+	get_project_dir,
+	get_project_version,
+	is_debug_mode,
+	register_command,
+	set_context,
+	verify_godot_version,
 } from "./utils";
 import { prompt_for_godot_executable } from "./utils/prompts";
-import type { ChildProcess } from "node:child_process";
 import { detachedProcess, killSubProcesses, subProcess } from "./utils/subspawn";
-
 
 interface Extension {
 	context?: vscode.ExtensionContext;
@@ -62,9 +79,13 @@ export function activate(context: vscode.ExtensionContext) {
 	(globalThis as { globals?: Extension }).globals = globals;
 	globals.context = context;
 	globals.lsp = new ClientConnectionManager(context);
-	globals.languageService = new LanguageService(new DefinitionFallback(), new ReferencesFallback(), new RenameFallback());
+	globals.languageService = new LanguageService(
+		new DefinitionFallback(),
+		new ReferencesFallback(),
+		new RenameFallback(),
+	);
 	globals.debug = new GodotDebugger(context);
-	globals.scenePreviewProvider = new ScenePreviewProvider(context);
+	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });
 	globals.resourceInspector = new ResourceInspectorProvider(context, {
 		lspClient: () => globals.lsp?.client,
 	});
@@ -82,8 +103,16 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.referenceProvider = new GDReferenceProvider(context, globals.languageService);
 	globals.renameProvider = new GDRenameProvider(context, globals.languageService);
 	globals.workspaceSymbolProvider = new GDWorkspaceSymbolProvider(context, globals.languageService);
-	globals.completionProvider = new GDCompletionItemProvider(context, globals.languageService, new CompletionFallback());
-	globals.signatureHelpProvider = new GDSignatureHelpProvider(context, globals.languageService, new SignatureHelpFallback());
+	globals.completionProvider = new GDCompletionItemProvider(
+		context,
+		globals.languageService,
+		new CompletionFallback(),
+	);
+	globals.signatureHelpProvider = new GDSignatureHelpProvider(
+		context,
+		globals.languageService,
+		new SignatureHelpFallback(),
+	);
 	// globals.semanticTokensProvider = new GDSemanticTokensProvider(context);
 	// globals.tasksProvider = new GDTaskProvider(context);
 
@@ -96,7 +125,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		register_command("openEditor", open_workspace_with_editor),
-		register_command("openResourceInspector", (uri?: vscode.Uri) => globals.resourceInspector?.openResourceInspector(uri)),
+		register_command("openResourceInspector", (uri?: vscode.Uri) =>
+			globals.resourceInspector?.openResourceInspector(uri),
+		),
 		register_command("openEditorSettings", open_godot_editor_settings),
 		register_command("copyResourcePath", copy_resource_path),
 		register_command("listGodotClasses", list_classes),
@@ -105,19 +136,32 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	set_context("godotFiles", ["gdscript", "gdscene", "gdresource", "gdshader"]);
 	set_context("sceneLikeFiles", ["gdscript", "gdscene"]);
-	get_project_version().then(async () => { initial_setup(); });
+	get_project_version().then(async () => {
+		initial_setup();
+	});
 }
 
 async function initial_setup() {
 	const projectVersion = await get_project_version();
 	if (projectVersion === undefined) return;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
-	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
+	const result = verify_godot_version(get_configuration(settingName, "godot"), projectVersion[0]);
 	const godotPath = result.godotPath;
 	switch (result.status) {
-		case "SUCCESS": break;
-		case "WRONG_VERSION": prompt_for_godot_executable(`The specified Godot executable, '${godotPath}' is the wrong version. \n\t\t\t\tThe current project uses Godot v${projectVersion}, but the specified executable is Godot v${result.version}.\n\t\t\t\tExtension features will not work correctly unless this is fixed.`, settingName); break;
-		case "INVALID_EXE": prompt_for_godot_executable(`The specified Godot executable, '${godotPath}' is invalid. \n\t\t\t\tExtension features will not work correctly unless this is fixed.`, settingName); break;
+		case "SUCCESS":
+			break;
+		case "WRONG_VERSION":
+			prompt_for_godot_executable(
+				`The specified Godot executable, '${godotPath}' is the wrong version. \n\t\t\t\tThe current project uses Godot v${projectVersion}, but the specified executable is Godot v${result.version}.\n\t\t\t\tExtension features will not work correctly unless this is fixed.`,
+				settingName,
+			);
+			break;
+		case "INVALID_EXE":
+			prompt_for_godot_executable(
+				`The specified Godot executable, '${godotPath}' is invalid. \n\t\t\t\tExtension features will not work correctly unless this is fixed.`,
+				settingName,
+			);
+			break;
 	}
 }
 
@@ -129,16 +173,19 @@ export function deactivate(): Thenable<void> {
 	});
 }
 
-async function copy_resource_path(uri: vscode.Uri) {
-	if (!uri) {
-		if (vscode.window.activeTextEditor) uri = vscode.window.activeTextEditor.document.uri;
-		else return;
-	}
-	const relative_path = await convert_uri_to_resource_path(uri);
-	if (relative_path) vscode.env.clipboard.writeText(relative_path);
+async function copy_resource_path(uri?: vscode.Uri) {
+	// The command is also reachable from the explorer context menu, where the
+	// selected resource arrives as an argument; a key binding falls back to the
+	// active editor.
+	const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+	if (!target) return;
+	const relative_path = await convert_uri_to_resource_path(target);
+	if (relative_path) void vscode.env.clipboard.writeText(relative_path);
 }
 
-async function list_classes() { await globals.docsProvider?.list_native_classes(); }
+async function list_classes() {
+	await globals.docsProvider?.list_native_classes();
+}
 
 async function switch_scene_script() {
 	if (!vscode.window.activeTextEditor) return;
@@ -165,47 +212,45 @@ function is_editor_alive(): boolean {
 }
 
 async function launch_detached_editor(godotPath: string, projectDir: string, args: string[]) {
-    if (is_editor_alive()) {
-        const pick = await vscode.window.showInformationMessage(
-            "The Godot editor launched from this window is already running.",
-            "Launch another instance",
-            "Cancel",
-        );
-        if (pick !== "Launch another instance") return;
-    }
+	if (is_editor_alive()) {
+		const pick = await vscode.window.showInformationMessage(
+			"The Godot editor launched from this window is already running.",
+			"Launch another instance",
+			"Cancel",
+		);
+		if (pick !== "Launch another instance") return;
+	}
 
-    const child = detachedProcess(godotPath, args, {
-        cwd: projectDir,
-        windowsHide: false,
-    });
+	const child = detachedProcess(godotPath, args, {
+		cwd: projectDir,
+		windowsHide: false,
+	});
 
-    child.once("error", (error) => {
-        vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
-    });
-    child.once("exit", () => {
-        if (editorProcess === child) editorProcess = undefined;
-    });
+	child.once("error", (error) => {
+		vscode.window.showErrorMessage(`Failed to start Godot Editor: ${error.message}`);
+	});
+	child.once("exit", () => {
+		if (editorProcess === child) editorProcess = undefined;
+	});
 
-    editorProcess = child;
+	editorProcess = child;
 }
 
 async function open_workspace_with_editor() {
 	const projectDir = await get_project_dir();
 	const projectVersion = await get_project_version();
 	if (!projectDir) {
-        vscode.window.showErrorMessage(
-            "Neo Godot Tools: No Godot project found. Open the folder containing 'project.godot' in VS Code.",
-        );
-        return;
-    }
-    if (!projectVersion) {
-        vscode.window.showErrorMessage(
-            "Neo Godot Tools: Cannot determine Godot version from 'project.godot'.",
-        );
-        return;
-    }
+		vscode.window.showErrorMessage(
+			"Neo Godot Tools: No Godot project found. Open the folder containing 'project.godot' in VS Code.",
+		);
+		return;
+	}
+	if (!projectVersion) {
+		vscode.window.showErrorMessage("Neo Godot Tools: Cannot determine Godot version from 'project.godot'.");
+		return;
+	}
 	const settingName = `editorPath.godot${projectVersion[0]}`;
-	const result = verify_godot_version(get_configuration(settingName), projectVersion[0]);
+	const result = verify_godot_version(get_configuration(settingName, "godot"), projectVersion[0]);
 	const godotPath = result.godotPath;
 	switch (result.status) {
 		case "SUCCESS": {
@@ -218,11 +263,16 @@ async function open_workspace_with_editor() {
 			}
 
 			killSubProcesses("GodotEditor");
-			const godotProcess = subProcess("GodotEditor", godotPath, {
-				cwd: projectDir,
-				detached: false,
-				windowsHide: false,
-			}, args);
+			const godotProcess = subProcess(
+				"GodotEditor",
+				godotPath,
+				{
+					cwd: projectDir,
+					detached: false,
+					windowsHide: false,
+				},
+				args,
+			);
 			godotProcess.stdout?.on("data", (data) => {
 				console.log(`[GodotEditor] ${data.toString().trimEnd()}`);
 			});
@@ -234,16 +284,30 @@ async function open_workspace_with_editor() {
 			});
 			break;
 		}
-		case "WRONG_VERSION": prompt_for_godot_executable(`Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`, settingName); break;
-		case "INVALID_EXE": prompt_for_godot_executable(`Cannot launch Godot editor: '${settingName}' value of '${godotPath}' is not a valid Godot executable`, settingName); break;
+		case "WRONG_VERSION":
+			prompt_for_godot_executable(
+				`Cannot launch Godot editor: The current project uses Godot v${projectVersion}, but the specified Godot executable is version ${result.version}`,
+				settingName,
+			);
+			break;
+		case "INVALID_EXE":
+			prompt_for_godot_executable(
+				`Cannot launch Godot editor: '${settingName}' value of '${godotPath}' is not a valid Godot executable`,
+				settingName,
+			);
+			break;
 	}
 }
 
 async function open_godot_editor_settings() {
 	const dir = get_editor_data_dir();
 	const files = fs.readdirSync(dir).filter((v) => v.endsWith(".tres"));
-	const ver = await get_project_version() ?? "";
-	for (const file of files) if (file.includes(ver)) { files.unshift(files.splice(files.indexOf(file), 1)[0]); break; }
+	const ver = (await get_project_version()) ?? "";
+	for (const file of files)
+		if (file.includes(ver)) {
+			files.unshift(files.splice(files.indexOf(file), 1)[0]);
+			break;
+		}
 	const choices: vscode.QuickPickItem[] = [];
 	for (const file of files) choices.push({ label: file, description: path.join(dir, file) });
 	vscode.window.showQuickPick(choices).then(async (item) => {
@@ -258,5 +322,5 @@ async function get_godot_path(): Promise<string | undefined> {
 	const projectVersion = await get_project_version();
 	if (projectVersion === undefined) return undefined;
 	const settingName = `editorPath.godot${projectVersion[0]}`;
-	return clean_godot_path(get_configuration(settingName));
+	return clean_godot_path(get_configuration(settingName, "godot"));
 }

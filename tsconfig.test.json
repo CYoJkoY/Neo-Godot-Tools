@@ -2,7 +2,12 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"outDir": "out-test",
+		"rootDir": ".",
 		"noEmit": false
 	},
-	"exclude": ["node_modules", "out", "out-test", "tools", "media"]
+	"include": [
+		"src/**/*.ts",
+		"tools/**/*.ts"
+	],
+	"exclude": ["node_modules", "out", "out-test", "media"]
 }

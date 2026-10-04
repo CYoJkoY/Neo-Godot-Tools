@@ -24,6 +24,14 @@ export interface GDScriptNode {
 	kind: GDScriptNodeKind;
 	name?: string;
 	range: SourceRange;
+	/**
+	 * Offset of the identifier that declares the node.
+	 *
+	 * `range` starts at the introducing keyword (`var`, `func`, `class`, …), so
+	 * it cannot tell a rename where the *name* is. Keeping the offset here avoids
+	 * searching the text again for every symbol.
+	 */
+	nameOffset?: number;
 }
 
 export interface GDScriptParameter {

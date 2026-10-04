@@ -1,0 +1,1344 @@
+{
+	"src/analyzer/ast.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/analyzer/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/analyzer/lexer.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 5,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 5
+	},
+	"src/analyzer/parser.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 11,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 20
+	},
+	"src/debugger/debug_runtime.ts": {
+		"counts": {
+			"class": 4,
+			"else": 0,
+			"for": 1,
+			"let": 2,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/debugger.ts": {
+		"counts": {
+			"class": 2,
+			"else": 6,
+			"for": 0,
+			"let": 6,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/debugger/godot3/debug_session.ts": {
+		"counts": {
+			"class": 1,
+			"else": 1,
+			"for": 7,
+			"let": 4,
+			"throw": 2,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/godot3/helpers.ts": {
+		"counts": {
+			"class": 0,
+			"else": 8,
+			"for": 1,
+			"let": 8,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/debugger/godot3/server_controller.ts": {
+		"counts": {
+			"class": 2,
+			"else": 6,
+			"for": 7,
+			"let": 11,
+			"throw": 0,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/debugger/godot3/variables/variant_decoder.ts": {
+		"counts": {
+			"class": 1,
+			"else": 4,
+			"for": 11,
+			"let": 14,
+			"throw": 0,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/debugger/godot3/variables/variant_encoder.ts": {
+		"counts": {
+			"class": 1,
+			"else": 14,
+			"for": 0,
+			"let": 5,
+			"throw": 0,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/debugger/godot3/variables/variants.ts": {
+		"counts": {
+			"class": 13,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/debug_session.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 2,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/helpers.ts": {
+		"counts": {
+			"class": 0,
+			"else": 2,
+			"for": 3,
+			"let": 4,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/server_controller.ts": {
+		"counts": {
+			"class": 3,
+			"else": 9,
+			"for": 7,
+			"let": 14,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/variables/godot_id_to_vscode_id_mapper.ts": {
+		"counts": {
+			"class": 2,
+			"else": 0,
+			"for": 0,
+			"let": 1,
+			"throw": 3,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/variables/godot_object_promise.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/variables/variables_manager.ts": {
+		"counts": {
+			"class": 1,
+			"else": 12,
+			"for": 5,
+			"let": 8,
+			"throw": 8,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/variables/variant_decoder.ts": {
+		"counts": {
+			"class": 1,
+			"else": 19,
+			"for": 16,
+			"let": 19,
+			"throw": 1,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/variables/variant_encoder.ts": {
+		"counts": {
+			"class": 1,
+			"else": 22,
+			"for": 0,
+			"let": 5,
+			"throw": 0,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/debugger/godot4/variables/variants.ts": {
+		"counts": {
+			"class": 23,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/inspector_provider.ts": {
+		"counts": {
+			"class": 3,
+			"else": 14,
+			"for": 2,
+			"let": 3,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/debugger/scene_tree_provider.ts": {
+		"counts": {
+			"class": 2,
+			"else": 1,
+			"for": 0,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/dev/debug_server.ts": {
+		"counts": {
+			"class": 1,
+			"else": 9,
+			"for": 0,
+			"let": 3,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/extension.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 2,
+			"let": 2,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/fallback/completion.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/fallback/definition.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/fallback/hover.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 1,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/fallback/references.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/fallback/rename.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 3,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/fallback/signature_help.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/formatter/formatter.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/formatter/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/formatter/symbols.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/formatter/textmate.ts": {
+		"counts": {
+			"class": 0,
+			"else": 6,
+			"for": 6,
+			"let": 17,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/bindings.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/collections.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/control_flow.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/dependency_graph.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 1
+	},
+	"src/index/expression.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 9,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 5
+	},
+	"src/index/file_index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/inherited_member_resolution.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/references.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 2,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/semantic_change.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/semantic_snapshot.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 3,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 1
+	},
+	"src/index/symbol_index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/symbol.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 3,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/token_cache.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/type_resolution.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/language/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/language/semantic/builtin_symbols.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/language/semantic/gdscript_builtins.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/language/semantic/query_engine.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 6,
+			"let": 2,
+			"throw": 0,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/language/semantic/resolution_policy.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/language/service.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 2,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/language/update_scheduler.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 2,
+			"let": 0,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/lsp/ClientConnectionManager.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 6,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/lsp/GDScriptLanguageClient.ts": {
+		"counts": {
+			"class": 0,
+			"else": 1,
+			"for": 1,
+			"let": 6,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/lsp/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/lsp/MessageBuffer.ts": {
+		"counts": {
+			"class": 0,
+			"else": 2,
+			"for": 1,
+			"let": 2,
+			"throw": 1,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/lsp/MessageIO.ts": {
+		"counts": {
+			"class": 3,
+			"else": 1,
+			"for": 1,
+			"let": 1,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/lsp/types.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/performance/profiler.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/completions.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/definition.ts": {
+		"counts": {
+			"class": 1,
+			"else": 2,
+			"for": 2,
+			"let": 8,
+			"throw": 0,
+			"while": 4
+		},
+		"perf": 0
+	},
+	"src/providers/document_drops.ts": {
+		"counts": {
+			"class": 1,
+			"else": 1,
+			"for": 2,
+			"let": 3,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/document_link.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 5,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/document_symbols.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/documentation_builder.ts": {
+		"counts": {
+			"class": 0,
+			"else": 1,
+			"for": 5,
+			"let": 21,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/documentation_types.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/documentation.ts": {
+		"counts": {
+			"class": 1,
+			"else": 1,
+			"for": 2,
+			"let": 2,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/hover.ts": {
+		"counts": {
+			"class": 1,
+			"else": 1,
+			"for": 2,
+			"let": 4,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/inlay_hints.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 3,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/references.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/rename.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/semantic_tokens.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 1,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/signature_help.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/tasks.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/workspace_symbols.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/diagnostics.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 4,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/document.ts": {
+		"counts": {
+			"class": 0,
+			"else": 14,
+			"for": 12,
+			"let": 14,
+			"throw": 0,
+			"while": 3
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/metadata.ts": {
+		"counts": {
+			"class": 0,
+			"else": 9,
+			"for": 15,
+			"let": 18,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/panel_html.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/provider.ts": {
+		"counts": {
+			"class": 1,
+			"else": 5,
+			"for": 16,
+			"let": 8,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/script_index.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 3,
+			"let": 1,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/resource_inspector/values.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 2,
+			"let": 8,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"src/scene_tools/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/scene_tools/node_icons.ts": {
+		"counts": {
+			"class": 1,
+			"else": 3,
+			"for": 6,
+			"let": 7,
+			"throw": 0,
+			"while": 3
+		},
+		"perf": 0
+	},
+	"src/scene_tools/parser.ts": {
+		"counts": {
+			"class": 1,
+			"else": 2,
+			"for": 12,
+			"let": 14,
+			"throw": 0,
+			"while": 2
+		},
+		"perf": 0
+	},
+	"src/scene_tools/preview.ts": {
+		"counts": {
+			"class": 3,
+			"else": 4,
+			"for": 2,
+			"let": 3,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/scene_tools/properties.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 4,
+			"throw": 0,
+			"while": 3
+		},
+		"perf": 0
+	},
+	"src/scene_tools/property_editor.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 5,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/scene_tools/types.ts": {
+		"counts": {
+			"class": 4,
+			"else": 0,
+			"for": 1,
+			"let": 1,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/standards/census.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 2,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/types/untyped_modules.d.ts": {
+		"counts": {
+			"class": 1,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/doc_anchor.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/godot_utils.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 2,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/index.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/logger.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/lru_cache.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/prompts.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/scheduling.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/settings_updater.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/subspawn.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/vscode_utils.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 1,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/changelog.ts": {
+		"counts": {
+			"class": 0,
+			"else": 3,
+			"for": 5,
+			"let": 5,
+			"throw": 8,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/check_standards.ts": {
+		"counts": {
+			"class": 0,
+			"else": 1,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/generate_icons.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/profile_language.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 3,
+			"let": 2,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/release.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 4,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/resolve_godot.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 6,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/run_tests.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/run_unit_tests.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 1,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/semantic_benchmark.ts": {
+		"counts": {
+			"class": 0,
+			"else": 1,
+			"for": 5,
+			"let": 2,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/semantic_project_benchmark.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 5,
+			"let": 5,
+			"throw": 2,
+			"while": 1
+		},
+		"perf": 0
+	},
+	"tools/semantic_scale_benchmark.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 2,
+			"let": 3,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/vscode_languageclient_stub.ts": {
+		"counts": {
+			"class": 2,
+			"else": 1,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/vscode_stub_register.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/vscode_stub.ts": {
+		"counts": {
+			"class": 20,
+			"else": 1,
+			"for": 2,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	}
+}

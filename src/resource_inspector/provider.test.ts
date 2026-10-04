@@ -5,12 +5,12 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import * as vscode from "vscode";
 import {
+	ResourceInspectorProvider,
+	ResourceModel,
 	diagnosticsEnabled,
 	formatPropertyValue,
 	getOpenIn,
 	resolveResourceUri,
-	ResourceInspectorProvider,
-	ResourceModel,
 } from "./provider.js";
 import { scriptClassNameIndex } from "./script_index.js";
 
@@ -49,22 +49,35 @@ function makeDocument(uri: vscode.Uri, text: string): vscode.TextDocument {
 
 describe("resource inspector provider", () => {
 	it("declares the sidebar view as a webview in package.json", () => {
-		const pkgPath = path.resolve(__dirname, "..", "..", "package.json");
+		// The unit runner sets the repository root; the fallback keeps the test
+		// runnable from a plain `node --test out-test/src/...` invocation.
+		const root = process.env["NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT"] ?? path.resolve(__dirname, "..", "..", "..");
+		const pkgPath = path.join(root, "package.json");
 		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		const views = pkg.contributes?.views?.neoGodotTools ?? [];
 		const inspectorView = views.find((view: { id: string }) => view.id === "neoGodotTools.resourceInspector");
 		assert.ok(inspectorView, "neoGodotTools.resourceInspector view must be contributed");
-		assert.equal(inspectorView.type, "webview", "sidebar view must have type='webview' so VS Code invokes registerWebviewViewProvider");
+		assert.equal(
+			inspectorView.type,
+			"webview",
+			"sidebar view must have type='webview' so VS Code invokes registerWebviewViewProvider",
+		);
 	});
 
 	it("opens in the configured location", async () => {
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
 		const provider = new ResourceInspectorProvider(context);
 		const uri = vscode.Uri.file(path.join(os.tmpdir(), "thing.tres"));
 
 		const calls: Array<{ command: string; args: unknown[] }> = [];
 		const executeCommand = vscode.commands.executeCommand;
-		(vscode.commands as { executeCommand: unknown }).executeCommand = async (command: string, ...args: unknown[]) => {
+		(vscode.commands as { executeCommand: unknown }).executeCommand = async (
+			command: string,
+			...args: unknown[]
+		) => {
 			calls.push({ command, args });
 		};
 		try {
@@ -98,7 +111,9 @@ describe("resource inspector provider", () => {
 		const prevOpenDoc = vscode.workspace.openTextDocument;
 		const prevActiveEditor = vscode.window.activeTextEditor;
 
-		(vscode.window as { onDidChangeActiveTextEditor: unknown }).onDidChangeActiveTextEditor = (listener: (editor?: vscode.TextEditor) => void) => {
+		(vscode.window as { onDidChangeActiveTextEditor: unknown }).onDidChangeActiveTextEditor = (
+			listener: (editor?: vscode.TextEditor) => void,
+		) => {
 			activeListener = listener;
 			return { dispose: () => {} };
 		};
@@ -107,7 +122,10 @@ describe("resource inspector provider", () => {
 			return fsPath === secondPath ? secondDoc : firstDoc;
 		};
 
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
 		const provider = new ResourceInspectorProvider(context);
 
 		const posted: Array<{ type: string; model?: ResourceModel }> = [];
@@ -199,7 +217,10 @@ describe("resource inspector provider", () => {
 			const tresPath = path.join(root, "hero.tres");
 			fs.writeFileSync(tresPath, tresText);
 
-			const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+			const context = {
+				subscriptions: [],
+				extensionUri: vscode.Uri.file(os.homedir()),
+			} as unknown as vscode.ExtensionContext;
 			const provider = new ResourceInspectorProvider(context);
 			try {
 				const doc = makeDocument(vscode.Uri.file(tresPath), tresText);
@@ -237,7 +258,10 @@ uniform vec4 tint: source_color = vec4(1.0, 0.0, 0.0, 1.0);
 shader = SubResource( 63 )
 shader_param/strength = 0.8
 `;
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
 		const provider = new ResourceInspectorProvider(context);
 		try {
 			const doc = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "shader_mat.tres")), shaderTres);
@@ -265,17 +289,37 @@ shader_param/strength = 0.8
 	});
 
 	it("keeps the newest metadata result even when the .tres version is unchanged", async () => {
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
 		const provider = new ResourceInspectorProvider(context);
-		const document = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "metadata-refresh.tres")), '[gd_resource type="Resource" format=3]\n[resource]\n');
+		const document = makeDocument(
+			vscode.Uri.file(path.join(os.tmpdir(), "metadata-refresh.tres")),
+			'[gd_resource type="Resource" format=3]\n[resource]\n',
+		);
 		const model = await provider.buildModel(document);
 		let resolveOld: (model: ResourceModel) => void = () => {};
-		const old = new Promise<ResourceModel>((resolve) => { resolveOld = resolve; });
+		const old = new Promise<ResourceModel>((resolve) => {
+			resolveOld = resolve;
+		});
 		let calls = 0;
-		provider.buildModel = async () => ++calls === 1 ? old : model;
+		provider.buildModel = async () => (++calls === 1 ? old : model);
 		const posted: Array<{ type: string; model: ResourceModel }> = [];
-		const webview = { options: {}, postMessage: async (message: { type: string; model: ResourceModel }) => { posted.push(message); return true; } } as unknown as vscode.Webview;
-		const protocol = provider as unknown as { sendModel(document: vscode.TextDocument, webview: vscode.Webview, updateDiagnostics: boolean): Promise<void> };
+		const webview = {
+			options: {},
+			postMessage: async (message: { type: string; model: ResourceModel }) => {
+				posted.push(message);
+				return true;
+			},
+		} as unknown as vscode.Webview;
+		const protocol = provider as unknown as {
+			sendModel(
+				document: vscode.TextDocument,
+				webview: vscode.Webview,
+				updateDiagnostics: boolean,
+			): Promise<void>;
+		};
 		try {
 			const pending = protocol.sendModel(document, webview, false);
 			await protocol.sendModel(document, webview, false);
@@ -285,47 +329,95 @@ shader_param/strength = 0.8
 			assert.equal(posted.length, 1);
 			assert.equal(posted[0].model.resourceType, model.resourceType);
 			assert.equal(webview.options.localResourceRoots, latestRoots);
-		} finally { provider.dispose(); }
+		} finally {
+			provider.dispose();
+		}
 	});
 
 	it("does not let delayed metadata replace a newly selected resource or its preview roots", async () => {
 		let resolveNative: (value: unknown) => void = () => {};
-		const native = new Promise((resolve) => { resolveNative = resolve; });
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
-		const provider = new ResourceInspectorProvider(context, { lspClient: () => ({ sendRequest: async () => native }) });
+		const native = new Promise((resolve) => {
+			resolveNative = resolve;
+		});
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context, {
+			lspClient: () => ({ sendRequest: async () => native }),
+		});
 		const posted: unknown[] = [];
 		const initialRoots = [vscode.Uri.file("/unchanged-preview-root")];
-		const webview = { options: { localResourceRoots: initialRoots }, postMessage: async (message: unknown) => { posted.push(message); return true; } } as unknown as vscode.Webview;
-		const protocol = provider as unknown as { panelUri: vscode.Uri; view: { webview: vscode.Webview }; sendModel(document: vscode.TextDocument, webview: vscode.Webview, updateDiagnostics: boolean): Promise<void> };
-		const first = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "first.tres")), '[gd_resource type="Resource" format=3]\n[resource]\n');
-		const second = makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "second.tres")), '[gd_resource type="Resource" format=3]\n[resource]\n');
+		const webview = {
+			options: { localResourceRoots: initialRoots },
+			postMessage: async (message: unknown) => {
+				posted.push(message);
+				return true;
+			},
+		} as unknown as vscode.Webview;
+		const protocol = provider as unknown as {
+			panelUri: vscode.Uri;
+			view: { webview: vscode.Webview };
+			sendModel(
+				document: vscode.TextDocument,
+				webview: vscode.Webview,
+				updateDiagnostics: boolean,
+			): Promise<void>;
+		};
+		const first = makeDocument(
+			vscode.Uri.file(path.join(os.tmpdir(), "first.tres")),
+			'[gd_resource type="Resource" format=3]\n[resource]\n',
+		);
+		const second = makeDocument(
+			vscode.Uri.file(path.join(os.tmpdir(), "second.tres")),
+			'[gd_resource type="Resource" format=3]\n[resource]\n',
+		);
 		try {
 			protocol.view = { webview };
 			protocol.panelUri = first.uri;
 			const pending = protocol.sendModel(first, webview, false);
 			protocol.panelUri = second.uri;
-			resolveNative({ children: [{ name: "resource_name", kind: 7, detail: "var Resource.resource_name: String" }] });
+			resolveNative({
+				children: [{ name: "resource_name", kind: 7, detail: "var Resource.resource_name: String" }],
+			});
 			await pending;
 			assert.equal(posted.length, 0);
 			assert.equal(webview.options.localResourceRoots, initialRoots);
 			await protocol.sendModel(second, webview, false);
 			assert.equal(posted.length, 1);
 			assert.notEqual(webview.options.localResourceRoots, initialRoots);
-		} finally { provider.dispose(); }
+		} finally {
+			provider.dispose();
+		}
 	});
 
 	it("compares real defaults with LSP connected, for resources and sub-resources", async () => {
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
-		const provider = new ResourceInspectorProvider(context, { lspClient: () => ({ sendRequest: async () => ({ children: [
-			{ name: "roughness", kind: 7, detail: "var StandardMaterial3D.roughness: float" },
-			{ name: "unknown_native", kind: 7, detail: "var StandardMaterial3D.unknown_native: float" },
-			{ name: "native_default", kind: 7, detail: "var StandardMaterial3D.native_default: float = 2.0" },
-			{ name: "unserialized", kind: 7, detail: "var StandardMaterial3D.unserialized: int" },
-			{ name: "method", kind: 6, detail: "func StandardMaterial3D.method()" },
-		] }) }) });
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context, {
+			lspClient: () => ({
+				sendRequest: async () => ({
+					children: [
+						{ name: "roughness", kind: 7, detail: "var StandardMaterial3D.roughness: float" },
+						{ name: "unknown_native", kind: 7, detail: "var StandardMaterial3D.unknown_native: float" },
+						{
+							name: "native_default",
+							kind: 7,
+							detail: "var StandardMaterial3D.native_default: float = 2.0",
+						},
+						{ name: "unserialized", kind: 7, detail: "var StandardMaterial3D.unserialized: int" },
+						{ name: "method", kind: 6, detail: "func StandardMaterial3D.method()" },
+					],
+				}),
+			}),
+		});
 		try {
 			const text = `[gd_resource type="StandardMaterial3D" format=3]\n[sub_resource type="StandardMaterial3D" id="Material_1"]\nroughness = 0.2\nunknown_native = 0.0\n[resource]\nroughness = 1\nunknown_native = 0.0\nnative_default = 2\n`;
-			const model = await provider.buildModel(makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "material.tres")), text));
+			const model = await provider.buildModel(
+				makeDocument(vscode.Uri.file(path.join(os.tmpdir(), "material.tres")), text),
+			);
 			const byName = new Map(model.properties.map((prop) => [prop.name, prop]));
 			assert.equal(byName.get("roughness")?.modified, false, "1 and 1.0 are the same default");
 			assert.equal(byName.get("roughness")?.metadata?.defaultValue, "1.0");
@@ -335,17 +427,29 @@ shader_param/strength = 0.8
 			assert.equal(byName.get("native_default")?.modified, false);
 			assert.equal(byName.get("unserialized")?.definedInFile, false);
 			assert.equal(byName.get("unserialized")?.modified, false);
-			assert.equal(byName.get("unserialized")?.metadata?.defaultValue, undefined, "a placeholder is not a native default");
+			assert.equal(
+				byName.get("unserialized")?.metadata?.defaultValue,
+				undefined,
+				"a placeholder is not a native default",
+			);
 			assert.ok(!byName.has("method"), "native methods are not properties");
 			assert.equal(model.subResources[0].properties.find((prop) => prop.name === "roughness")?.modified, true);
-			assert.equal(model.subResources[0].properties.find((prop) => prop.name === "unknown_native")?.metadata?.defaultValue, undefined);
-		} finally { provider.dispose(); }
+			assert.equal(
+				model.subResources[0].properties.find((prop) => prop.name === "unknown_native")?.metadata?.defaultValue,
+				undefined,
+			);
+		} finally {
+			provider.dispose();
+		}
 	});
 
 	it("provides scoped previews for external, string and atlas image paths", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-images-"));
 		const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-outside-"));
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
 		const provider = new ResourceInspectorProvider(context);
 		try {
 			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
@@ -355,21 +459,29 @@ shader_param/strength = 0.8
 			fs.symlinkSync(path.join(outside, "private.png"), path.join(root, "escape.png"));
 			const text = `[gd_resource type="Resource" format=3]\n[ext_resource type="Texture2D" path="res://icon with space.svg" id="2_tex"]\n[ext_resource type="Texture2D" path="res://missing.png" id="3_tex"]\n[sub_resource type="AtlasTexture" id="Atlas_1"]\natlas = ExtResource("2_tex")\n[resource]\nicon = ExtResource("2_tex")\nimage_file = "res://icon with space.svg"\natlas_icon = SubResource("Atlas_1")\nunsupported = "res://image.dds"\nunsafe_image = "res://escape.png"\n`;
 			const doc = makeDocument(vscode.Uri.file(path.join(root, "thing.tres")), text);
-			const webview = { asWebviewUri: (uri: vscode.Uri) => vscode.Uri.parse(`https://images.example${uri.path}`) } as vscode.Webview;
+			const webview = {
+				asWebviewUri: (uri: vscode.Uri) => vscode.Uri.parse(`https://images.example${uri.path}`),
+			} as vscode.Webview;
 			const model = await provider.buildModel(doc, webview);
 			const byName = new Map(model.properties.map((prop) => [prop.name, prop]));
 			for (const name of ["icon", "image_file", "atlas_icon"]) {
 				assert.equal(byName.get(name)?.imagePreview?.path, "res://icon with space.svg");
 				assert.ok(byName.get(name)?.imagePreview?.uri?.startsWith("https://images.example/"));
 			}
-			assert.equal(model.subResources[0].properties.find((prop) => prop.name === "atlas")?.imagePreview?.path, "res://icon with space.svg");
+			assert.equal(
+				model.subResources[0].properties.find((prop) => prop.name === "atlas")?.imagePreview?.path,
+				"res://icon with space.svg",
+			);
 			assert.equal(model.extResources[0].imagePreview?.uri, byName.get("icon")?.imagePreview?.uri);
 			assert.equal(model.extResources[1].imagePreview?.message, "Image file is missing.");
 			assert.equal(byName.get("unsupported")?.imagePreview?.uri, undefined);
 			assert.match(byName.get("unsupported")?.imagePreview?.message ?? "", /cannot be previewed/);
 			assert.equal(byName.get("unsafe_image")?.imagePreview?.uri, undefined);
 			assert.match(byName.get("unsafe_image")?.imagePreview?.message ?? "", /restricted/);
-			assert.equal(resolveResourceUri(doc.uri, path.join(root, "icon with space.svg"))?.fsPath, path.join(root, "icon with space.svg"));
+			assert.equal(
+				resolveResourceUri(doc.uri, path.join(root, "icon with space.svg"))?.fsPath,
+				path.join(root, "icon with space.svg"),
+			);
 			assert.equal(resolveResourceUri(doc.uri, "https://example.com/image.png"), undefined);
 		} finally {
 			provider.dispose();
@@ -383,7 +495,10 @@ shader_param/strength = 0.8
 		const oldOpen = vscode.workspace.openTextDocument;
 		const oldApply = vscode.workspace.applyEdit;
 		const oldDialog = vscode.window.showOpenDialog;
-		const context = { subscriptions: [], extensionUri: vscode.Uri.file(os.homedir()) } as unknown as vscode.ExtensionContext;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
 		const provider = new ResourceInspectorProvider(context);
 		try {
 			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
@@ -392,9 +507,18 @@ shader_param/strength = 0.8
 			const document = makeDocument(uri, text);
 			(vscode.workspace as { openTextDocument: unknown }).openTextDocument = async () => document;
 			let edited = "";
-			(vscode.workspace as { applyEdit: unknown }).applyEdit = async (edit: { edits: Array<{ newText: string }> }) => { edited = edit.edits[0].newText; return true; };
-			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = async () => [vscode.Uri.file(path.join(root, "new.png"))];
-			const protocol = provider as unknown as { onMessage(uri: vscode.Uri, message: Record<string, unknown>): Promise<void> };
+			(vscode.workspace as { applyEdit: unknown }).applyEdit = async (edit: {
+				edits: Array<{ newText: string }>;
+			}) => {
+				edited = edit.edits[0].newText;
+				return true;
+			};
+			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = async () => [
+				vscode.Uri.file(path.join(root, "new.png")),
+			];
+			const protocol = provider as unknown as {
+				onMessage(uri: vscode.Uri, message: Record<string, unknown>): Promise<void>;
+			};
 			await protocol.onMessage(uri, { command: "pickResource", name: "icon" });
 			assert.ok(edited.includes('path="res://new.png" id=8]'));
 			assert.ok(edited.includes("icon = ExtResource( 8 )"));
@@ -438,8 +562,14 @@ shader_param/strength = 0.8
 			fs.mkdirSync(path.join(root, "resources"));
 			const resource = vscode.Uri.file(path.join(root, "resources", "hero.tres"));
 
-			assert.equal(resolveResourceUri(resource, "res://assets/icon.svg")?.fsPath, path.join(root, "assets", "icon.svg"));
-			assert.equal(resolveResourceUri(resource, "../assets/icon.svg")?.fsPath, path.join(root, "assets", "icon.svg"));
+			assert.equal(
+				resolveResourceUri(resource, "res://assets/icon.svg")?.fsPath,
+				path.join(root, "assets", "icon.svg"),
+			);
+			assert.equal(
+				resolveResourceUri(resource, "../assets/icon.svg")?.fsPath,
+				path.join(root, "assets", "icon.svg"),
+			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

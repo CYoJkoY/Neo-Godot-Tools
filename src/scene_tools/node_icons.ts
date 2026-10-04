@@ -1,16 +1,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Scene, SceneNode } from "./types";
 import { get_extension_uri } from "../utils";
+import { createLruCache } from "../utils/lru_cache";
 import { yieldToEventLoop } from "../utils/scheduling";
+import type { Scene, SceneNode } from "./types";
 
 const ICON_ROOT = get_extension_uri("resources", "godot_icons").fsPath;
 const DEFAULT_NODE_ICON = "Node";
 /** Skip pathological files while scanning scripts for custom classes. */
 const MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
 const CLASS_INDEX_TTL_MS = 60_000;
-/** Icon file existence never changes while the extension runs. */
-const iconCache = new Map<string, boolean>();
+/**
+ * Icon file existence never changes while the extension runs, so hits are
+ * permanent; the bound only keeps a project with thousands of distinct classes
+ * from growing the map forever.
+ */
+const iconCache = createLruCache<string, boolean>({ capacity: 2048 });
 
 function icon_exists(className: string): boolean {
 	if (!className) return false;
@@ -41,7 +46,8 @@ function find_project_dir(fromFile: string): string | undefined {
 const CLASS_NAME_RE = /^[ \t]*class_name[ \t]+([A-Za-z_][A-Za-z0-9_]*)/m;
 const GD_EXTENDS_RE =
 	/^[ \t]*extends[ \t]+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*))/m;
-const CS_EXTENDS_RE = /^[ \t]*(?:public[ \t]+)?(?:partial[ \t]+)?class[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*:[ \t]*([A-Za-z_][A-Za-z0-9_]*)/m;
+const CS_EXTENDS_RE =
+	/^[ \t]*(?:public[ \t]+)?(?:partial[ \t]+)?class[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*:[ \t]*([A-Za-z_][A-Za-z0-9_]*)/m;
 
 function script_extends(source: string): string | undefined {
 	const gd = source.match(GD_EXTENDS_RE);
@@ -71,7 +77,8 @@ class ClassNameIndex {
 		if (fresh) return;
 		if (this.building) {
 			await this.building;
-			const stillFresh = dir === this.projectDir && this.byName.size > 0 && Date.now() - this.builtAt < CLASS_INDEX_TTL_MS;
+			const stillFresh =
+				dir === this.projectDir && this.byName.size > 0 && Date.now() - this.builtAt < CLASS_INDEX_TTL_MS;
 			if (stillFresh) return;
 		}
 		const generation = ++this.generation;
@@ -145,7 +152,7 @@ class ClassNameIndex {
 }
 
 const classIndex = new ClassNameIndex();
-const baseClassCache = new Map<string, { base: string | undefined; mtime: number }>();
+const baseClassCache = createLruCache<string, { base: string | undefined; mtime: number }>({ capacity: 512 });
 
 /** Invalidate cached custom-class metadata after a script file changed. */
 export function invalidateNodeIconCaches(): void {

@@ -1,7 +1,12 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { BindingIndex, FileIndex, SymbolIndex, TypeResolutionIndex } from "../src/index/index.js";
+import {
+	createBindingIndex,
+	createFileIndex,
+	createSymbolIndex,
+	createTypeResolutionIndex,
+} from "../src/index/index.js";
 
 interface Sample {
 	name: string;
@@ -38,7 +43,9 @@ function measure(sample: Sample, action: () => void): void {
 
 function report(samples: Sample[]): void {
 	for (const sample of samples) {
-		console.log(`${sample.name}: p50=${percentile(sample.values, 50).toFixed(2)}ms p95=${percentile(sample.values, 95).toFixed(2)}ms p99=${percentile(sample.values, 99).toFixed(2)}ms n=${sample.values.length}`);
+		console.log(
+			`${sample.name}: p50=${percentile(sample.values, 50).toFixed(2)}ms p95=${percentile(sample.values, 95).toFixed(2)}ms p99=${percentile(sample.values, 99).toFixed(2)}ms n=${sample.values.length}`,
+		);
 	}
 }
 
@@ -48,10 +55,10 @@ if (!files.length) {
 	console.error(`No .gd files found under ${root}`);
 	process.exitCode = 1;
 } else {
-	const fileIndex = new FileIndex();
-	const symbolIndex = new SymbolIndex(fileIndex);
-	const bindingIndex = new BindingIndex(fileIndex);
-	const typeIndex = new TypeResolutionIndex(fileIndex, symbolIndex, bindingIndex);
+	const fileIndex = createFileIndex();
+	const symbolIndex = createSymbolIndex(fileIndex);
+	const bindingIndex = createBindingIndex(fileIndex);
+	const typeIndex = createTypeResolutionIndex(fileIndex, symbolIndex, bindingIndex);
 	const samples: Sample[] = [
 		{ name: "cold-indexing", values: [] },
 		{ name: "single-edit", values: [] },
@@ -76,7 +83,7 @@ if (!files.length) {
 			fileIndex.update(targetUri, edited, iteration + 2);
 			symbolIndex.update(targetUri);
 			bindingIndex.update(targetUri);
-		typeIndex.invalidate([targetUri]);
+			typeIndex.invalidate([targetUri]);
 		});
 	}
 

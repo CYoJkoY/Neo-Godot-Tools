@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * Yields to the extension host's event loop.
@@ -33,18 +34,15 @@ export async function forEachWithTimeBudget<T>(
 	options: TimeBudgetOptions = {},
 ): Promise<number> {
 	const budget = options.budgetMs ?? 8;
-	let processed = 0;
-	let sliceStart = performance.now();
-	for (const item of items) {
-		if (options.isCancelled?.()) break;
-		await work(item, processed);
-		processed++;
-		if (performance.now() - sliceStart < budget) continue;
+	// `work` is awaited on every step, so this unwinds instead of growing a stack.
+	const processFrom = async (from: number, sliceStart: number): Promise<number> => {
+		if (from >= items.length || options.isCancelled?.()) return from;
+		await work(items[from], from);
+		if (performance.now() - sliceStart < budget) return processFrom(from + 1, sliceStart);
 		await yieldToEventLoop();
-		if (options.isCancelled?.()) break;
-		sliceStart = performance.now();
-	}
-	return processed;
+		return processFrom(from + 1, performance.now());
+	};
+	return processFrom(0, performance.now());
 }
 
 /**
@@ -54,28 +52,22 @@ export async function forEachWithTimeBudget<T>(
  * can stay unanswered forever if that process is wedged; callers must never
  * wait on them without a bound.
  */
-export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout?: () => void): Promise<T | undefined> {
-	return new Promise<T | undefined>((resolve) => {
-		let settled = false;
-		const timer = setTimeout(() => {
-			if (settled) return;
-			settled = true;
-			onTimeout?.();
-			resolve(undefined);
-		}, Math.max(0, timeoutMs));
-		promise.then(
-			(value) => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timer);
-				resolve(value);
-			},
-			() => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timer);
-				resolve(undefined);
-			},
-		);
+export async function withTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	onTimeout?: () => void,
+): Promise<T | undefined> {
+	const abort = new AbortController();
+	const timeout = delay(Math.max(0, timeoutMs), undefined, { signal: abort.signal });
+	const expiry = timeout.then(() => {
+		onTimeout?.();
+		return undefined;
 	});
+	try {
+		// Rejections are reported as a timeout-sized gap rather than thrown at the caller.
+		return await Promise.race([promise.catch(() => undefined), expiry]);
+	} finally {
+		// Settling first cancels the pending timer so it cannot hold the event loop open.
+		abort.abort();
+	}
 }

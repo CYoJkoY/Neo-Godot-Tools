@@ -1,13 +1,17 @@
 import * as vscode from "vscode";
+import { HoverFallback } from "../fallback/hover";
+import { LanguageService } from "../language/service";
 import { SceneParser } from "../scene_tools";
 import { convert_resource_path_to_uri, convert_uid_to_uri, convert_uri_to_resource_path } from "../utils";
-import { LanguageService } from "../language/service";
-import { HoverFallback } from "../fallback/hover";
 
 export class GDHoverProvider implements vscode.HoverProvider {
 	public parser = new SceneParser();
 
-	constructor(private readonly context: vscode.ExtensionContext, private readonly languageService?: LanguageService, private readonly fallback = new HoverFallback()) {
+	constructor(
+		context: vscode.ExtensionContext,
+		private readonly languageService?: LanguageService,
+		private readonly fallback = new HoverFallback(),
+	) {
 		const selector = [
 			{ language: "gdresource", scheme: "file" },
 			{ language: "gdscene", scheme: "file" },
@@ -16,7 +20,11 @@ export class GDHoverProvider implements vscode.HoverProvider {
 		context.subscriptions.push(vscode.languages.registerHoverProvider(selector, this));
 	}
 
-	async provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Hover | undefined> {
+	async provideHover(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken,
+	): Promise<vscode.Hover | undefined> {
 		if (document.languageId === "gdscript" && this.languageService) {
 			const local = this.languageService.getHover(document, position);
 			if (local) return local;
@@ -25,7 +33,10 @@ export class GDHoverProvider implements vscode.HoverProvider {
 		return this.provideResourceHover(document, position);
 	}
 
-	private async provideResourceHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
+	private async provideResourceHover(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+	): Promise<vscode.Hover | undefined> {
 		if (["gdresource", "gdscene"].includes(document.languageId)) {
 			const scene = this.parser.parse_scene(document);
 			const wordPattern = /(?:Ext|Sub)Resource\(\s?"?(\w+)\s?"?\)/;

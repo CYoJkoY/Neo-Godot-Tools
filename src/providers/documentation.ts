@@ -9,17 +9,15 @@ import type {
 	WebviewPanel,
 } from "vscode";
 import type { NotificationMessage } from "vscode-jsonrpc";
-import type {
-	NativeSymbolInspectParams,
-	GodotNativeSymbol,
-	GodotNativeClassInfo,
-	GodotCapabilities,
-} from "./documentation_types";
-import { make_html_content } from "./documentation_builder";
-import { createLogger, get_configuration, get_extension_uri, make_docs_uri } from "../utils";
 import { globals } from "../extension";
-
-const log = createLogger("providers.docs");
+import { get_configuration, get_extension_uri, make_docs_uri } from "../utils";
+import { make_html_content } from "./documentation_builder";
+import type {
+	GodotCapabilities,
+	GodotNativeClassInfo,
+	GodotNativeSymbol,
+	NativeSymbolInspectParams,
+} from "./documentation_types";
 
 export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 	public classInfo = new Map<string, GodotNativeClassInfo>();
@@ -27,8 +25,9 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 	public htmlDb = new Map<string, string>();
 
 	private ready = false;
+	private markCapabilitiesReady?: () => void;
 
-	constructor(private context: ExtensionContext) {
+	constructor(context: ExtensionContext) {
 		const options = {
 			webviewOptions: {
 				enableScripts: true,
@@ -61,6 +60,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 			}
 		}
 		this.ready = true;
+		this.markCapabilitiesReady?.();
 	}
 
 	public async list_native_classes() {
@@ -75,10 +75,24 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 
 	public openCustomDocument(
 		uri: Uri,
-		openContext: CustomDocumentOpenContext,
-		token: CancellationToken,
+		_openContext: CustomDocumentOpenContext,
+		_token: CancellationToken,
 	): CustomDocument {
 		return { uri: uri, dispose: () => {} };
+	}
+
+	/**
+	 * Resolves when `gdscript/capabilities` has arrived, or when the editor is
+	 * closed: polling for it burned a timer per open panel and kept the panel
+	 * waiting forever while Godot was not running.
+	 */
+	private waitForCapabilities(token: CancellationToken): Promise<void> {
+		if (this.ready) return Promise.resolve();
+		const ready = new Promise<void>((resolve) => {
+			this.markCapabilitiesReady = resolve;
+		});
+		const cancelled = new Promise<void>((resolve) => token.onCancellationRequested(resolve));
+		return Promise.race([ready, cancelled]);
 	}
 
 	public async resolveCustomEditor(
@@ -94,9 +108,7 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 			enableScripts: true,
 		};
 
-		while (!this.ready) {
-			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
+		await this.waitForCapabilities(token);
 
 		symbol = this.symbolDb.get(className);
 
@@ -119,8 +131,8 @@ export class GDDocumentationProvider implements CustomReadonlyEditorProvider {
 
 		let classHtml = this.htmlDb.get(className);
 		if (classHtml) {
-			const scaleFactor = get_configuration("documentation.pageScale");
-			classHtml = classHtml.replaceAll("scaleFactor", scaleFactor);
+			const scaleFactor = get_configuration("documentation.pageScale", 100);
+			classHtml = classHtml.replaceAll("scaleFactor", String(scaleFactor));
 
 			const displayMinimap = get_configuration("documentation.displayMinimap");
 			if (displayMinimap) {

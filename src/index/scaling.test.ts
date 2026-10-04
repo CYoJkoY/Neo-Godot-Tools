@@ -1,12 +1,12 @@
 import { strict as assert } from "node:assert";
-import { describe, it } from "node:test";
 import { performance } from "node:perf_hooks";
-import { BindingIndex } from "./bindings.js";
-import { DependencyGraph } from "./dependency_graph.js";
-import { FileIndex } from "./file_index.js";
-import { ReferenceIndex } from "./references.js";
-import { SymbolIndex } from "./symbol_index.js";
-import { TypeResolutionIndex } from "./type_resolution.js";
+import { describe, it } from "node:test";
+import { createBindingIndex } from "./bindings.js";
+import { createDependencyGraph } from "./dependency_graph.js";
+import { createFileIndex } from "./file_index.js";
+import { createReferenceIndex } from "./references.js";
+import { createSymbolIndex } from "./symbol_index.js";
+import { createTypeResolutionIndex } from "./type_resolution.js";
 
 /**
  * Synthetic file with many distinct identifiers. Real Godot projects have
@@ -22,11 +22,11 @@ function sourceFor(index: number): string {
 }
 
 function indexProject(count: number): number {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
-	const references = new ReferenceIndex(files);
-	const dependencies = new DependencyGraph(files);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	const references = createReferenceIndex(files);
+	const dependencies = createDependencyGraph(files);
 	const start = performance.now();
 	for (let index = 0; index < count; index++) {
 		const uri = `file:///workspace/scripts_${index}.gd`;
@@ -54,11 +54,11 @@ describe("project index scaling", () => {
 	});
 
 	it("keeps a single document edit independent of project size", () => {
-		const files = new FileIndex();
-		const symbols = new SymbolIndex(files);
-		const bindings = new BindingIndex(files);
-		const references = new ReferenceIndex(files);
-		const dependencies = new DependencyGraph(files);
+		const files = createFileIndex();
+		const symbols = createSymbolIndex(files);
+		const bindings = createBindingIndex(files);
+		const references = createReferenceIndex(files);
+		const dependencies = createDependencyGraph(files);
 		for (let index = 0; index < 600; index++) {
 			const uri = `file:///workspace/scripts_${index}.gd`;
 			files.update(uri, sourceFor(index), 1);
@@ -82,7 +82,7 @@ describe("project index scaling", () => {
 
 describe("script path lookup", () => {
 	it("resolves unique res:// suffixes and rejects ambiguous basenames", () => {
-		const files = new FileIndex();
+		const files = createFileIndex();
 		files.update("file:///project/scripts/player.gd", "extends Node\n");
 		files.update("file:///project/scenes/enemy.gd", "extends Node\n");
 		assert.equal(files.findByPathSuffix("res://scripts/player.gd"), "file:///project/scripts/player.gd");
@@ -98,11 +98,11 @@ describe("script path lookup", () => {
 	});
 
 	it("resolves extends against files that were never updated in the graph", () => {
-		const files = new FileIndex();
-		const symbols = new SymbolIndex(files);
-		const bindings = new BindingIndex(files);
-		const types = new TypeResolutionIndex(files, symbols, bindings);
-		const dependencies = new DependencyGraph(files);
+		const files = createFileIndex();
+		const symbols = createSymbolIndex(files);
+		const bindings = createBindingIndex(files);
+		const types = createTypeResolutionIndex(files, symbols, bindings);
+		const dependencies = createDependencyGraph(files);
 
 		files.update("file:///project/base.gd", "class_name Base\nfunc heal() -> void:\n\tpass\n");
 		symbols.update("file:///project/base.gd");
@@ -115,8 +115,8 @@ describe("script path lookup", () => {
 	});
 
 	it("resolves a preload path that only the file index knows about", () => {
-		const files = new FileIndex();
-		const dependencies = new DependencyGraph(files);
+		const files = createFileIndex();
+		const dependencies = createDependencyGraph(files);
 		files.update("file:///project/scripts/tool.gd", "extends Node\n");
 		files.update("file:///project/main.gd", 'extends Node\nvar tool = preload("res://scripts/tool.gd").new()\n');
 		dependencies.update("file:///project/main.gd");

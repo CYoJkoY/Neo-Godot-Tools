@@ -1,14 +1,25 @@
 import * as vscode from "vscode";
-import { FileIndex, IndexedParameter, IndexedSymbol, Binding, BindingIndex, ReferenceIndex, SymbolIndex, TypeResolutionIndex, DependencyGraph, classifySemanticChange } from "../index";
 import { DefinitionFallback } from "../fallback/definition";
 import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
-import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
-import { SemanticQueryEngine } from "./semantic/query_engine";
-import { isSafeLocalConfidence } from "./semantic/resolution_policy";
-import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
+import {
+	Binding,
+	IndexedParameter,
+	IndexedSymbol,
+	classifySemanticChange,
+	createBindingIndex,
+	createDependencyGraph,
+	createFileIndex,
+	createReferenceIndex,
+	createSymbolIndex,
+	createTypeResolutionIndex,
+} from "../index";
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
+import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
+import { SemanticQueryEngine } from "./semantic/query_engine";
+import { isSafeLocalConfidence } from "./semantic/resolution_policy";
+import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
 
 function wordRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
 	return document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
@@ -17,15 +28,23 @@ function wordRange(document: vscode.TextDocument, position: vscode.Position): vs
 function bindingKind(kind: Binding["kind"]): vscode.CompletionItemKind {
 	switch (kind) {
 		case "parameter":
-		case "local": return vscode.CompletionItemKind.Variable;
-		case "member": return vscode.CompletionItemKind.Field;
-		case "function": return vscode.CompletionItemKind.Function;
+		case "local":
+			return vscode.CompletionItemKind.Variable;
+		case "member":
+			return vscode.CompletionItemKind.Field;
+		case "function":
+			return vscode.CompletionItemKind.Function;
 		case "class":
-		case "class_name": return vscode.CompletionItemKind.Class;
-		case "constant": return vscode.CompletionItemKind.Constant;
-		case "signal": return vscode.CompletionItemKind.Event;
-		case "enum": return vscode.CompletionItemKind.Enum;
-		case "enum_member": return vscode.CompletionItemKind.EnumMember;
+		case "class_name":
+			return vscode.CompletionItemKind.Class;
+		case "constant":
+			return vscode.CompletionItemKind.Constant;
+		case "signal":
+			return vscode.CompletionItemKind.Event;
+		case "enum":
+			return vscode.CompletionItemKind.Enum;
+		case "enum_member":
+			return vscode.CompletionItemKind.EnumMember;
 	}
 }
 
@@ -57,12 +76,12 @@ function parameterLabel(parameter: IndexedParameter): string {
 }
 
 export class LanguageService implements vscode.Disposable {
-	readonly files = new FileIndex();
-	readonly symbols = new SymbolIndex(this.files);
-	readonly references = new ReferenceIndex(this.files);
-	readonly bindings = new BindingIndex(this.files);
-	readonly types = new TypeResolutionIndex(this.files, this.symbols, this.bindings);
-	readonly dependencies = new DependencyGraph(this.files);
+	readonly files = createFileIndex();
+	readonly symbols = createSymbolIndex(this.files);
+	readonly references = createReferenceIndex(this.files);
+	readonly bindings = createBindingIndex(this.files);
+	readonly types = createTypeResolutionIndex(this.files, this.symbols, this.bindings);
+	readonly dependencies = createDependencyGraph(this.files);
 	readonly semantic = new SemanticQueryEngine(this.files, this.symbols, this.bindings, this.types);
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly updateScheduler: UpdateScheduler;
@@ -102,33 +121,89 @@ export class LanguageService implements vscode.Disposable {
 		this.semantic.clear();
 	}
 
-	getDocumentSymbols(uri: string): readonly IndexedSymbol[] { return this.files.get(uri)?.symbols ?? []; }
-	getWorkspaceSymbols(query: string): IndexedSymbol[] { return this.symbols.workspaceSymbols(query); }
+	getDocumentSymbols(uri: string): readonly IndexedSymbol[] {
+		return this.files.get(uri)?.symbols ?? [];
+	}
+	getWorkspaceSymbols(query: string): IndexedSymbol[] {
+		return this.symbols.workspaceSymbols(query);
+	}
 
-	async getDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Definition | undefined> {
+	async getDefinition(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken,
+	): Promise<vscode.Definition | undefined> {
+		const local = this.getLocalDefinition(document, position);
+		if (local) return local;
 		if (token.isCancellationRequested) return undefined;
-		const result = languageProfiler.measure("semantic.definition", () => this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }));
+		return languageProfiler.measureAsync("lsp.fallback.definition", () =>
+			this.definitionFallback.provide(document, position, token),
+		);
+	}
+
+	/**
+	 * Definition from the local semantic index alone.
+	 *
+	 * Providers call this before consulting engine documentation so that a
+	 * project symbol (an inner class method that shares its name with a builtin,
+	 * for example) always wins over the engine's own catalog.
+	 */
+	getLocalDefinition(document: vscode.TextDocument, position: vscode.Position): vscode.Location | undefined {
+		const result = languageProfiler.measure("semantic.definition", () =>
+			this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }),
+		);
 		if (result.value && isSafeLocalConfidence(result.confidence)) return this.toLocation(result.value);
-		if (token.isCancellationRequested) return undefined;
-		return languageProfiler.measureAsync("lsp.fallback.definition", () => this.definitionFallback.provide(document, position, token));
+		return undefined;
 	}
 
-	async getReferences(document: vscode.TextDocument, position: vscode.Position, includeDeclaration: boolean, token: vscode.CancellationToken): Promise<vscode.Location[] | undefined> {
+	async getReferences(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		includeDeclaration: boolean,
+		token: vscode.CancellationToken,
+	): Promise<vscode.Location[] | undefined> {
 		if (token.isCancellationRequested) return undefined;
-		const result = languageProfiler.measure("semantic.references", () => this.semantic.getReferences(document.uri.toString(), { offset: document.offsetAt(position) }, includeDeclaration));
-		if (result.value && result.confidence === "exact") return result.value.map((reference) => this.toReferenceLocation(reference));
+		const result = languageProfiler.measure("semantic.references", () =>
+			this.semantic.getReferences(
+				document.uri.toString(),
+				{ offset: document.offsetAt(position) },
+				includeDeclaration,
+			),
+		);
+		if (result.value && result.confidence === "exact")
+			return result.value.map((reference) => this.toReferenceLocation(reference));
 		if (token.isCancellationRequested) return undefined;
-		return languageProfiler.measureAsync("lsp.fallback.references", () => this.referencesFallback.provide(document, position, { includeDeclaration }, token));
+		return languageProfiler.measureAsync("lsp.fallback.references", () =>
+			this.referencesFallback.provide(document, position, { includeDeclaration }, token),
+		);
 	}
 
-	async getRenameEdits(document: vscode.TextDocument, position: vscode.Position, newName: string, token: vscode.CancellationToken): Promise<vscode.WorkspaceEdit | undefined> {
+	async getRenameEdits(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		newName: string,
+		token: vscode.CancellationToken,
+	): Promise<vscode.WorkspaceEdit | undefined> {
 		if (token.isCancellationRequested || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return undefined;
 		const range = wordRange(document, position);
-		if (!range) return languageProfiler.measureAsync("lsp.fallback.rename", () => this.renameFallback.provide(document, position, newName, token));
-		const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
-		if (!binding) return languageProfiler.measureAsync("lsp.fallback.rename", () => this.renameFallback.provide(document, position, newName, token));
+		if (!range)
+			return languageProfiler.measureAsync("lsp.fallback.rename", () =>
+				this.renameFallback.provide(document, position, newName, token),
+			);
+		const binding = this.bindings.getBinding(
+			document.uri.toString(),
+			document.offsetAt(range.start),
+			document.getText(range),
+		);
+		if (!binding)
+			return languageProfiler.measureAsync("lsp.fallback.rename", () =>
+				this.renameFallback.provide(document, position, newName, token),
+			);
 		const references = this.bindings.findReferences(binding.id);
-		if (!references.length) return languageProfiler.measureAsync("lsp.fallback.rename", () => this.renameFallback.provide(document, position, newName, token));
+		if (!references.length)
+			return languageProfiler.measureAsync("lsp.fallback.rename", () =>
+				this.renameFallback.provide(document, position, newName, token),
+			);
 		const edit = new vscode.WorkspaceEdit();
 		for (const reference of references) {
 			if (token.isCancellationRequested) return undefined;
@@ -140,27 +215,40 @@ export class LanguageService implements vscode.Disposable {
 	getHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
 		return languageProfiler.measure("semantic.hover", () => {
 			const result = this.semantic.getHover(document.uri.toString(), { offset: document.offsetAt(position) });
-			if (result.value && isSafeLocalConfidence(result.confidence)) return this.hoverForSymbol(this.hydrateHoverSymbol(result.value));
+			if (result.value && isSafeLocalConfidence(result.confidence))
+				return this.hoverForSymbol(this.hydrateHoverSymbol(result.value));
 			const range = wordRange(document, position);
 			if (!range) return undefined;
-			const binding = this.bindings.getBinding(document.uri.toString(), document.offsetAt(range.start), document.getText(range));
+			const binding = this.bindings.getBinding(
+				document.uri.toString(),
+				document.offsetAt(range.start),
+				document.getText(range),
+			);
 			if (binding && result.confidence === "exact") return this.hoverForBinding(binding);
 			return undefined;
 		});
 	}
 
-	getCompletions(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): vscode.CompletionList | undefined {
+	getCompletions(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token?: vscode.CancellationToken,
+	): vscode.CompletionList | undefined {
 		if (token?.isCancellationRequested) return undefined;
-		const result = languageProfiler.measure("semantic.completion", () => this.semantic.getCompletions(document.uri.toString(), { offset: document.offsetAt(position) }));
+		const result = languageProfiler.measure("semantic.completion", () =>
+			this.semantic.getCompletions(document.uri.toString(), { offset: document.offsetAt(position) }),
+		);
 		if (token?.isCancellationRequested) return undefined;
-		const items = result.value?.map((item, index) => {
-			const completion = new vscode.CompletionItem(item.name, bindingKind(item.kind as Binding["kind"]));
-			completion.detail = item.kind === "function"
-				? `${item.name}()${item.returnType ? ` -> ${item.returnType}` : ""}`
-				: `${item.kind} ${item.name}${item.type ? `: ${item.type}` : ""}`;
-			completion.sortText = completionSortText(item.priority ?? index);
-			return completion;
-		}) ?? [];
+		const items =
+			result.value?.map((item, index) => {
+				const completion = new vscode.CompletionItem(item.name, bindingKind(item.kind as Binding["kind"]));
+				completion.detail =
+					item.kind === "function"
+						? `${item.name}()${item.returnType ? ` -> ${item.returnType}` : ""}`
+						: `${item.kind} ${item.name}${item.type ? `: ${item.type}` : ""}`;
+				completion.sortText = completionSortText(item.priority ?? index);
+				return completion;
+			}) ?? [];
 		if (isGlobalCompletionContext(document, position)) {
 			const word = wordRange(document, position);
 			const prefix = word ? document.getText(word) : "";
@@ -178,7 +266,11 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.CompletionList(items, false);
 	}
 
-	getSignatureHelp(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): vscode.SignatureHelp | undefined {
+	getSignatureHelp(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token?: vscode.CancellationToken,
+	): vscode.SignatureHelp | undefined {
 		if (token?.isCancellationRequested) return undefined;
 		return languageProfiler.measure("semantic.signatureHelp", () => {
 			const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
@@ -188,20 +280,43 @@ export class LanguageService implements vscode.Disposable {
 			const argumentText = match[2];
 			const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
 			const builtin = resolveBuiltinSymbol(name);
-			if (builtin) return this.signatureHelpForParameters(builtin.symbol.name, builtin.builtin.parameters, builtin.builtin.returnType, activeParameter);
+			if (builtin)
+				return this.signatureHelpForParameters(
+					builtin.symbol.name,
+					builtin.builtin.parameters,
+					builtin.builtin.returnType,
+					activeParameter,
+				);
 			const callOffset = Math.max(0, document.offsetAt(position) - match[1].length - 1);
 			const binding = this.bindings.getBinding(document.uri.toString(), callOffset, name);
-			const symbols = binding?.kind === "function" ? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined) : this.symbols.find(name);
+			const symbols =
+				binding?.kind === "function"
+					? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined)
+					: this.symbols.find(name);
 			const functions = symbols.filter((symbol) => symbol.kind === "function");
 			if (functions.length !== 1) return undefined;
 			const symbol = functions[0];
-			return this.signatureHelpForParameters(symbol.name, symbol.parameters ?? [], symbol.returnType, activeParameter);
+			return this.signatureHelpForParameters(
+				symbol.name,
+				symbol.parameters ?? [],
+				symbol.returnType,
+				activeParameter,
+			);
 		});
 	}
 
-	private signatureHelpForParameters(name: string, parameters: IndexedParameter[], returnType: string | undefined, activeParameter: number): vscode.SignatureHelp {
-		const signature = new vscode.SignatureInformation(`${name}(${parameters.map(parameterLabel).join(", ")})${returnType ? ` -> ${returnType}` : ""}`);
-		signature.parameters = parameters.map((parameter) => new vscode.ParameterInformation(parameterLabel(parameter)));
+	private signatureHelpForParameters(
+		name: string,
+		parameters: IndexedParameter[],
+		returnType: string | undefined,
+		activeParameter: number,
+	): vscode.SignatureHelp {
+		const signature = new vscode.SignatureInformation(
+			`${name}(${parameters.map(parameterLabel).join(", ")})${returnType ? ` -> ${returnType}` : ""}`,
+		);
+		signature.parameters = parameters.map(
+			(parameter) => new vscode.ParameterInformation(parameterLabel(parameter)),
+		);
 		const help = new vscode.SignatureHelp();
 		help.signatures = [signature];
 		help.activeSignature = 0;
@@ -221,7 +336,10 @@ export class LanguageService implements vscode.Disposable {
 		const builtin = resolveBuiltinSymbol(symbol.name);
 		if (builtin && builtin.symbol.uri === symbol.uri) {
 			const markdown = new vscode.MarkdownString();
-			markdown.appendCodeblock(`${builtin.builtin.name}(${builtin.builtin.parameters.map(parameterLabel).join(", ")})${builtin.builtin.returnType ? ` -> ${builtin.builtin.returnType}` : ""}`, "gdscript");
+			markdown.appendCodeblock(
+				`${builtin.builtin.name}(${builtin.builtin.parameters.map(parameterLabel).join(", ")})${builtin.builtin.returnType ? ` -> ${builtin.builtin.returnType}` : ""}`,
+				"gdscript",
+			);
 			markdown.appendMarkdown(`\n\n${builtin.builtin.description}`);
 			return new vscode.Hover(markdown);
 		}
@@ -236,7 +354,9 @@ export class LanguageService implements vscode.Disposable {
 	 * available on the indexed declaration (parameters and `##` documentation).
 	 */
 	private hydrateHoverSymbol(symbol: IndexedSymbol): IndexedSymbol {
-		const indexed = this.files.get(symbol.uri)?.symbols.find((candidate) => candidate.range.start.offset === symbol.range.start.offset);
+		const indexed = this.files
+			.get(symbol.uri)
+			?.symbols.find((candidate) => candidate.range.start.offset === symbol.range.start.offset);
 		if (!indexed) return symbol;
 		const hydrated: IndexedSymbol = { ...symbol };
 		hydrated.parameters = symbol.parameters ?? indexed.parameters;
@@ -249,18 +369,22 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private symbolForBinding(binding: Binding): IndexedSymbol | undefined {
-		return this.files.get(binding.uri)?.symbols.find((symbol) => symbol.range.start.offset === binding.declarationRange.start.offset);
+		return this.files
+			.get(binding.uri)
+			?.symbols.find((symbol) => (symbol.nameOffset ?? symbol.range.start.offset) === binding.nameOffset);
 	}
 
 	private symbolLabel(symbol: IndexedSymbol): string {
 		if (symbol.kind === "function") return this.signatureLabel(symbol);
-		if (symbol.kind === "variable" || symbol.kind === "constant") return `${symbol.kind} ${symbol.name}${symbol.type ? `: ${symbol.type}` : ""}`;
+		if (symbol.kind === "variable" || symbol.kind === "constant")
+			return `${symbol.kind} ${symbol.name}${symbol.type ? `: ${symbol.type}` : ""}`;
 		if (symbol.containerName) return `${symbol.containerName}.${symbol.name}`;
 		return `${symbol.kind} ${symbol.name}`;
 	}
 
 	private bindingLabel(binding: Binding): string {
-		if (binding.kind === "function") return `${binding.name}()${binding.returnType ? ` -> ${binding.returnType}` : ""}`;
+		if (binding.kind === "function")
+			return `${binding.name}()${binding.returnType ? ` -> ${binding.returnType}` : ""}`;
 		return `${binding.kind} ${binding.name}${binding.type ? `: ${binding.type}` : ""}`;
 	}
 
@@ -273,17 +397,32 @@ export class LanguageService implements vscode.Disposable {
 		return new vscode.Location(vscode.Uri.parse(symbol.uri), this.range(symbol.range));
 	}
 
-	private toReferenceLocation(reference: { uri: string; range: { start: { line: number; character: number }; end: { line: number; character: number } } }): vscode.Location {
+	private toReferenceLocation(reference: {
+		uri: string;
+		range: { start: { line: number; character: number }; end: { line: number; character: number } };
+	}): vscode.Location {
 		return new vscode.Location(vscode.Uri.parse(reference.uri), this.range(reference.range));
 	}
 
-	private range(sourceRange: { start: { line: number; character: number }; end: { line: number; character: number } }): vscode.Range {
-		return new vscode.Range(sourceRange.start.line, sourceRange.start.character, sourceRange.end.line, sourceRange.end.character);
+	private range(sourceRange: {
+		start: { line: number; character: number };
+		end: { line: number; character: number };
+	}): vscode.Range {
+		return new vscode.Range(
+			sourceRange.start.line,
+			sourceRange.start.character,
+			sourceRange.end.line,
+			sourceRange.end.character,
+		);
 	}
 
 	private scheduleDocument(document: vscode.TextDocument): void {
 		if (document.languageId !== "gdscript" || document.uri.scheme !== "file") return;
-		this.updateScheduler.enqueue({ uri: document.uri.toString(), source: document.getText(), version: document.version });
+		this.updateScheduler.enqueue({
+			uri: document.uri.toString(),
+			source: document.getText(),
+			version: document.version,
+		});
 	}
 
 	private scheduleUri(uri: vscode.Uri): void {
@@ -304,7 +443,8 @@ export class LanguageService implements vscode.Disposable {
 		const uri = vscode.Uri.parse(update.uri);
 		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === update.uri);
 		if (openDocument) {
-			if (openDocument.version >= update.version) this.updateText(update.uri, openDocument.getText(), openDocument.version);
+			if (openDocument.version >= update.version)
+				this.updateText(update.uri, openDocument.getText(), openDocument.version);
 			return;
 		}
 		try {
@@ -321,7 +461,12 @@ export class LanguageService implements vscode.Disposable {
 		const previousDependencies = this.dependencies.getDependencies(uri);
 		const file = this.files.update(uri, source, version);
 		this.dependencies.update(uri);
-		const change = classifySemanticChange(previous, file, previousDependencies, this.dependencies.getDependencies(uri));
+		const change = classifySemanticChange(
+			previous,
+			file,
+			previousDependencies,
+			this.dependencies.getDependencies(uri),
+		);
 		if (change.kind === "unchanged") return;
 
 		if (change.kind === "api_changed" || change.kind === "file_added") this.symbols.update(uri);
@@ -330,7 +475,10 @@ export class LanguageService implements vscode.Disposable {
 			this.bindings.update(uri);
 		}
 
-		const affected = change.kind === "api_changed" || change.kind === "file_added" ? this.dependencies.getTransitiveDependents(uri) : [];
+		const affected =
+			change.kind === "api_changed" || change.kind === "file_added"
+				? this.dependencies.getTransitiveDependents(uri)
+				: [];
 		this.types.invalidate([uri, ...affected]);
 		this.semantic.invalidate([uri, ...affected]);
 	}
@@ -401,19 +549,5 @@ export class LanguageService implements vscode.Disposable {
 			},
 			{ budgetMs: 8, isCancelled },
 		);
-	}
-
-	private async updateUri(uri: vscode.Uri): Promise<void> {
-		const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
-		if (openDocument) {
-			this.scheduleDocument(openDocument);
-			return;
-		}
-		try {
-			const bytes = await vscode.workspace.fs.readFile(uri);
-			this.updateText(uri.toString(), Buffer.from(bytes).toString("utf8"));
-		} catch {
-			this.remove(uri);
-		}
 	}
 }

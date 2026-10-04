@@ -1,8 +1,13 @@
 #!/usr/bin/env ts-node
-import { performance } from "node:perf_hooks";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BindingIndex, FileIndex, SymbolIndex, TypeResolutionIndex } from "../src/index/index.js";
+import { performance } from "node:perf_hooks";
+import {
+	createBindingIndex,
+	createFileIndex,
+	createSymbolIndex,
+	createTypeResolutionIndex,
+} from "../src/index/index.js";
 import { SemanticQueryEngine } from "../src/language/semantic/query_engine.js";
 
 type Sample = { p50: number; p95: number; p99: number; max: number };
@@ -53,10 +58,10 @@ const projectRoot = path.resolve(projectArg!);
 const scripts = collectScripts(projectRoot).slice(0, maxFiles);
 if (!scripts.length) throw new Error(`No GDScript files found in ${projectRoot}`);
 
-const files = new FileIndex();
-const symbols = new SymbolIndex(files);
-const bindings = new BindingIndex(files);
-const types = new TypeResolutionIndex(files, symbols, bindings);
+const files = createFileIndex();
+const symbols = createSymbolIndex(files);
+const bindings = createBindingIndex(files);
+const types = createTypeResolutionIndex(files, symbols, bindings);
 const semantic = new SemanticQueryEngine(files, symbols, bindings, types);
 
 const coldStart = performance.now();
@@ -88,7 +93,12 @@ for (let iteration = 0; iteration < 20; iteration++) {
 	editSamples.push(performance.now() - start);
 }
 
-const querySamples = { type: [] as number[], definition: [] as number[], hover: [] as number[], completion: [] as number[] };
+const querySamples = {
+	type: [] as number[],
+	definition: [] as number[],
+	hover: [] as number[],
+	completion: [] as number[],
+};
 for (let iteration = 0; iteration < 60; iteration++) {
 	let start = performance.now();
 	semantic.getType(targetUri, { offset: targetOffset });
@@ -118,16 +128,22 @@ for (let iteration = 0; iteration < 50; iteration++) {
 	rapidTyping.push(performance.now() - start);
 }
 
-console.log(JSON.stringify({
-	project: projectRoot,
-	files: scripts.length,
-	coldIndexMs: Number(coldIndexMs.toFixed(2)),
-	singleEditMs: report(editSamples),
-	rapidTypingMs: report(rapidTyping),
-	semanticMs: {
-		type: report(querySamples.type),
-		definition: report(querySamples.definition),
-		hover: report(querySamples.hover),
-		completion: report(querySamples.completion),
-	},
-}, null, 2));
+console.log(
+	JSON.stringify(
+		{
+			project: projectRoot,
+			files: scripts.length,
+			coldIndexMs: Number(coldIndexMs.toFixed(2)),
+			singleEditMs: report(editSamples),
+			rapidTypingMs: report(rapidTyping),
+			semanticMs: {
+				type: report(querySamples.type),
+				definition: report(querySamples.definition),
+				hover: report(querySamples.hover),
+				completion: report(querySamples.completion),
+			},
+		},
+		null,
+		2,
+	),
+);

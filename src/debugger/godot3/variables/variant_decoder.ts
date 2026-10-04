@@ -1,19 +1,20 @@
+import type { GodotValue } from "../../debug_runtime";
 import {
-	GDScriptTypes,
-	BufferModel,
-	Vector3,
-	Vector2,
-	Basis,
 	AABB,
+	Basis,
+	BufferModel,
 	Color,
+	GDScriptTypes,
 	NodePath,
 	ObjectId,
 	Plane,
 	Quat,
+	RawObject,
 	Rect2,
 	Transform,
 	Transform2D,
-	RawObject,
+	Vector2,
+	Vector3,
 } from "./variants";
 
 export class VariantDecoder {
@@ -113,7 +114,7 @@ export class VariantDecoder {
 	}
 
 	private decode_Array(model: BufferModel) {
-		const output: Array<any> = [];
+		const output: GodotValue[] = [];
 
 		const count = this.decode_UInt32(model);
 
@@ -126,11 +127,7 @@ export class VariantDecoder {
 	}
 
 	private decode_Basis(model: BufferModel) {
-		return new Basis(
-			this.decode_Vector3(model),
-			this.decode_Vector3(model),
-			this.decode_Vector3(model)
-		);
+		return new Basis(this.decode_Vector3(model), this.decode_Vector3(model), this.decode_Vector3(model));
 	}
 
 	private decode_Color(model: BufferModel) {
@@ -141,7 +138,7 @@ export class VariantDecoder {
 	}
 
 	private decode_Dictionary(model: BufferModel) {
-		const output = new Map<any, any>();
+		const output = new Map<GodotValue, GodotValue>();
 
 		const count = this.decode_UInt32(model);
 		for (let i = 0; i < count; i++) {
@@ -364,11 +361,7 @@ export class VariantDecoder {
 	}
 
 	private decode_Transform2D(model: BufferModel) {
-		return new Transform2D(
-			this.decode_Vector2(model),
-			this.decode_Vector2(model),
-			this.decode_Vector2(model)
-		);
+		return new Transform2D(this.decode_Vector2(model), this.decode_Vector2(model), this.decode_Vector2(model));
 	}
 
 	private decode_Vector2(model: BufferModel) {

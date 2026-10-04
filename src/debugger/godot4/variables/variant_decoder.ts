@@ -1,61 +1,39 @@
+import type { GodotValue } from "../../debug_runtime";
 import {
-	GDScriptTypes,
-	type BufferModel,
-	Vector3,
-	Vector2,
-	Basis,
 	AABB,
+	Basis,
+	type BufferModel,
+	Callable,
 	Color,
-	NodePath,
-	ObjectId,
-	Plane,
-	Quat,
-	Rect2,
-	Transform3D,
-	Transform2D,
-	RawObject,
-	Vector2i,
-	Vector3i,
-	Rect2i,
-	Vector4,
-	Vector4i,
-	StringName,
-	Projection,
+	ContainerTypeFlags,
 	ENCODE_FLAG_64,
 	ENCODE_FLAG_OBJECT_AS_ID,
 	ENCODE_FLAG_TYPED_ARRAY_MASK,
 	ENCODE_FLAG_TYPED_DICT_MASK,
-	ContainerTypeFlags,
+	GDScriptTypes,
+	NodePath,
+	ObjectId,
+	Plane,
+	Projection,
+	Quat,
 	RID,
-	Callable,
+	RawObject,
+	Rect2,
+	Rect2i,
 	Signal,
+	StringName,
+	Transform2D,
+	Transform3D,
+	Vector2,
+	Vector2i,
+	Vector3,
+	Vector3i,
+	Vector4,
+	Vector4i,
 } from "./variants";
 
-export type DecodedVariant =
-	| string
-	| number
-	| bigint
-	| boolean
-	| DecodedVariant[]
-	| Vector2
-	| Rect2
-	| Vector3
-	| Transform2D
-	| Plane
-	| Vector4
-	| Quat
-	| AABB
-	| Basis
-	| Transform3D
-	| Projection
-	| Color
-	| StringName
-	| NodePath
-	| ObjectId
-	| Callable
-	| Signal
-	| Map<DecodedVariant, DecodedVariant>
-	| undefined;
+/** A value decoded from the Godot 4 debugger wire format. */
+export type DecodedVariant = GodotValue;
 
 export class VariantDecoder {
 	public decode_variant(model: BufferModel): DecodedVariant {
@@ -260,9 +238,9 @@ export class VariantDecoder {
 	private decode_Array(model: BufferModel, type: GDScriptTypes) {
 		const output: DecodedVariant[] = [];
 
-		let arrayType: number | string | undefined;
 		if (type & ENCODE_FLAG_TYPED_ARRAY_MASK) {
-			arrayType = this.decode_ContainerTypeFlag(model, type, 16);
+			// Consumes the flag even though the type itself is discarded (see TODO below).
+			this.decode_ContainerTypeFlag(model, type, 16);
 		}
 		// TODO: the type information is currently discarded
 		// it needs to be decoded and then packed into the output somehow
@@ -303,14 +281,10 @@ export class VariantDecoder {
 	private decode_Dictionary(model: BufferModel, type: GDScriptTypes) {
 		const output = new Map<DecodedVariant, DecodedVariant>();
 
-		let keyType: number | string | undefined;
-		let valueType: number | string | undefined;
 		if (type & ENCODE_FLAG_TYPED_DICT_MASK) {
-			keyType = this.decode_ContainerTypeFlag(model, type, 16);
-			valueType = this.decode_ContainerTypeFlag(model, type, 18);
-
-			// console.log("type:", (type >> 16) & 0b11, "keyType:", keyType);
-			// console.log("type:", type >> 18, "valueType:", valueType);
+			// Consumes the flags even though the types themselves are discarded (see TODO below).
+			this.decode_ContainerTypeFlag(model, type, 16);
+			this.decode_ContainerTypeFlag(model, type, 18);
 		}
 		// TODO: the type information is currently discarded
 		// it needs to be decoded and then packed into the output somehow
@@ -427,7 +401,7 @@ export class VariantDecoder {
 		return new RID(id);
 	}
 
-	private decode_Callable(model: BufferModel) {
+	private decode_Callable(_model: BufferModel) {
 		return new Callable();
 	}
 
@@ -480,16 +454,6 @@ export class VariantDecoder {
 		const output: number[] = [];
 		for (let i = 0; i < count; i++) {
 			output.push(this.decode_Float32(model));
-		}
-
-		return output;
-	}
-
-	private decode_PackedFloat64Array(model: BufferModel) {
-		const count = this.decode_UInt32(model);
-		const output: number[] = [];
-		for (let i = 0; i < count; i++) {
-			output.push(this.decode_Float64(model));
 		}
 
 		return output;

@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { BindingIndex, FileIndex, SymbolIndex, TypeResolutionIndex } from "./index.js";
+import { createBindingIndex, createFileIndex, createSymbolIndex, createTypeResolutionIndex } from "./index.js";
 
 const FIXTURE_ROOT = join(process.cwd(), "test_fixtures", "semantic");
 
@@ -11,10 +11,10 @@ function loadFixture(name: string): string {
 }
 
 function indexFixture(name: string, uri: string) {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
-	const types = new TypeResolutionIndex(files, symbols, bindings);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
 	const source = loadFixture(name);
 	const file = files.update(uri, source, 1);
 	symbols.update(uri);
@@ -29,9 +29,18 @@ for (const fixture of [
 	test(`semantic fixture indexes ${fixture[0]}`, () => {
 		const result = indexFixture(fixture[0], fixture[1]);
 		assert.equal(result.file.diagnostics.length, 0, "fixture must parse without diagnostics");
-		assert.ok(result.file.symbols.some((symbol) => symbol.name === fixture[2]), "class_name must be indexed");
-		assert.ok(result.file.symbols.some((symbol) => symbol.name === "get_health"), "function must be indexed");
-		assert.ok(result.file.symbols.some((symbol) => symbol.name === "base_health"), "portable typed member must be indexed");
+		assert.ok(
+			result.file.symbols.some((symbol) => symbol.name === fixture[2]),
+			"class_name must be indexed",
+		);
+		assert.ok(
+			result.file.symbols.some((symbol) => symbol.name === "get_health"),
+			"function must be indexed",
+		);
+		assert.ok(
+			result.file.symbols.some((symbol) => symbol.name === "base_health"),
+			"portable typed member must be indexed",
+		);
 	});
 }
 

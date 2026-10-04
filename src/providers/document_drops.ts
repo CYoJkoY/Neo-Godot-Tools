@@ -6,13 +6,13 @@ import {
 	DocumentDropEdit,
 	DocumentDropEditProvider,
 	ExtensionContext,
-	languages,
 	Position,
 	TextDocument,
+	languages,
 } from "vscode";
 import { SceneParser } from "../scene_tools/parser";
-import { node_name_to_snake, get_project_version, convert_uri_to_resource_path } from "../utils";
 import { SceneNode } from "../scene_tools/types";
+import { convert_uri_to_resource_path, get_project_version, node_name_to_snake } from "../utils";
 
 function read_boolean(value: unknown): boolean {
 	if (typeof value === "boolean") return value;
@@ -23,7 +23,7 @@ function read_boolean(value: unknown): boolean {
 export class GDDocumentDropEditProvider implements DocumentDropEditProvider {
 	public parser = new SceneParser();
 
-	constructor(private context: ExtensionContext) {
+	constructor(context: ExtensionContext) {
 		const dropEditSelector = [
 			{ language: "csharp", scheme: "file" },
 			{ language: "gdscript", scheme: "file" },
@@ -35,7 +35,7 @@ export class GDDocumentDropEditProvider implements DocumentDropEditProvider {
 		document: TextDocument,
 		position: Position,
 		dataTransfer: DataTransfer,
-		token: CancellationToken,
+		_token: CancellationToken,
 	): Promise<DocumentDropEdit | undefined> {
 		const targetResPath = await convert_uri_to_resource_path(document.uri);
 
@@ -95,7 +95,7 @@ export class GDDocumentDropEditProvider implements DocumentDropEditProvider {
 			if (line.text === "") {
 				const snippet = new vscode.SnippetString();
 
-				const projectVersion = await get_project_version() ?? "";
+				const projectVersion = (await get_project_version()) ?? "";
 				if (projectVersion.startsWith("4")) snippet.appendText("@");
 				snippet.appendText("onready var ");
 				snippet.appendPlaceholder(node_name_to_snake(label));

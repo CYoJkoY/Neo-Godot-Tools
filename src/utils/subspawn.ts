@@ -5,73 +5,72 @@ Original library copyright (c) 2022 Craig Wardman
 I had to vendor this library to fix the API in a couple places.
 */
 
-import { ChildProcess, SpawnOptions, execSync, spawn, SpawnOptionsWithoutStdio } from "node:child_process";
+import {
+	ChildProcess,
+	ChildProcessWithoutNullStreams,
+	SpawnOptions,
+	SpawnOptionsWithoutStdio,
+	execSync,
+	spawn,
+} from "node:child_process";
 import { createLogger } from ".";
 
 const log = createLogger("subspawn");
 
-interface DictionaryOfStringChildProcessArray {
-	[key: string]: ChildProcess[];
+/** Live children per owner, so a session can be torn down without killing the editor. */
+const children = new Map<string, ChildProcess[]>();
+
+/** Windows and macOS have no process groups, so the platform tools are used instead. */
+function force_kill(child: ChildProcess, pid: number): void {
+	if (process.platform === "win32") {
+		execSync(`taskkill /pid ${pid} /T /F`);
+		return;
+	}
+	if (process.platform === "darwin") {
+		execSync(`kill -9 ${pid}`);
+		return;
+	}
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch {
+		child.kill("SIGKILL");
+	}
 }
-const children: DictionaryOfStringChildProcessArray = {};
 
-export function killSubProcesses(owner: string) {
-	if (owner === "GodotEditor") {
-		children[owner] = [];
-		return;
+function kill_child(owner: string, child: ChildProcess): void {
+	const pid = child.pid;
+	if (pid === undefined) return;
+	try {
+		force_kill(child, pid);
+	} catch {
+		log.error(`couldn't kill task ${owner}`);
 	}
+}
 
-	if (!(owner in children)) {
-		return;
-	}
-
-	for (const c of children[owner]) {
-		try {
-			if (c.pid) {
-				if (process.platform === "win32") {
-					execSync(`taskkill /pid ${c.pid} /T /F`);
-				} else if (process.platform === "darwin") {
-					execSync(`kill -9 ${c.pid}`);
-				} else {
-					try {
-						process.kill(-c.pid, "SIGKILL");
-					} catch {
-						c.kill("SIGKILL");
-					}
-				}
-			}
-		} catch {
-			log.error(`couldn't kill task ${owner}`);
-		}
-	}
-	children[owner] = [];
+export function killSubProcesses(owner: string): void {
+	const owned = children.get(owner);
+	children.delete(owner);
+	owned?.map((child) => kill_child(owner, child));
 }
 
 process.on("exit", () => {
-	for (const owner of Object.keys(children)) {
-		killSubProcesses(owner);
-	}
+	[...children.keys()].map((owner) => killSubProcesses(owner));
 });
 
-function gracefulExitHandler() {
-	process.exit();
-}
-
-process.on("SIGINT", gracefulExitHandler);
-process.on("SIGTERM", gracefulExitHandler);
-process.on("SIGQUIT", gracefulExitHandler);
+process.on("SIGINT", () => process.exit());
+process.on("SIGTERM", () => process.exit());
+process.on("SIGQUIT", () => process.exit());
 
 export function subProcess(
 	owner: string,
 	command: string,
 	options: SpawnOptionsWithoutStdio = {},
 	args: readonly string[] = [],
-) {
+): ChildProcessWithoutNullStreams {
 	const childProcess = spawn(command, args, options);
-
-	children[owner] = children[owner] || [];
-	children[owner].push(childProcess);
-
+	const owned = children.get(owner) ?? [];
+	owned.push(childProcess);
+	children.set(owner, owned);
 	return childProcess;
 }
 
@@ -84,11 +83,7 @@ function quote_for_ps(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
-function spawn_via_powershell(
-	command: string,
-	args: readonly string[],
-	cwd: string,
-): ChildProcess {
+function spawn_via_powershell(command: string, args: readonly string[], cwd: string): ChildProcess {
 	const argList = args.length > 0 ? `@(${args.map(quote_for_ps).join(",")})` : "@()";
 	const script =
 		`Start-Process -FilePath ${quote_for_ps(command)} ` +
@@ -101,13 +96,9 @@ function spawn_via_powershell(
 	);
 }
 
-function spawn_via_cmd_start(
-	command: string,
-	args: readonly string[],
-	cwd: string,
-): ChildProcess {
+function spawn_via_cmd_start(command: string, args: readonly string[], cwd: string): ChildProcess {
 	const commandLine = [
-		"/d /s /c start \"\" /d",
+		'/d /s /c start "" /d',
 		quote_for_cmd(cwd),
 		quote_for_cmd(command),
 		...args.map(quote_for_cmd),
@@ -127,14 +118,12 @@ export function detachedProcess(
 ): ChildProcess {
 	const cwd = String(options.cwd ?? process.cwd());
 
-	// Windows
 	if (process.platform === "win32") {
 		const child = spawn_via_powershell(command, args, cwd);
 		child.once("error", () => {
 			log.warn("detachedProcess: Start-Process failed, falling back to cmd /c start");
 			try {
-				const fallback = spawn_via_cmd_start(command, args, cwd);
-				fallback.unref();
+				spawn_via_cmd_start(command, args, cwd).unref();
 			} catch (error) {
 				log.error(`detachedProcess: fallback launch failed: ${error}`);
 			}
@@ -143,14 +132,6 @@ export function detachedProcess(
 		return child;
 	}
 
-	// MacOS
-	if (process.platform === "darwin") {
-		const child = spawn(command, args, { ...options, detached: true, stdio: "ignore" });
-		child.unref();
-		return child;
-	}
-
-	// Linux + Other
 	const child = spawn(command, args, { ...options, detached: true, stdio: "ignore" });
 	child.unref();
 	return child;

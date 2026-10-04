@@ -1,11 +1,5 @@
 import * as vscode from "vscode";
-import {
-	Task,
-	TaskProvider,
-	TaskScope,
-	TaskDefinition,
-	ExtensionContext,
-} from "vscode";
+import { ExtensionContext, Task, TaskDefinition, TaskProvider } from "vscode";
 import { createLogger } from "../utils";
 
 const log = createLogger("providers.tasks");
@@ -16,10 +10,8 @@ interface GDTaskDefinition extends TaskDefinition {
 }
 
 export class GDTaskProvider implements TaskProvider {
-	constructor(private context: ExtensionContext) {
-		context.subscriptions.push(
-			vscode.tasks.registerTaskProvider("godot", this),
-		);
+	constructor(context: ExtensionContext) {
+		context.subscriptions.push(vscode.tasks.registerTaskProvider("godot", this));
 	}
 
 	public provideTasks() {

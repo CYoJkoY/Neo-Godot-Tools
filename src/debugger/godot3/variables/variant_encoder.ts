@@ -1,120 +1,95 @@
+import type { GodotValue } from "../../debug_runtime";
 import {
-	GDScriptTypes,
-	BufferModel,
-	Vector3,
-	Vector2,
-	Basis,
 	AABB,
+	Basis,
+	BufferModel,
 	Color,
+	GDScriptTypes,
 	Plane,
 	Quat,
 	Rect2,
 	Transform,
 	Transform2D,
+	Vector2,
+	Vector3,
+	to_wire_value,
 } from "./variants";
 
 export class VariantEncoder {
-	public encode_variant(
-		value:
-			| number
-			| bigint
-			| boolean
-			| string
-			| Map<any, any>
-			| Array<any>
-			| object
-			| undefined,
-		model?: BufferModel
-	) {
-		if (
-			typeof value === "number" &&
-			Number.isInteger(value) &&
-			(value > 2147483647 || value < -2147483648)
-		) {
-			value = BigInt(value);
-		}
-
-		if (!model) {
-			const size = this.size_variant(value);
-			const buffer = Buffer.alloc(size + 4);
-			model = {
-				buffer: buffer,
-				offset: 0,
-				len: 0,
-			};
-			this.encode_UInt32(size, model);
-		}
+	public encode_variant(raw_value: GodotValue, model?: BufferModel) {
+		const value = to_wire_value(raw_value);
+		const target = model ?? this.open_buffer(value);
 
 		switch (typeof value) {
 			case "number":
 				{
 					const is_integer = Number.isInteger(value);
 					if (is_integer) {
-						this.encode_UInt32(GDScriptTypes.INT, model);
-						this.encode_UInt32(value, model);
+						this.encode_UInt32(GDScriptTypes.INT, target);
+						this.encode_UInt32(value, target);
 					} else {
-						this.encode_UInt32(GDScriptTypes.REAL | (1 << 16), model);
-						this.encode_Float(value, model);
+						this.encode_UInt32(GDScriptTypes.REAL | (1 << 16), target);
+						this.encode_Float(value, target);
 					}
 				}
 				break;
 			case "bigint":
-				this.encode_UInt32(GDScriptTypes.INT | (1 << 16), model);
-				this.encode_UInt64(value, model);
+				this.encode_UInt32(GDScriptTypes.INT | (1 << 16), target);
+				this.encode_UInt64(value, target);
 				break;
 			case "boolean":
-				this.encode_UInt32(GDScriptTypes.BOOL, model);
-				this.encode_Bool(value, model);
+				this.encode_UInt32(GDScriptTypes.BOOL, target);
+				this.encode_Bool(value, target);
 				break;
 			case "string":
-				this.encode_UInt32(GDScriptTypes.STRING, model);
-				this.encode_String(value, model);
+				this.encode_UInt32(GDScriptTypes.STRING, target);
+				this.encode_String(value, target);
 				break;
 			case "undefined":
 				break;
 			default:
 				if (Array.isArray(value)) {
-					this.encode_UInt32(GDScriptTypes.ARRAY, model);
-					this.encode_Array(value, model);
+					this.encode_UInt32(GDScriptTypes.ARRAY, target);
+					this.encode_Array(value, target);
 				} else if (value instanceof Map) {
-					this.encode_UInt32(GDScriptTypes.DICTIONARY, model);
-					this.encode_Dictionary(value, model);
+					this.encode_UInt32(GDScriptTypes.DICTIONARY, target);
+					this.encode_Dictionary(value, target);
 				} else {
 					if (value instanceof Vector2) {
-						this.encode_UInt32(GDScriptTypes.VECTOR2, model);
-						this.encode_Vector2(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR2, target);
+						this.encode_Vector2(value, target);
 					} else if (value instanceof Rect2) {
-						this.encode_UInt32(GDScriptTypes.RECT2, model);
-						this.encode_Rect2(value, model);
+						this.encode_UInt32(GDScriptTypes.RECT2, target);
+						this.encode_Rect2(value, target);
 					} else if (value instanceof Vector3) {
-						this.encode_UInt32(GDScriptTypes.VECTOR3, model);
-						this.encode_Vector3(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR3, target);
+						this.encode_Vector3(value, target);
 					} else if (value instanceof Transform2D) {
-						this.encode_UInt32(GDScriptTypes.TRANSFORM2D, model);
-						this.encode_Transform2D(value, model);
+						this.encode_UInt32(GDScriptTypes.TRANSFORM2D, target);
+						this.encode_Transform2D(value, target);
 					} else if (value instanceof Plane) {
-						this.encode_UInt32(GDScriptTypes.PLANE, model);
-						this.encode_Plane(value, model);
+						this.encode_UInt32(GDScriptTypes.PLANE, target);
+						this.encode_Plane(value, target);
 					} else if (value instanceof Quat) {
-						this.encode_UInt32(GDScriptTypes.QUAT, model);
-						this.encode_Quat(value, model);
+						this.encode_UInt32(GDScriptTypes.QUAT, target);
+						this.encode_Quat(value, target);
 					} else if (value instanceof AABB) {
-						this.encode_UInt32(GDScriptTypes.AABB, model);
-						this.encode_AABB(value, model);
+						this.encode_UInt32(GDScriptTypes.AABB, target);
+						this.encode_AABB(value, target);
 					} else if (value instanceof Basis) {
-						this.encode_UInt32(GDScriptTypes.BASIS, model);
-						this.encode_Basis(value, model);
+						this.encode_UInt32(GDScriptTypes.BASIS, target);
+						this.encode_Basis(value, target);
 					} else if (value instanceof Transform) {
-						this.encode_UInt32(GDScriptTypes.TRANSFORM, model);
-						this.encode_Transform(value, model);
+						this.encode_UInt32(GDScriptTypes.TRANSFORM, target);
+						this.encode_Transform(value, target);
 					} else if (value instanceof Color) {
-						this.encode_UInt32(GDScriptTypes.COLOR, model);
-						this.encode_Color(value, model);
+						this.encode_UInt32(GDScriptTypes.COLOR, target);
+						this.encode_Color(value, target);
 					}
 				}
 		}
 
-		return model.buffer;
+		return target.buffer;
 	}
 
 	private encode_AABB(value: AABB, model: BufferModel) {
@@ -122,7 +97,7 @@ export class VariantEncoder {
 		this.encode_Vector3(value.size, model);
 	}
 
-	private encode_Array(arr: any[], model: BufferModel) {
+	private encode_Array(arr: GodotValue[], model: BufferModel) {
 		const size = arr.length;
 		this.encode_UInt32(size, model);
 		// biome-ignore lint/complexity/noForEach: <explanation>
@@ -148,7 +123,7 @@ export class VariantEncoder {
 		this.encode_Float(value.a, model);
 	}
 
-	private encode_Dictionary(dict: Map<any, any>, model: BufferModel) {
+	private encode_Dictionary(dict: Map<GodotValue, GodotValue>, model: BufferModel) {
 		const size = dict.size;
 		this.encode_UInt32(size, model);
 		const keys = Array.from(dict.keys());
@@ -158,11 +133,6 @@ export class VariantEncoder {
 			this.encode_variant(key, model);
 			this.encode_variant(value, model);
 		});
-	}
-
-	private encode_Double(value: number, model: BufferModel) {
-		model.buffer.writeDoubleLE(value, model.offset);
-		model.offset += 8;
 	}
 
 	private encode_Float(value: number, model: BufferModel) {
@@ -238,7 +208,7 @@ export class VariantEncoder {
 		return this.size_UInt32();
 	}
 
-	private size_Dictionary(dict: Map<any, any>): number {
+	private size_Dictionary(dict: Map<GodotValue, GodotValue>): number {
 		let size = this.size_UInt32();
 		const keys = Array.from(dict.keys());
 		// biome-ignore lint/complexity/noForEach: <explanation>
@@ -267,7 +237,7 @@ export class VariantEncoder {
 		return 8;
 	}
 
-	private size_array(arr: any[]): number {
+	private size_array(arr: GodotValue[]): number {
 		let size = this.size_UInt32();
 		// biome-ignore lint/complexity/noForEach: <explanation>
 		arr.forEach((e) => {
@@ -277,25 +247,17 @@ export class VariantEncoder {
 		return size;
 	}
 
-	private size_variant(
-		value:
-			| number
-			| bigint
-			| boolean
-			| string
-			| Map<any, any>
-			| any[]
-			| object
-			| undefined
-	): number {
-		let size = 4;
+	/** Builds the buffer a top-level variant is written into, including its size prefix. */
+	private open_buffer(value: GodotValue): BufferModel {
+		const size = this.size_variant(value);
+		const model: BufferModel = { buffer: Buffer.alloc(size + 4), offset: 0, len: 0 };
+		this.encode_UInt32(size, model);
+		return model;
+	}
 
-		if (
-			typeof value === "number" &&
-			(value > 2147483647 || value < -2147483648)
-		) {
-			value = BigInt(value);
-		}
+	private size_variant(raw_value: GodotValue): number {
+		const value = to_wire_value(raw_value);
+		let size = 4;
 
 		switch (typeof value) {
 			case "number":
@@ -320,8 +282,13 @@ export class VariantEncoder {
 					size += this.size_Dictionary(value);
 					break;
 				} else {
-					// biome-ignore lint/complexity/useLiteralKeys: <explanation>
-					switch (value["__type__"]) {
+					// Non-native variants arrive as tagged objects
+					// (`{ __type__: "Vector2", x, y }`); the tag picks the wire layout.
+					switch (
+						typeof value === "object" && value !== null && "__type__" in value
+							? value["__type__"]
+							: undefined
+					) {
 						case "Vector2":
 							size += this.size_UInt32() * 2;
 							break;

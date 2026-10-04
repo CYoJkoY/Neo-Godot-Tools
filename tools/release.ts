@@ -31,7 +31,7 @@ export function parse_release_tag(tag: string): ReleaseInfo {
 function read_package_version(): string {
 	const packagePath = path.resolve(process.cwd(), "package.json");
 	const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as Record<string, unknown>;
-	const version = packageJson.version;
+	const version = packageJson["version"];
 
 	if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
 		throw new Error(`package.json version must be a clean X.Y.Z version, got: ${String(version)}`);
@@ -44,13 +44,13 @@ function validate_package_version(release: ReleaseInfo, packageVersion: string):
 	if (release.version !== packageVersion) {
 		throw new Error(
 			`Release tag ${release.tag} does not match package.json version ${packageVersion}. ` +
-			`Expected ${release.version}.`,
+				`Expected ${release.version}.`,
 		);
 	}
 }
 
 function write_output(name: string, value: string): void {
-	const outputPath = process.env.GITHUB_OUTPUT;
+	const outputPath = process.env["GITHUB_OUTPUT"];
 	if (!outputPath) {
 		return;
 	}
@@ -58,7 +58,7 @@ function write_output(name: string, value: string): void {
 }
 
 function main(): void {
-	const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME;
+	const tag = process.argv[2] ?? process.env["GITHUB_REF_NAME"];
 	if (!tag) {
 		throw new Error("A release tag is required.");
 	}
