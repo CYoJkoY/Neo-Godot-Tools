@@ -382,26 +382,34 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		await this.sendModel(document, this.view.webview);
 	}
 
-	private detectInitialResource(): void {
+	/** A resource open in the active editor, if the active editor holds one. */
+	private activeResourceDocument(): vscode.TextDocument | undefined {
 		const active = vscode.window.activeTextEditor?.document;
-		if (active && isResourceDocument(active)) {
-			this.panelUri = active.uri;
-			return;
-		}
-		const visible = (vscode.window.visibleTextEditors ?? []).find((editor) => isResourceDocument(editor.document));
-		if (visible) {
-			this.panelUri = visible.document.uri;
-			return;
-		}
-		const openDoc = (vscode.workspace.textDocuments ?? []).find((doc) => isResourceDocument(doc));
-		if (openDoc) {
-			this.panelUri = openDoc.uri;
-			return;
-		}
-		if (active?.uri.fsPath.toLowerCase().endsWith(".gd")) {
-			const related = this.findRelatedResourceForScript(active.uri);
-			if (related) this.panelUri = related;
-		}
+		return active && isResourceDocument(active) ? active : undefined;
+	}
+
+	/** The first resource document in a visible editor, then any open resource document. */
+	private visibleOrOpenResourceDocument(): vscode.TextDocument | undefined {
+		const visible = vscode.window.visibleTextEditors.find((editor) =>
+			isResourceDocument(editor.document),
+		)?.document;
+		if (visible) return visible;
+		return vscode.workspace.textDocuments.find((doc) => isResourceDocument(doc));
+	}
+
+	/** `.gd` and `.tres` pairs share a name, so the script identifies its resource. */
+	private relatedResourceOfActiveScript(): vscode.Uri | undefined {
+		const active = vscode.window.activeTextEditor?.document;
+		if (!active?.uri.fsPath.toLowerCase().endsWith(".gd")) return undefined;
+		return this.findRelatedResourceForScript(active.uri);
+	}
+
+	private detectInitialResource(): void {
+		const found =
+			this.activeResourceDocument()?.uri ??
+			this.visibleOrOpenResourceDocument()?.uri ??
+			this.relatedResourceOfActiveScript();
+		if (found) this.panelUri = found;
 	}
 
 	private findRelatedResourceForScript(scriptUri: vscode.Uri): vscode.Uri | undefined {
@@ -409,7 +417,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (candidatePath !== scriptUri.fsPath && fs.existsSync(candidatePath)) {
 			return vscode.Uri.file(candidatePath);
 		}
-		for (const doc of vscode.workspace.textDocuments ?? []) {
+		for (const doc of vscode.workspace.textDocuments) {
 			if (!isResourceDocument(doc)) continue;
 			const parsed = parseResourceDocument(doc.getText());
 			for (const ext of parsed.extResources) {
@@ -430,8 +438,8 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 		}
 
-		const active = vscode.window.activeTextEditor?.document;
-		if (active && isResourceDocument(active)) {
+		const active = this.activeResourceDocument();
+		if (active) {
 			this.panelUri = active.uri;
 			return active;
 		}
@@ -441,7 +449,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				if (
 					this.panelUri.scheme !== "file" ||
 					fs.existsSync(this.panelUri.fsPath) ||
-					(vscode.workspace.textDocuments ?? []).some((d) => d.uri.toString() === this.panelUri?.toString())
+					vscode.workspace.textDocuments.some((d) => d.uri.toString() === this.panelUri?.toString())
 				) {
 					return await vscode.workspace.openTextDocument(this.panelUri);
 				}
@@ -450,33 +458,20 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 		}
 
-		const visible = (vscode.window.visibleTextEditors ?? []).find((editor) =>
-			isResourceDocument(editor.document),
-		)?.document;
-		if (visible) {
-			this.panelUri = visible.uri;
-			return visible;
+		const open = this.visibleOrOpenResourceDocument();
+		if (open) {
+			this.panelUri = open.uri;
+			return open;
 		}
 
-		const openDoc = (vscode.workspace.textDocuments ?? []).find((doc) => isResourceDocument(doc));
-		if (openDoc) {
-			this.panelUri = openDoc.uri;
-			return openDoc;
+		const related = this.relatedResourceOfActiveScript();
+		if (!related) return undefined;
+		try {
+			this.panelUri = related;
+			return await vscode.workspace.openTextDocument(related);
+		} catch {
+			return undefined;
 		}
-
-		if (active?.uri.fsPath.toLowerCase().endsWith(".gd")) {
-			const related = this.findRelatedResourceForScript(active.uri);
-			if (related) {
-				try {
-					this.panelUri = related;
-					return await vscode.workspace.openTextDocument(related);
-				} catch {
-					/* ignore */
-				}
-			}
-		}
-
-		return undefined;
 	}
 
 	private async discoverWorkspaceResources(): Promise<WorkspaceResourceItem[]> {
@@ -493,7 +488,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			});
 		};
 
-		for (const doc of vscode.workspace.textDocuments ?? []) {
+		for (const doc of vscode.workspace.textDocuments) {
 			if (isResourceDocument(doc)) addUri(doc.uri);
 		}
 		try {
@@ -1120,7 +1115,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private async onDocumentClosed(document: vscode.TextDocument): Promise<void> {
 		if (!isResourceDocument(document)) return;
 		if (!this.locked && this.panelUri?.toString() === document.uri.toString()) {
-			const nextVisible = (vscode.window.visibleTextEditors ?? []).find(
+			const nextVisible = vscode.window.visibleTextEditors.find(
 				(editor) =>
 					isResourceDocument(editor.document) && editor.document.uri.toString() !== document.uri.toString(),
 			);
@@ -1170,7 +1165,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const webviews: vscode.Webview[] = [...(this.editors.get(uri.toString()) ?? [])]
 			.filter((panel) => panel.visible)
 			.map((panel) => panel.webview);
-		if (this.view && (this.view.visible ?? true) && this.panelUri?.toString() === uri.toString()) {
+		if (this.view?.visible && this.panelUri?.toString() === uri.toString()) {
 			webviews.push(this.view.webview);
 		}
 		if (!webviews.length) return;
@@ -1297,7 +1292,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async readTextFile(targetUri: vscode.Uri): Promise<string | undefined> {
-		const openDoc = (vscode.workspace.textDocuments ?? []).find(
+		const openDoc = vscode.workspace.textDocuments.find(
 			(doc) =>
 				doc.uri.toString() === targetUri.toString() || (doc.uri.fsPath && doc.uri.fsPath === targetUri.fsPath),
 		);

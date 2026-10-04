@@ -173,13 +173,14 @@ export function deactivate(): Thenable<void> {
 	});
 }
 
-async function copy_resource_path(uri: vscode.Uri) {
-	if (!uri) {
-		if (vscode.window.activeTextEditor) uri = vscode.window.activeTextEditor.document.uri;
-		else return;
-	}
-	const relative_path = await convert_uri_to_resource_path(uri);
-	if (relative_path) vscode.env.clipboard.writeText(relative_path);
+async function copy_resource_path(uri?: vscode.Uri) {
+	// The command is also reachable from the explorer context menu, where the
+	// selected resource arrives as an argument; a key binding falls back to the
+	// active editor.
+	const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+	if (!target) return;
+	const relative_path = await convert_uri_to_resource_path(target);
+	if (relative_path) void vscode.env.clipboard.writeText(relative_path);
 }
 
 async function list_classes() {

@@ -2,6 +2,15 @@ import { type GodotValue, GodotVariable } from "../../debug_runtime";
 import { GodotObject } from "./godot_object_promise";
 import { VariablesManager } from "./variables_manager";
 
+/**
+ * Godot encodes 64 bit integers with an extra flag, so a number outside the
+ * 32 bit range travels as a `bigint` (see `INT | ENCODE_FLAG_64`).
+ */
+export const to_wire_value = (value: GodotValue): GodotValue =>
+	typeof value === "number" && Number.isInteger(value) && (value > 2147483647 || value < -2147483648)
+		? BigInt(value)
+		: value;
+
 export enum GDScriptTypes {
 	NIL = 0,
 

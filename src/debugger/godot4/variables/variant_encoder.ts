@@ -20,116 +20,105 @@ import {
 	Vector3i,
 	Vector4,
 	Vector4i,
+	to_wire_value,
 } from "./variants";
 
 export class VariantEncoder {
-	public encode_variant(value: GodotValue, model?: BufferModel) {
-		if (typeof value === "number" && Number.isInteger(value) && (value > 2147483647 || value < -2147483648)) {
-			value = BigInt(value);
-		}
-
-		if (!model) {
-			const size = this.size_variant(value);
-			const buffer = Buffer.alloc(size + 4);
-			model = {
-				buffer: buffer,
-				offset: 0,
-				len: 0,
-			};
-			this.encode_UInt32(size, model);
-		}
+	public encode_variant(raw_value: GodotValue, model?: BufferModel) {
+		const value = to_wire_value(raw_value);
+		const target = model ?? this.open_buffer(value);
 
 		switch (typeof value) {
 			case "number":
 				{
 					const is_integer = Number.isInteger(value);
 					if (is_integer) {
-						this.encode_UInt32(GDScriptTypes.INT, model);
-						this.encode_UInt32(value, model);
+						this.encode_UInt32(GDScriptTypes.INT, target);
+						this.encode_UInt32(value, target);
 					} else {
-						this.encode_UInt32(GDScriptTypes.FLOAT, model);
-						this.encode_Float32(value, model);
+						this.encode_UInt32(GDScriptTypes.FLOAT, target);
+						this.encode_Float32(value, target);
 					}
 				}
 				break;
 			case "bigint":
-				this.encode_UInt32(GDScriptTypes.INT | ENCODE_FLAG_64, model);
-				this.encode_UInt64(value, model);
+				this.encode_UInt32(GDScriptTypes.INT | ENCODE_FLAG_64, target);
+				this.encode_UInt64(value, target);
 				break;
 			case "boolean":
-				this.encode_UInt32(GDScriptTypes.BOOL, model);
-				this.encode_Bool(value, model);
+				this.encode_UInt32(GDScriptTypes.BOOL, target);
+				this.encode_Bool(value, target);
 				break;
 			case "string":
-				this.encode_UInt32(GDScriptTypes.STRING, model);
-				this.encode_String(value, model);
+				this.encode_UInt32(GDScriptTypes.STRING, target);
+				this.encode_String(value, target);
 				break;
 			case "undefined":
 				break;
 			default:
 				if (Array.isArray(value)) {
-					this.encode_UInt32(GDScriptTypes.ARRAY, model);
-					this.encode_Array(value, model);
+					this.encode_UInt32(GDScriptTypes.ARRAY, target);
+					this.encode_Array(value, target);
 				} else if (value instanceof Map) {
-					this.encode_UInt32(GDScriptTypes.DICTIONARY, model);
-					this.encode_Dictionary(value, model);
+					this.encode_UInt32(GDScriptTypes.DICTIONARY, target);
+					this.encode_Dictionary(value, target);
 				} else {
 					if (value instanceof Vector2i) {
-						this.encode_UInt32(GDScriptTypes.VECTOR2I, model);
-						this.encode_Vector2i(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR2I, target);
+						this.encode_Vector2i(value, target);
 					} else if (value instanceof Vector2) {
-						this.encode_UInt32(GDScriptTypes.VECTOR2, model);
-						this.encode_Vector2(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR2, target);
+						this.encode_Vector2(value, target);
 					} else if (value instanceof Rect2i) {
-						this.encode_UInt32(GDScriptTypes.RECT2I, model);
-						this.encode_Rect2i(value, model);
+						this.encode_UInt32(GDScriptTypes.RECT2I, target);
+						this.encode_Rect2i(value, target);
 					} else if (value instanceof Rect2) {
-						this.encode_UInt32(GDScriptTypes.RECT2, model);
-						this.encode_Rect2(value, model);
+						this.encode_UInt32(GDScriptTypes.RECT2, target);
+						this.encode_Rect2(value, target);
 					} else if (value instanceof Vector3i) {
-						this.encode_UInt32(GDScriptTypes.VECTOR3I, model);
-						this.encode_Vector3i(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR3I, target);
+						this.encode_Vector3i(value, target);
 					} else if (value instanceof Vector3) {
-						this.encode_UInt32(GDScriptTypes.VECTOR3, model);
-						this.encode_Vector3(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR3, target);
+						this.encode_Vector3(value, target);
 					} else if (value instanceof Vector4i) {
-						this.encode_UInt32(GDScriptTypes.VECTOR4I, model);
-						this.encode_Vector4i(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR4I, target);
+						this.encode_Vector4i(value, target);
 					} else if (value instanceof Vector4) {
-						this.encode_UInt32(GDScriptTypes.VECTOR4, model);
-						this.encode_Vector4(value, model);
+						this.encode_UInt32(GDScriptTypes.VECTOR4, target);
+						this.encode_Vector4(value, target);
 					} else if (value instanceof Transform2D) {
-						this.encode_UInt32(GDScriptTypes.TRANSFORM2D, model);
-						this.encode_Transform2D(value, model);
+						this.encode_UInt32(GDScriptTypes.TRANSFORM2D, target);
+						this.encode_Transform2D(value, target);
 					} else if (value instanceof StringName) {
-						this.encode_UInt32(GDScriptTypes.STRING_NAME, model);
-						this.encode_StringName(value, model);
+						this.encode_UInt32(GDScriptTypes.STRING_NAME, target);
+						this.encode_StringName(value, target);
 					} else if (value instanceof Plane) {
-						this.encode_UInt32(GDScriptTypes.PLANE, model);
-						this.encode_Plane(value, model);
+						this.encode_UInt32(GDScriptTypes.PLANE, target);
+						this.encode_Plane(value, target);
 					} else if (value instanceof Projection) {
-						this.encode_UInt32(GDScriptTypes.PROJECTION, model);
-						this.encode_Projection(value, model);
+						this.encode_UInt32(GDScriptTypes.PROJECTION, target);
+						this.encode_Projection(value, target);
 					} else if (value instanceof Quat) {
-						this.encode_UInt32(GDScriptTypes.QUATERNION, model);
-						this.encode_Quaternion(value, model);
+						this.encode_UInt32(GDScriptTypes.QUATERNION, target);
+						this.encode_Quaternion(value, target);
 					} else if (value instanceof AABB) {
-						this.encode_UInt32(GDScriptTypes.AABB, model);
-						this.encode_AABB(value, model);
+						this.encode_UInt32(GDScriptTypes.AABB, target);
+						this.encode_AABB(value, target);
 					} else if (value instanceof Basis) {
-						this.encode_UInt32(GDScriptTypes.BASIS, model);
-						this.encode_Basis(value, model);
+						this.encode_UInt32(GDScriptTypes.BASIS, target);
+						this.encode_Basis(value, target);
 					} else if (value instanceof Transform3D) {
-						this.encode_UInt32(GDScriptTypes.TRANSFORM3D, model);
-						this.encode_Transform3D(value, model);
+						this.encode_UInt32(GDScriptTypes.TRANSFORM3D, target);
+						this.encode_Transform3D(value, target);
 					} else if (value instanceof Color) {
-						this.encode_UInt32(GDScriptTypes.COLOR, model);
-						this.encode_Color(value, model);
+						this.encode_UInt32(GDScriptTypes.COLOR, target);
+						this.encode_Color(value, target);
 					}
 				}
 		}
 
-		return model.buffer;
+		return target.buffer;
 	}
 
 	private encode_AABB(value: AABB, model: BufferModel) {
@@ -333,12 +322,17 @@ export class VariantEncoder {
 		return size;
 	}
 
-	private size_variant(value: GodotValue): number {
-		let size = 4;
+	/** Builds the buffer a top-level variant is written into, including its size prefix. */
+	private open_buffer(value: GodotValue): BufferModel {
+		const size = this.size_variant(value);
+		const model: BufferModel = { buffer: Buffer.alloc(size + 4), offset: 0, len: 0 };
+		this.encode_UInt32(size, model);
+		return model;
+	}
 
-		if (typeof value === "number" && (value > 2147483647 || value < -2147483648)) {
-			value = BigInt(value);
-		}
+	private size_variant(raw_value: GodotValue): number {
+		const value = to_wire_value(raw_value);
+		let size = 4;
 
 		switch (typeof value) {
 			case "number":

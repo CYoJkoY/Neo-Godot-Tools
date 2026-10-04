@@ -398,28 +398,30 @@ export class GodotDebugSession extends LoggingDebugSession {
 		}
 	}
 
+	/** The `self` scope and the script instance id Godot 3 reports next to it. */
+	private self_scope(): { root: GodotVariable | undefined; object_id: bigint | undefined } {
+		const root = this.all_scopes.find((scope) => scope?.name === "self");
+		const id_var = this.all_scopes.find((scope) => scope?.name === "id" && scope.scope_path === "@.member.self");
+		return { root, object_id: id_var?.value instanceof ObjectId ? id_var.value.id : undefined };
+	}
+
 	protected get_variable(expression: string, root?: GodotVariable, index = 0, object_id?: bigint): Variable {
-		let result: Variable = {
+		const self = root === undefined ? this.self_scope() : undefined;
+		const scoped_root = root ?? self?.root;
+		if (!scoped_root) {
+			throw new Error("Could not find root scope");
+		}
+		const scoped_expression =
+			root === undefined && !expression.includes("self") ? `self.${expression}` : expression;
+		const scoped_object_id = root === undefined ? self?.object_id : object_id;
+
+		const result: Variable = {
 			variable: undefined,
 			index: undefined,
 			object_id: undefined,
 		};
 
-		if (!root) {
-			if (!expression.includes("self")) {
-				expression = `self.${expression}`;
-			}
-
-			root = this.all_scopes.find((x) => x?.name === "self");
-			const idVar = this.all_scopes.find((x) => x?.name === "id" && x.scope_path === "@.member.self");
-			object_id = idVar?.value instanceof ObjectId ? idVar.value.id : undefined;
-		}
-
-		if (!root) {
-			throw new Error("Could not find root scope");
-		}
-
-		const items = expression.split(".");
+		const items = scoped_expression.split(".");
 		let propertyName = items[index + 1];
 		let path = items
 			.slice(0, index + 1)
@@ -496,8 +498,8 @@ export class GodotDebugSession extends LoggingDebugSession {
 
 		// `root.value` holds the sanitized scopes: a Map of scope path to the
 		// collection behind it (Godot 3 answers with plain objects for members).
-		if (root.value instanceof Map) {
-			const entries = [...root.value.entries()];
+		if (scoped_root.value instanceof Map) {
+			const entries = [...scoped_root.value.entries()];
 			const scopeName = (name: unknown) =>
 				typeof name === "string" ? name.split("Members/").join("").split("Locals/").join("") : "";
 			const idOf = (value: unknown) => (value instanceof ObjectId ? value.id : undefined);
@@ -520,7 +522,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		}
 
 		if (!result.object_id) {
-			result.object_id = object_id;
+			result.object_id = scoped_object_id;
 		}
 
 		if (result.variable) {
@@ -530,7 +532,7 @@ export class GodotDebugSession extends LoggingDebugSession {
 		}
 
 		if (items.length > 2 && index < items.length - 2) {
-			result = this.get_variable(items.join("."), result.variable, index + 1, result.object_id);
+			return this.get_variable(items.join("."), result.variable, index + 1, result.object_id);
 		}
 
 		return result;

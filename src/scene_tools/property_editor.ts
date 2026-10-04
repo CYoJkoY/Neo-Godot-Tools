@@ -165,7 +165,7 @@ export async function promptPropertyValue(
 	const widget = widgetForProperty(metadata, parsed.value);
 
 	if (widget.kind === "checkbox")
-		return (await vscode.window.showQuickPick(["true", "false"], { title: metadata?.name })) ?? undefined;
+		return await vscode.window.showQuickPick(["true", "false"], { title: metadata?.name });
 	if (widget.kind === "enum" && widget.options?.length) {
 		// Enum options are stored as their index, except for String-backed enums
 		// where the name itself is the value.

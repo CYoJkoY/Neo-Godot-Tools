@@ -269,12 +269,10 @@ export class ServerController {
 	private stash?: Buffer;
 
 	private on_data(buffer: Buffer) {
-		if (this.stash) {
-			buffer = Buffer.concat([this.stash, buffer]);
-			this.stash = undefined;
-		}
+		const received = this.stash ? Buffer.concat([this.stash, buffer]) : buffer;
+		this.stash = undefined;
 
-		const buffers = split_buffers(buffer);
+		const buffers = split_buffers(received);
 		for (const chunk of buffers) {
 			const data = this.decoder.get_dataset(chunk)?.slice(1);
 			if (data === undefined) {

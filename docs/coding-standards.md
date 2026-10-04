@@ -52,6 +52,11 @@ their parameter and return types. Locals rely on inference.
 `noUncheckedIndexedAccess` is required by the standard, so it is the final ratchet milestone:
 enable it when its error count reaches zero (§5).
 
+**Biome runs clean** over `src` and `tools`: no errors and no warnings. `noParameterAssign` — the
+"never reassign an input" rule — is at `error`, and the twelve pre-existing sites were rewritten as
+a parameter plus a local (the shared `to_wire_value` helper, `open_buffer`, and the `scoped_*` locals
+of the Godot 3 variable resolver).
+
 **Immutable-by-default** (`readonly`, `as const`, branded ids) is required for new code: 158
 `readonly` annotations exist today. Branded types are expected for identifiers that can be confused
 with each other; existing code migrates opportunistically.
@@ -78,7 +83,7 @@ embedded GDScript and webview JavaScript do not inflate the numbers.
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
 | `class` declarations | 139 | debugger, index, tools, providers |
-| `let` / `var` declarations | 403 | debugger, resource inspector, index, providers |
+| `let` / `var` declarations | 402 | debugger, resource inspector, index, providers |
 | `for` loops | 318 | index, resource inspector, debugger |
 | `while` / `do` loops | 78 | protocol and settle-wait loops |
 | `} else` branches | 198 | debugger, resource inspector |
@@ -86,7 +91,7 @@ embedded GDScript and webview JavaScript do not inflate the numbers.
 | `as` assertions | 59 | narrowing the compiler cannot express |
 | `readonly` annotations | 158 | present, not yet uniform |
 
-Total tracked constructs: 1189 in 167 files; none needs a `// perf:` justification yet.
+Total tracked constructs: 1188 in 167 files; none needs a `// perf:` justification yet.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -107,6 +112,11 @@ Total tracked constructs: 1189 in 167 files; none needs a `// perf:` justificati
    is required for pure logic — parsing, resolution, index queries, resource edits.
 4. **`as` assertions** are allowed only where a runtime guard has already established the shape or
    the compiler cannot model a correlated union; each one needs a one-line justification.
+5. **No fallback for a value the compiler proves present.** `workspace.textDocuments`,
+   `window.visibleTextEditors`, `findFiles(...)` and `WebviewView.visible` are never `undefined`, so
+   `?? []` / `?? true` after them is dead code that would hide an API change behind a silent default.
+   A guard is warranted only where the type says `| undefined` (`workspaceFolders`,
+   `activeTextEditor`, `Map.get`).
 
 ## 6. Migration order (ratchet)
 
