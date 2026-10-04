@@ -12,29 +12,44 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { LspClientLike } from "../lsp/types";
+
+/** A message posted by the resource inspector webview. */
+interface WebviewMessage {
+	command?: string;
+	uri?: string;
+	id?: string;
+	newId?: string;
+	name?: string;
+	value?: string;
+	target?: string;
+	metaType?: string;
+	subType?: string;
+}
+import { createLruCache } from "../utils/lru_cache";
+import { withTimeout } from "../utils/scheduling.js";
+import { validateResourceDocument } from "./diagnostics.js";
 import {
-	applyResourceEdits,
 	PropertyEntry,
 	ResourceDocument,
 	ResourceEdit,
 	SubResourceEntry,
-	parseResourceDocument,
+	applyResourceEdits,
+	createDocumentParseCache,
 	resourceReference,
 } from "./document.js";
 import {
 	BUILTIN_RESOURCE_PROPERTIES,
+	LspPropertyInfo,
+	PropertyMetadata,
 	collectPropertyMetadata,
 	defaultValueForType,
-	LspPropertyInfo,
-	parseScriptBaseClass,
 	knownDefaultValue,
-	PropertyMetadata,
+	parseScriptBaseClass,
 	widgetForProperty,
 } from "./metadata.js";
-import { validateResourceDocument } from "./diagnostics.js";
-import { formatVariant, parseVariant, variantValuesEqual } from "./values.js";
 import { scriptClassNameIndex } from "./script_index.js";
-import { withTimeout } from "../utils/scheduling.js";
+import { formatVariant, parseVariant, variantValuesEqual } from "./values.js";
 
 export const RESOURCE_INSPECTOR_VIEW_TYPE = "neoGodotTools.resourceInspector";
 export const RESOURCE_INSPECTOR_VIEW_ID = "neoGodotTools.resourceInspector";
@@ -79,7 +94,14 @@ export interface ResourceModel {
 	properties: PropertyModel[];
 	subResourceTypes: Array<{ id: string; type: string }>;
 	subResources: Array<{ id: string; type: string; properties: PropertyModel[] }>;
-	extResources: Array<{ id: string; type: string; path?: string; uid?: string; broken: boolean; imagePreview?: ImagePreview }>;
+	extResources: Array<{
+		id: string;
+		type: string;
+		path?: string;
+		uid?: string;
+		broken: boolean;
+		imagePreview?: ImagePreview;
+	}>;
 	diagnostics: Array<{ message: string; severity: "error" | "warning"; line: number }>;
 	openIn: string;
 }
@@ -91,7 +113,7 @@ export interface WorkspaceResourceItem {
 }
 
 export interface ResourceInspectorOptions {
-	lspClient?: () => { sendRequest?: (...args: unknown[]) => Promise<unknown> } | undefined;
+	lspClient?: () => LspClientLike | undefined;
 	/** Upper bound for language-server metadata requests. */
 	lspTimeoutMs?: number;
 }
@@ -103,7 +125,10 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private readonly editors = new Map<string, Set<vscode.WebviewPanel>>();
 	private readonly syncedVersions = new Map<string, number>();
 	private readonly modelGenerations = new WeakMap<vscode.Webview, number>();
-	private readonly nativePropertiesCache = new Map<string, Promise<LspPropertyInfo[] | undefined>>();
+	private readonly nativePropertiesCache = createLruCache<string, Promise<LspPropertyInfo[] | undefined>>({
+		capacity: 64,
+	});
+	private readonly parsedDocuments = createDocumentParseCache();
 	private readonly watcher = vscode.workspace.createFileSystemWatcher("**/*.tres");
 	private readonly scriptWatcher = vscode.workspace.createFileSystemWatcher("**/*.gd");
 	private readonly pendingModelUpdates = new Map<string, ReturnType<typeof setTimeout>>();
@@ -157,8 +182,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			vscode.commands.registerCommand("neoGodotTools.resourceInspector.refresh", () => this.refresh()),
 			vscode.commands.registerCommand("neoGodotTools.resourceInspector.lock", () => this.lockInspector()),
 			vscode.commands.registerCommand("neoGodotTools.resourceInspector.unlock", () => this.unlockInspector()),
-			vscode.commands.registerCommand("neoGodotTools.resourceInspector.openScript", () => this.openCurrentScript()),
-			vscode.commands.registerCommand("neoGodotTools.resourceInspector.openCurrentResource", () => this.openCurrentResource()),
+			vscode.commands.registerCommand("neoGodotTools.resourceInspector.openScript", () =>
+				this.openCurrentScript(),
+			),
+			vscode.commands.registerCommand("neoGodotTools.resourceInspector.openCurrentResource", () =>
+				this.openCurrentResource(),
+			),
 			this.diagnostics,
 		);
 	}
@@ -228,7 +257,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	async openCurrentScript(): Promise<void> {
 		const doc = await this.currentDocument();
 		if (!doc) return;
-		const parsed = parseResourceDocument(doc.getText());
+		const parsed = this.parsedDocument(doc);
 		const scriptUri = await this.resolveMainScriptUri(doc.uri, parsed);
 		if (!scriptUri) {
 			void vscode.window.showInformationMessage("This resource does not have an attached script.");
@@ -281,7 +310,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		await this.refreshView();
 	}
 
-	private async onViewMessage(message: { command?: string; [key: string]: unknown }): Promise<void> {
+	private async onViewMessage(message: WebviewMessage): Promise<void> {
 		switch (message.command) {
 			case "ready":
 			case "reload":
@@ -354,26 +383,34 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		await this.sendModel(document, this.view.webview);
 	}
 
-	private detectInitialResource(): void {
+	/** A resource open in the active editor, if the active editor holds one. */
+	private activeResourceDocument(): vscode.TextDocument | undefined {
 		const active = vscode.window.activeTextEditor?.document;
-		if (active && isResourceDocument(active)) {
-			this.panelUri = active.uri;
-			return;
-		}
-		const visible = (vscode.window.visibleTextEditors ?? []).find((editor) => isResourceDocument(editor.document));
-		if (visible) {
-			this.panelUri = visible.document.uri;
-			return;
-		}
-		const openDoc = (vscode.workspace.textDocuments ?? []).find((doc) => isResourceDocument(doc));
-		if (openDoc) {
-			this.panelUri = openDoc.uri;
-			return;
-		}
-		if (active?.uri.fsPath.toLowerCase().endsWith(".gd")) {
-			const related = this.findRelatedResourceForScript(active.uri);
-			if (related) this.panelUri = related;
-		}
+		return active && isResourceDocument(active) ? active : undefined;
+	}
+
+	/** The first resource document in a visible editor, then any open resource document. */
+	private visibleOrOpenResourceDocument(): vscode.TextDocument | undefined {
+		const visible = vscode.window.visibleTextEditors.find((editor) =>
+			isResourceDocument(editor.document),
+		)?.document;
+		if (visible) return visible;
+		return vscode.workspace.textDocuments.find((doc) => isResourceDocument(doc));
+	}
+
+	/** `.gd` and `.tres` pairs share a name, so the script identifies its resource. */
+	private relatedResourceOfActiveScript(): vscode.Uri | undefined {
+		const active = vscode.window.activeTextEditor?.document;
+		if (!active?.uri.fsPath.toLowerCase().endsWith(".gd")) return undefined;
+		return this.findRelatedResourceForScript(active.uri);
+	}
+
+	private detectInitialResource(): void {
+		const found =
+			this.activeResourceDocument()?.uri ??
+			this.visibleOrOpenResourceDocument()?.uri ??
+			this.relatedResourceOfActiveScript();
+		if (found) this.panelUri = found;
 	}
 
 	private findRelatedResourceForScript(scriptUri: vscode.Uri): vscode.Uri | undefined {
@@ -381,9 +418,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (candidatePath !== scriptUri.fsPath && fs.existsSync(candidatePath)) {
 			return vscode.Uri.file(candidatePath);
 		}
-		for (const doc of vscode.workspace.textDocuments ?? []) {
+		for (const doc of vscode.workspace.textDocuments) {
 			if (!isResourceDocument(doc)) continue;
-			const parsed = parseResourceDocument(doc.getText());
+			const parsed = this.parsedDocument(doc);
 			for (const ext of parsed.extResources) {
 				if (!ext.path) continue;
 				const resolved = resolveResourceUri(doc.uri, ext.path);
@@ -402,15 +439,19 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 		}
 
-		const active = vscode.window.activeTextEditor?.document;
-		if (active && isResourceDocument(active)) {
+		const active = this.activeResourceDocument();
+		if (active) {
 			this.panelUri = active.uri;
 			return active;
 		}
 
 		if (this.panelUri && isResourceFile(this.panelUri)) {
 			try {
-				if (this.panelUri.scheme !== "file" || fs.existsSync(this.panelUri.fsPath) || (vscode.workspace.textDocuments ?? []).some((d) => d.uri.toString() === this.panelUri?.toString())) {
+				if (
+					this.panelUri.scheme !== "file" ||
+					fs.existsSync(this.panelUri.fsPath) ||
+					vscode.workspace.textDocuments.some((d) => d.uri.toString() === this.panelUri?.toString())
+				) {
 					return await vscode.workspace.openTextDocument(this.panelUri);
 				}
 			} catch {
@@ -418,31 +459,20 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 		}
 
-		const visible = (vscode.window.visibleTextEditors ?? []).find((editor) => isResourceDocument(editor.document))?.document;
-		if (visible) {
-			this.panelUri = visible.uri;
-			return visible;
+		const open = this.visibleOrOpenResourceDocument();
+		if (open) {
+			this.panelUri = open.uri;
+			return open;
 		}
 
-		const openDoc = (vscode.workspace.textDocuments ?? []).find((doc) => isResourceDocument(doc));
-		if (openDoc) {
-			this.panelUri = openDoc.uri;
-			return openDoc;
+		const related = this.relatedResourceOfActiveScript();
+		if (!related) return undefined;
+		try {
+			this.panelUri = related;
+			return await vscode.workspace.openTextDocument(related);
+		} catch {
+			return undefined;
 		}
-
-		if (active?.uri.fsPath.toLowerCase().endsWith(".gd")) {
-			const related = this.findRelatedResourceForScript(active.uri);
-			if (related) {
-				try {
-					this.panelUri = related;
-					return await vscode.workspace.openTextDocument(related);
-				} catch {
-					/* ignore */
-				}
-			}
-		}
-
-		return undefined;
 	}
 
 	private async discoverWorkspaceResources(): Promise<WorkspaceResourceItem[]> {
@@ -459,7 +489,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			});
 		};
 
-		for (const doc of vscode.workspace.textDocuments ?? []) {
+		for (const doc of vscode.workspace.textDocuments) {
 			if (isResourceDocument(doc)) addUri(doc.uri);
 		}
 		try {
@@ -473,7 +503,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	// -------------------------------------------------------------- messaging
 
-	private async onMessage(uri: vscode.Uri, message: { command?: string; [key: string]: unknown }, panel?: vscode.WebviewPanel): Promise<void> {
+	private async onMessage(uri: vscode.Uri, message: WebviewMessage, panel?: vscode.WebviewPanel): Promise<void> {
 		switch (message.command) {
 			case "ready":
 			case "reload":
@@ -498,36 +528,41 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 			case "openImage": {
 				const document = await vscode.workspace.openTextDocument(uri);
-				const parsed = parseResourceDocument(document.getText());
+				const parsed = this.parsedDocument(document);
 				const owner = message.target ? parsed.subResources.find((sub) => sub.id === message.target) : undefined;
 				if (message.target && !owner) return;
 				const property = (owner?.properties ?? parsed.properties).find((entry) => entry.name === message.name);
 				let raw = property?.valueText;
 				if (raw === undefined) {
 					const model = await this.buildModel(document);
-					const properties = owner ? model.subResources.find((sub) => sub.id === owner.id)?.properties : model.properties;
+					const properties = owner
+						? model.subResources.find((sub) => sub.id === owner.id)?.properties
+						: model.properties;
 					raw = properties?.find((prop) => prop.name === message.name)?.raw;
 				}
 				const imagePath = raw === undefined ? undefined : imagePathForValue(raw, parsed);
-				if (imagePath && GODOT_IMAGE_EXTENSIONS.has(path.extname(imagePath).toLowerCase())) await this.openImage(uri, imagePath);
+				if (imagePath && GODOT_IMAGE_EXTENSIONS.has(path.extname(imagePath).toLowerCase()))
+					await this.openImage(uri, imagePath);
 				return;
 			}
 			case "setProperty": {
 				const name = String(message.name ?? "").trim();
 				if (!name) return;
 				const value = String(message.value ?? "");
-				await this.applyEdits(uri, [{ kind: "setProperty", name, value, target: message.target as string | undefined }]);
+				await this.applyEdits(uri, [{ kind: "setProperty", name, value, target: message.target }]);
 				return;
 			}
 			case "addProperty": {
-				const target = message.target as string | undefined;
+				const target = message.target;
 				const inputName = String(message.name ?? "").trim();
 				const name =
 					inputName ||
-					(await vscode.window.showInputBox({
-						prompt: target ? `Property name for '${target}'` : "Property name",
-						placeHolder: "e.g. speed, albedo_color, shader_parameter/strength",
-					}))?.trim() ||
+					(
+						await vscode.window.showInputBox({
+							prompt: target ? `Property name for '${target}'` : "Property name",
+							placeHolder: "e.g. speed, albedo_color, shader_parameter/strength",
+						})
+					)?.trim() ||
 					"";
 				if (!name) return;
 				if (!/^[A-Za-z_][A-Za-z0-9_/.]*$/.test(name)) {
@@ -537,10 +572,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				const rawValue = message.value !== undefined ? String(message.value).trim() : "";
 				const value =
 					rawValue ||
-					(await vscode.window.showInputBox({
-						prompt: `Initial value for '${name}'`,
-						value: "null",
-					}))?.trim() ||
+					(
+						await vscode.window.showInputBox({
+							prompt: `Initial value for '${name}'`,
+							value: "null",
+						})
+					)?.trim() ||
 					"";
 				if (!value) return;
 				await this.applyEdits(uri, [{ kind: "setProperty", name, value, target }]);
@@ -552,15 +589,22 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				// unknown defaults must remove the override instead of writing zero.
 				const document = await vscode.workspace.openTextDocument(uri);
 				const model = await this.buildModel(document);
-				const target = message.target as string | undefined;
-				const properties = target ? model.subResources.find((sub) => sub.id === target)?.properties : model.properties;
+				const target = message.target;
+				const properties = target
+					? model.subResources.find((sub) => sub.id === target)?.properties
+					: model.properties;
 				const property = properties?.find((prop) => prop.name === name);
-				if (property) await this.applyEdits(uri, [{ kind: "revertProperty", name, target, defaultValue: knownDefaultValue(property.metadata) }]);
+				if (property)
+					await this.applyEdits(uri, [
+						{ kind: "revertProperty", name, target, defaultValue: knownDefaultValue(property.metadata) },
+					]);
 				return;
 			}
 			case "addSubResource": {
 				const requestedType = String(message.subType ?? "").trim();
-				const type = requestedType || (await vscode.window.showInputBox({ prompt: "Godot resource type", value: "Resource" }))?.trim();
+				const type =
+					requestedType ||
+					(await vscode.window.showInputBox({ prompt: "Godot resource type", value: "Resource" }))?.trim();
 				if (!type) return;
 				if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(type)) {
 					void vscode.window.showWarningMessage("Enter a valid Godot resource type name.");
@@ -575,20 +619,29 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 			case "deleteSubResource": {
 				const id = String(message.id ?? "");
-				const confirmation = await vscode.window.showWarningMessage(`Delete '${id}' and replace its references with null?`, { modal: true }, "Delete");
+				const confirmation = await vscode.window.showWarningMessage(
+					`Delete '${id}' and replace its references with null?`,
+					{ modal: true },
+					"Delete",
+				);
 				if (confirmation === "Delete") await this.applyEdits(uri, [{ kind: "deleteSubResource", id }]);
 				return;
 			}
 			case "renameSubResource": {
 				const id = String(message.id ?? "");
 				const inputId = String(message.newId ?? "").trim();
-				const newId = inputId || (await vscode.window.showInputBox({ prompt: "New sub-resource ID", value: id }))?.trim() || "";
+				const newId =
+					inputId ||
+					(await vscode.window.showInputBox({ prompt: "New sub-resource ID", value: id }))?.trim() ||
+					"";
 				if (!/^[A-Za-z0-9_]+$/.test(newId)) {
-					void vscode.window.showWarningMessage("Sub-resource IDs may contain only letters, numbers, and underscores.");
+					void vscode.window.showWarningMessage(
+						"Sub-resource IDs may contain only letters, numbers, and underscores.",
+					);
 					return;
 				}
 				const document = await vscode.workspace.openTextDocument(uri);
-				const parsed = parseResourceDocument(document.getText());
+				const parsed = this.parsedDocument(document);
 				if (!parsed.subResources.some((resource) => resource.id === id)) return;
 				if (newId !== id && parsed.subResources.some((resource) => resource.id === newId)) {
 					void vscode.window.showWarningMessage(`A sub-resource named '${newId}' already exists.`);
@@ -608,11 +661,16 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				return;
 			}
 			case "pickResource": {
-				await this.pickResource(uri, String(message.name ?? ""), message.target as string | undefined);
+				await this.pickResource(uri, String(message.name ?? ""), message.target);
 				return;
 			}
 			case "createSubResource": {
-				await this.createSubResource(uri, String(message.name ?? ""), String(message.subType ?? message.metaType ?? "Resource"), message.target as string | undefined);
+				await this.createSubResource(
+					uri,
+					String(message.name ?? ""),
+					String(message.subType ?? message.metaType ?? "Resource"),
+					message.target,
+				);
 				return;
 			}
 			default:
@@ -622,7 +680,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	private async openExtResource(uri: vscode.Uri, id: string): Promise<void> {
 		const document = await vscode.workspace.openTextDocument(uri);
-		const resource = parseResourceDocument(document.getText()).extResources.find((entry) => entry.id === id);
+		const resource = this.parsedDocument(document).extResources.find((entry) => entry.id === id);
 		if (!resource?.path) {
 			void vscode.window.showWarningMessage(`ExtResource '${id}' has no path.`);
 			return;
@@ -654,22 +712,39 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private async addExternalResource(uri: vscode.Uri): Promise<void> {
 		const picked = await vscode.window.showOpenDialog({
 			canSelectMany: false,
-			filters: { "Godot resources": ["tres", "res", "tscn", "gd", "gdshader", "png", "svg", "jpg", "jpeg", "webp", "gif", "bmp"] },
+			filters: {
+				"Godot resources": [
+					"tres",
+					"res",
+					"tscn",
+					"gd",
+					"gdshader",
+					"png",
+					"svg",
+					"jpg",
+					"jpeg",
+					"webp",
+					"gif",
+					"bmp",
+				],
+			},
 		});
 		if (!picked?.length) return;
 		const document = await vscode.workspace.openTextDocument(uri);
 		const text = document.getText();
 		const resourcePath = toResPath(uri, picked[0]);
-		const parsed = parseResourceDocument(text);
+		const parsed = this.parsedDocument(document);
 		if (parsed.extResources.some((resource) => resource.path === resourcePath)) {
 			void vscode.window.showInformationMessage("This external resource is already included.");
 			return;
 		}
-		const result = applyResourceEdits(text, [{
-			kind: "addExtResource",
-			type: extResourceType(picked[0], parsed.format),
-			path: resourcePath,
-		}]);
+		const result = applyResourceEdits(text, [
+			{
+				kind: "addExtResource",
+				type: extResourceType(picked[0], parsed.format),
+				path: resourcePath,
+			},
+		]);
 		await this.replaceText(document, result.text);
 	}
 
@@ -677,21 +752,40 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private async pickResource(uri: vscode.Uri, propertyName: string, target?: string): Promise<void> {
 		const picked = await vscode.window.showOpenDialog({
 			canSelectMany: false,
-			filters: { "Godot resources": ["tres", "res", "tscn", "gd", "gdshader", "png", "svg", "jpg", "jpeg", "webp", "gif", "bmp"] },
+			filters: {
+				"Godot resources": [
+					"tres",
+					"res",
+					"tscn",
+					"gd",
+					"gdshader",
+					"png",
+					"svg",
+					"jpg",
+					"jpeg",
+					"webp",
+					"gif",
+					"bmp",
+				],
+			},
 		});
 		if (!picked?.length) return;
 		const document = await vscode.workspace.openTextDocument(uri);
-		const parsed = parseResourceDocument(document.getText());
+		const parsed = this.parsedDocument(document);
 		const relative = toResPath(uri, picked[0]);
 		const existing = parsed.extResources.find((entry) => entry.path === relative);
 		let text = document.getText();
 		let id = existing?.id;
 		if (!id) {
-			const added = applyResourceEdits(text, [{ kind: "addExtResource", type: extResourceType(picked[0], parsed.format), path: relative }]);
+			const added = applyResourceEdits(text, [
+				{ kind: "addExtResource", type: extResourceType(picked[0], parsed.format), path: relative },
+			]);
 			text = added.text;
 			id = added.createdIds[0];
 		}
-		const result = applyResourceEdits(text, [{ kind: "setProperty", name: propertyName, target, value: resourceReference("Ext", id!, parsed.format) }]);
+		const result = applyResourceEdits(text, [
+			{ kind: "setProperty", name: propertyName, target, value: resourceReference("Ext", id!, parsed.format) },
+		]);
 		await this.replaceText(document, result.text);
 	}
 
@@ -705,12 +799,19 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	/** Creates a sub-resource of `type` and assigns it to the selected property. */
-	private async createSubResource(uri: vscode.Uri, propertyName: string, type: string, target?: string): Promise<void> {
+	private async createSubResource(
+		uri: vscode.Uri,
+		propertyName: string,
+		type: string,
+		target?: string,
+	): Promise<void> {
 		const document = await vscode.workspace.openTextDocument(uri);
 		const added = applyResourceEdits(document.getText(), [{ kind: "addSubResource", type }]);
 		const id = added.createdIds[0];
 		if (!id) return;
-		const result = applyResourceEdits(added.text, [{ kind: "setProperty", name: propertyName, target, value: `SubResource("${id}")` }]);
+		const result = applyResourceEdits(added.text, [
+			{ kind: "setProperty", name: propertyName, target, value: `SubResource("${id}")` },
+		]);
 		await this.replaceText(document, result.text);
 	}
 
@@ -724,13 +825,33 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	// ------------------------------------------------------------------ models
 
-	private async reloadDocument(uri: vscode.Uri, webview: vscode.Webview | undefined, updateDiagnostics: boolean): Promise<void> {
+	/**
+	 * Parses `document`, reusing the previous parse while its version is unchanged.
+	 * Every message from the webview used to re-read and re-parse the whole file,
+	 * which is the most expensive step of a property edit.
+	 *
+	 * The returned document is shared with the cache, so callers must treat it as
+	 * read-only (`ResourceDocument` is only ever rebuilt, never patched).
+	 */
+	private parsedDocument(document: vscode.TextDocument): ResourceDocument {
+		return this.parsedDocuments.parse(document.uri.toString(), document.version, () => document.getText());
+	}
+
+	private async reloadDocument(
+		uri: vscode.Uri,
+		webview: vscode.Webview | undefined,
+		updateDiagnostics: boolean,
+	): Promise<void> {
 		if (!webview) return;
 		const document = await vscode.workspace.openTextDocument(uri);
 		await this.sendModel(document, webview, updateDiagnostics);
 	}
 
-	private async sendModel(document: vscode.TextDocument, webview: vscode.Webview, updateDiagnostics = true): Promise<void> {
+	private async sendModel(
+		document: vscode.TextDocument,
+		webview: vscode.Webview,
+		updateDiagnostics = true,
+	): Promise<void> {
 		if (!isResourceDocument(document)) return;
 		const version = document.version;
 		const generation = (this.modelGenerations.get(webview) ?? 0) + 1;
@@ -740,23 +861,32 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		// Async script/LSP metadata must not overwrite newer edits or a newly
 		// selected resource, including its webview preview permissions. A script
 		// edit can trigger a newer model without changing the .tres version.
-		if (this.modelGenerations.get(webview) !== generation || document.version !== version || (this.view?.webview === webview && this.panelUri?.toString() !== document.uri.toString())) return;
+		if (
+			this.modelGenerations.get(webview) !== generation ||
+			document.version !== version ||
+			(this.view?.webview === webview && this.panelUri?.toString() !== document.uri.toString())
+		)
+			return;
 		webview.options = { ...webview.options, localResourceRoots: previewRoots(document.uri) };
 		if (updateDiagnostics) this.publishDiagnostics(document, model);
 		void webview.postMessage({ type: "model", model });
 	}
 
 	async buildModel(document: vscode.TextDocument, webview?: vscode.Webview): Promise<ResourceModel> {
-		const parsed = parseResourceDocument(document.getText());
+		const parsed = this.parsedDocument(document);
 		const { scriptSource, scriptPath, nativeBaseType } = await this.readScriptChain(document.uri, parsed);
-		const shaderSource = (nativeBaseType ?? parsed.resourceType) === "ShaderMaterial" ? await this.readShaderSource(document.uri, parsed) : undefined;
+		const shaderSource =
+			(nativeBaseType ?? parsed.resourceType) === "ShaderMaterial"
+				? await this.readShaderSource(document.uri, parsed)
+				: undefined;
 		const lspProperties = await this.lspProperties(nativeBaseType ?? parsed.resourceType);
 		const metadata = collectPropertyMetadata({ document: parsed, scriptSource, shaderSource, lspProperties });
 		const known = new Map(metadata.map((property) => [property.name, property]));
 		// Only the engine knows every property a native resource type accepts. A
 		// script-attached resource inherits from an arbitrary class that cannot be
 		// enumerated here, so its property list is never authoritative either.
-		const hasScript = parsed.properties.some((property) => property.name === SCRIPT_PROPERTY) || Boolean(scriptSource);
+		const hasScript =
+			parsed.properties.some((property) => property.name === SCRIPT_PROPERTY) || Boolean(scriptSource);
 		const complete = !hasScript && (lspProperties?.length ?? 0) > 0;
 		const diagnostics = validateResourceDocument(parsed, metadata, { complete });
 
@@ -795,7 +925,10 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			uid: parsed.uid,
 			properties,
 			subResources,
-			subResourceTypes: parsed.subResources.map((subResource) => ({ id: subResource.id, type: subResource.type })),
+			subResourceTypes: parsed.subResources.map((subResource) => ({
+				id: subResource.id,
+				type: subResource.type,
+			})),
 			extResources,
 			diagnostics,
 			openIn: getOpenIn(),
@@ -847,7 +980,10 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		subDoc.format = document.format;
 		const { scriptSource, nativeBaseType } = await this.readScriptChain(documentUri, subDoc);
 		const lspProperties = await this.lspProperties(nativeBaseType ?? subResource.type);
-		const shaderSource = (nativeBaseType ?? subResource.type) === "ShaderMaterial" ? await this.readShaderSource(documentUri, subDoc) : undefined;
+		const shaderSource =
+			(nativeBaseType ?? subResource.type) === "ShaderMaterial"
+				? await this.readShaderSource(documentUri, subDoc)
+				: undefined;
 		const metadata = collectPropertyMetadata({ document: subDoc, scriptSource, shaderSource, lspProperties });
 		const known = new Map(metadata.map((meta) => [meta.name, meta]));
 		return {
@@ -857,7 +993,11 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		};
 	}
 
-	private propertyModel(property: PropertyEntry, known: Map<string, PropertyMetadata>, target?: string): PropertyModel {
+	private propertyModel(
+		property: PropertyEntry,
+		known: Map<string, PropertyMetadata>,
+		target?: string,
+	): PropertyModel {
 		const rawMeta = known.get(property.name);
 		const defaultValue = knownDefaultValue(rawMeta);
 		const metadata = rawMeta ? { ...rawMeta, defaultValue } : undefined;
@@ -903,11 +1043,20 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			this.diagnostics.delete(document.uri);
 			return;
 		}
-		this.diagnostics.set(document.uri, model.diagnostics.map((diagnostic) => {
-			const line = Math.max(0, Math.min(diagnostic.line, document.lineCount - 1));
-			const range = document.lineAt(line).range;
-			return new vscode.Diagnostic(range, diagnostic.message, diagnostic.severity === "error" ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning);
-		}));
+		this.diagnostics.set(
+			document.uri,
+			model.diagnostics.map((diagnostic) => {
+				const line = Math.max(0, Math.min(diagnostic.line, document.lineCount - 1));
+				const range = document.lineAt(line).range;
+				return new vscode.Diagnostic(
+					range,
+					diagnostic.message,
+					diagnostic.severity === "error"
+						? vscode.DiagnosticSeverity.Error
+						: vscode.DiagnosticSeverity.Warning,
+				);
+			}),
+		);
 	}
 
 	// --------------------------------------------------------- event handlers
@@ -955,7 +1104,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (!isResourceDocument(document)) return;
 		if (!this.locked) {
 			const activeUri = vscode.window.activeTextEditor?.document.uri;
-			if (!this.panelUri || this.panelUri.toString() === document.uri.toString() || !activeUri || activeUri.toString() === document.uri.toString()) {
+			if (
+				!this.panelUri ||
+				this.panelUri.toString() === document.uri.toString() ||
+				!activeUri ||
+				activeUri.toString() === document.uri.toString()
+			) {
 				this.panelUri = document.uri;
 				await this.refreshView();
 				return;
@@ -972,10 +1126,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async onDocumentClosed(document: vscode.TextDocument): Promise<void> {
+		this.parsedDocuments.invalidate(document.uri.toString());
 		if (!isResourceDocument(document)) return;
 		if (!this.locked && this.panelUri?.toString() === document.uri.toString()) {
-			const nextVisible = (vscode.window.visibleTextEditors ?? []).find(
-				(editor) => isResourceDocument(editor.document) && editor.document.uri.toString() !== document.uri.toString(),
+			const nextVisible = vscode.window.visibleTextEditors.find(
+				(editor) =>
+					isResourceDocument(editor.document) && editor.document.uri.toString() !== document.uri.toString(),
 			);
 			if (nextVisible) {
 				this.panelUri = nextVisible.document.uri;
@@ -985,6 +1141,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async onFileSystemChanged(uri: vscode.Uri): Promise<void> {
+		// The open document may not have picked the new content up yet, so the
+		// cached parse of an unchanged version can be stale here.
+		this.parsedDocuments.invalidate(uri.toString());
 		if (!isResourceFile(uri)) return;
 		if (this.panelUri?.toString() === uri.toString() || !this.panelUri) {
 			if (!this.locked && !this.panelUri) this.panelUri = uri;
@@ -993,6 +1152,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async onFileDeleted(uri: vscode.Uri): Promise<void> {
+		this.parsedDocuments.invalidate(uri.toString());
 		if (this.panelUri?.toString() === uri.toString()) {
 			this.panelUri = undefined;
 			this.setLocked(false);
@@ -1020,8 +1180,10 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (!this.locked && !this.panelUri) {
 			this.panelUri = uri;
 		}
-		const webviews: vscode.Webview[] = [...(this.editors.get(uri.toString()) ?? [])].filter((panel) => panel.visible).map((panel) => panel.webview);
-		if (this.view && (this.view.visible ?? true) && this.panelUri?.toString() === uri.toString()) {
+		const webviews: vscode.Webview[] = [...(this.editors.get(uri.toString()) ?? [])]
+			.filter((panel) => panel.visible)
+			.map((panel) => panel.webview);
+		if (this.view?.visible && this.panelUri?.toString() === uri.toString()) {
 			webviews.push(this.view.webview);
 		}
 		if (!webviews.length) return;
@@ -1029,7 +1191,8 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const previous = this.syncedVersions.get(uri.toString());
 		if (previous !== undefined && event.document.version > previous + 1 && event.document.isDirty) {
 			// The file changed while the panel had pending edits: let the user decide.
-			for (const webview of webviews) void webview.postMessage({ type: "externalChange", text: event.document.getText() });
+			for (const webview of webviews)
+				void webview.postMessage({ type: "externalChange", text: event.document.getText() });
 		}
 		// Typing produces one event per keystroke; rebuilding the whole model
 		// (script chain, shader, metadata, previews) that often kept the
@@ -1072,7 +1235,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			}
 		}
 		if (scriptProp) return undefined;
-		const fallbackScriptExt = document.scriptClass ? document.extResources.find((entry) => entry.type === "Script" && entry.path) : undefined;
+		const fallbackScriptExt = document.scriptClass
+			? document.extResources.find((entry) => entry.type === "Script" && entry.path)
+			: undefined;
 		if (fallbackScriptExt?.path) {
 			const resolved = resolveResourceUri(uri, fallbackScriptExt.path);
 			if (resolved) return resolved;
@@ -1145,8 +1310,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	}
 
 	private async readTextFile(targetUri: vscode.Uri): Promise<string | undefined> {
-		const openDoc = (vscode.workspace.textDocuments ?? []).find(
-			(doc) => doc.uri.toString() === targetUri.toString() || (doc.uri.fsPath && doc.uri.fsPath === targetUri.fsPath),
+		const openDoc = vscode.workspace.textDocuments.find(
+			(doc) =>
+				doc.uri.toString() === targetUri.toString() || (doc.uri.fsPath && doc.uri.fsPath === targetUri.fsPath),
 		);
 		if (openDoc) return openDoc.getText();
 		try {
@@ -1174,7 +1340,11 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (cached) return cached;
 		const client =
 			this.options.lspClient?.() ??
-			(globalThis as { globals?: { lsp?: { client?: { sendRequest?: (...args: unknown[]) => Promise<unknown> } } } }).globals?.lsp?.client;
+			(
+				globalThis as {
+					globals?: { lsp?: { client?: { sendRequest?: (...args: unknown[]) => Promise<unknown> } } };
+				}
+			).globals?.lsp?.client;
 		if (!client?.sendRequest) return Promise.resolve(undefined);
 		const sendRequest = client.sendRequest.bind(client);
 		const request = (async () => {
@@ -1185,9 +1355,17 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 					sendRequest("textDocument/nativeSymbol", { native_class: resourceType, symbol_name: resourceType }),
 					this.options.lspTimeoutMs ?? LSP_METADATA_TIMEOUT_MS,
 					() => this.nativePropertiesCache.delete(resourceType),
-				)) as {
-					children?: Array<{ name?: string; detail?: string; kind?: number; hint?: string; hint_string?: string }>;
-				} | undefined;
+				)) as
+					| {
+							children?: Array<{
+								name?: string;
+								detail?: string;
+								kind?: number;
+								hint?: string;
+								hint_string?: string;
+							}>;
+					  }
+					| undefined;
 				const children = symbol?.children ?? [];
 				const properties: LspPropertyInfo[] = [];
 				for (const child of children) {
@@ -1196,8 +1374,13 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 					const type = detail.match(/\bvar\s+[\w.]+\s*:\s*([^=]+?)(?:\s*=|\s*$)/)?.[1]?.trim();
 					if (/\bvar\s/.test(detail) || child.kind === 7 || child.kind === 8 || child.kind === 13) {
 						const rawDefault = detail.match(/\s=\s*([\s\S]+)$/)?.[1]?.trim();
-						properties.push({ name: child.name, type: type ?? "Variant", hint: child.hint, hint_string: child.hint_string,
-							default_value: rawDefault && !parseVariant(rawDefault).error ? rawDefault : undefined });
+						properties.push({
+							name: child.name,
+							type: type ?? "Variant",
+							hint: child.hint,
+							hint_string: child.hint_string,
+							default_value: rawDefault && !parseVariant(rawDefault).error ? rawDefault : undefined,
+						});
 					}
 				}
 				if (!properties.length) {
@@ -1281,11 +1464,28 @@ export function resolveResourceUri(resourceUri: vscode.Uri, resourcePath: string
 }
 
 const WEBVIEW_IMAGE_EXTENSIONS = new Set([".png", ".svg", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico", ".avif"]);
-const GODOT_IMAGE_EXTENSIONS = new Set([...WEBVIEW_IMAGE_EXTENSIONS, ".tga", ".dds", ".exr", ".hdr", ".ktx", ".ctex", ".stex"]);
+const GODOT_IMAGE_EXTENSIONS = new Set([
+	...WEBVIEW_IMAGE_EXTENSIONS,
+	".tga",
+	".dds",
+	".exr",
+	".hdr",
+	".ktx",
+	".ctex",
+	".stex",
+]);
 
 function previewRoots(uri: vscode.Uri): vscode.Uri[] {
-	const roots = [...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri), findProjectRoot(uri), vscode.Uri.joinPath(uri, "..")];
-	return [...new Map(roots.filter((root): root is vscode.Uri => Boolean(root)).map((root) => [root.toString(), root])).values()];
+	const roots = [
+		...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
+		findProjectRoot(uri),
+		vscode.Uri.joinPath(uri, ".."),
+	];
+	return [
+		...new Map(
+			roots.filter((root): root is vscode.Uri => Boolean(root)).map((root) => [root.toString(), root]),
+		).values(),
+	];
 }
 
 function insidePreviewRoots(uri: vscode.Uri, roots: vscode.Uri[]): boolean {
@@ -1295,20 +1495,28 @@ function insidePreviewRoots(uri: vscode.Uri, roots: vscode.Uri[]): boolean {
 			try {
 				const relative = path.relative(fs.realpathSync(root.fsPath), filePath);
 				return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-			} catch { return false; }
+			} catch {
+				return false;
+			}
 		});
 	} catch {
 		return false;
 	}
 }
 
-function imagePreviewForPath(resourceUri: vscode.Uri, imagePath?: string, webview?: vscode.Webview): ImagePreview | undefined {
+function imagePreviewForPath(
+	resourceUri: vscode.Uri,
+	imagePath?: string,
+	webview?: vscode.Webview,
+): ImagePreview | undefined {
 	if (!imagePath || !GODOT_IMAGE_EXTENSIONS.has(path.extname(imagePath).toLowerCase())) return undefined;
 	const preview: ImagePreview = { path: imagePath };
 	const uri = resolveResourceUri(resourceUri, imagePath);
 	if (!uri || !fs.existsSync(uri.fsPath)) return { ...preview, message: "Image file is missing." };
-	if (!WEBVIEW_IMAGE_EXTENSIONS.has(path.extname(imagePath).toLowerCase())) return { ...preview, message: "This image format cannot be previewed here. Open it in an image viewer." };
-	if (!insidePreviewRoots(uri, previewRoots(resourceUri))) return { ...preview, message: "Inline previews are restricted to images inside this project or workspace." };
+	if (!WEBVIEW_IMAGE_EXTENSIONS.has(path.extname(imagePath).toLowerCase()))
+		return { ...preview, message: "This image format cannot be previewed here. Open it in an image viewer." };
+	if (!insidePreviewRoots(uri, previewRoots(resourceUri)))
+		return { ...preview, message: "Inline previews are restricted to images inside this project or workspace." };
 	return { ...preview, uri: webview?.asWebviewUri?.(uri).toString() };
 }
 
@@ -1348,18 +1556,24 @@ function toResPath(resourceUri: vscode.Uri, target: vscode.Uri): string {
 function extResourceType(uri: vscode.Uri, format?: string): string {
 	const extension = path.extname(uri.fsPath).toLowerCase();
 	switch (extension) {
-		case ".gd": return "Script";
-		case ".gdshader": return "Shader";
-		case ".tscn": return "PackedScene";
-		case ".tres": return "Resource";
+		case ".gd":
+			return "Script";
+		case ".gdshader":
+			return "Shader";
+		case ".tscn":
+			return "PackedScene";
+		case ".tres":
+			return "Resource";
 		case ".png":
 		case ".svg":
 		case ".jpg":
 		case ".jpeg":
 		case ".gif":
 		case ".bmp":
-		case ".webp": return format === "2" ? "Texture" : "Texture2D";
-		default: return "Resource";
+		case ".webp":
+			return format === "2" ? "Texture" : "Texture2D";
+		default:
+			return "Resource";
 	}
 }
 

@@ -1,40 +1,28 @@
 import * as vscode from "vscode";
+import type { DocumentSymbolProvider, ExtensionContext, SymbolInformation } from "vscode";
 import { LanguageService } from "../language/service";
-import { IndexedSymbol } from "../index";
+import { toSymbolInformation } from "./symbols";
 
-export class GDDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
-	constructor(context: vscode.ExtensionContext, private readonly service: LanguageService) {
-		context.subscriptions.push(vscode.languages.registerDocumentSymbolProvider({ language: "gdscript", scheme: "file" }, this));
-	}
+export interface DocumentSymbolProviderOptions {
+	languageService: LanguageService;
+}
 
-	provideDocumentSymbols(document: vscode.TextDocument): vscode.SymbolInformation[] {
-		return this.service.getDocumentSymbols(document.uri.toString()).map((symbol) => this.toSymbolInformation(symbol));
-	}
+export type GDDocumentSymbolProvider = DocumentSymbolProvider;
 
-	private toSymbolInformation(symbol: IndexedSymbol): vscode.SymbolInformation {
-		return new vscode.SymbolInformation(
-			symbol.name,
-			this.kind(symbol.kind),
-			this.range(symbol),
-			vscode.Uri.parse(symbol.uri),
-			symbol.containerName,
-		);
-	}
-
-	private range(symbol: IndexedSymbol): vscode.Range {
-		return new vscode.Range(symbol.range.start.line, symbol.range.start.character, symbol.range.end.line, symbol.range.end.character);
-	}
-
-	private kind(kind: IndexedSymbol["kind"]): vscode.SymbolKind {
-		switch (kind) {
-			case "class":
-			case "class_name": return vscode.SymbolKind.Class;
-			case "function": return vscode.SymbolKind.Function;
-			case "signal": return vscode.SymbolKind.Event;
-			case "enum": return vscode.SymbolKind.Enum;
-			case "constant": return vscode.SymbolKind.Constant;
-			case "variable": return vscode.SymbolKind.Variable;
-			default: return vscode.SymbolKind.Namespace;
-		}
-	}
+/** The flat symbol list of a script; the index already resolved the hierarchy. */
+export function createDocumentSymbolProvider(
+	context: ExtensionContext,
+	options: DocumentSymbolProviderOptions,
+): GDDocumentSymbolProvider {
+	const provider: GDDocumentSymbolProvider = {
+		provideDocumentSymbols(document): SymbolInformation[] {
+			return options.languageService
+				.getDocumentSymbols(document.uri.toString())
+				.map((symbol) => toSymbolInformation(symbol));
+		},
+	};
+	context.subscriptions.push(
+		vscode.languages.registerDocumentSymbolProvider({ language: "gdscript", scheme: "file" }, provider),
+	);
+	return provider;
 }

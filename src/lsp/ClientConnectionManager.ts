@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { EventEmitter } from "vscode";
 import {
 	createLogger,
 	get_configuration,
@@ -14,7 +15,6 @@ import {
 import { prompt_for_godot_executable, prompt_for_reload, select_godot_executable } from "../utils/prompts";
 import { killSubProcesses, subProcess } from "../utils/subspawn";
 import GDScriptLanguageClient, { ClientStatus, TargetLSP } from "./GDScriptLanguageClient";
-import { EventEmitter } from "vscode";
 
 const log = createLogger("lsp.manager", { output: "Godot LSP" });
 
@@ -47,12 +47,15 @@ export class ClientConnectionManager implements vscode.Disposable {
 
 	private connectedVersion = "";
 
-	constructor(private context: vscode.ExtensionContext) {
-		this.create_new_client();
+	constructor(context: vscode.ExtensionContext) {
+		this.client = this.create_new_client(undefined);
 
-		this.reconnectTimer = setInterval(() => {
-			this.retry_callback();
-		}, get_configuration("lsp.autoReconnect.cooldown"));
+		this.reconnectTimer = setInterval(
+			() => {
+				this.retry_callback();
+			},
+			get_configuration("lsp.autoReconnect.cooldown", 3000),
+		);
 
 		set_context("connectedToLSP", false);
 
@@ -86,11 +89,14 @@ export class ClientConnectionManager implements vscode.Disposable {
 		this.statusChanged.dispose();
 	}
 
-	private create_new_client() {
-		const port = this.client?.port ?? -1;
-		this.client?.io?.removeAllListeners();
-		this.client?.events?.removeAllListeners();
-		void this.client?.stop();
+	/** Creates a client, replacing and disposing `previous` when there is one. */
+	private create_new_client(previous: GDScriptLanguageClient | undefined): GDScriptLanguageClient {
+		const port = previous?.port ?? -1;
+		if (previous) {
+			previous.io.removeAllListeners();
+			previous.events.removeAllListeners();
+			void previous.stop();
+		}
 
 		const clientGeneration = ++this.clientGeneration;
 		const client = new GDScriptLanguageClient();
@@ -99,7 +105,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 			if (this.disposed || clientGeneration !== this.clientGeneration) return;
 			this.on_client_status_changed(status);
 		});
-		this.client = client;
+		return client;
 	}
 
 	private async start_headless_and_connect(): Promise<void> {
@@ -150,7 +156,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 			targetVersion = "4.2";
 		}
 		const settingName = `editorPath.godot${projectVersion?.[0] || ""}`;
-		let godotPath = get_configuration(settingName);
+		let godotPath = get_configuration(settingName, projectVersion?.[0] === "3" ? "godot3" : "godot");
 
 		const result = verify_godot_version(godotPath, projectVersion?.[0] || "");
 		godotPath = result.godotPath;
@@ -175,7 +181,8 @@ export class ClientConnectionManager implements vscode.Disposable {
 				.showErrorMessage(message, "Select Godot executable", "Open Settings", "Disable Headless LSP", "Ignore")
 				.then((item) => {
 					if (item === "Select Godot executable") select_godot_executable(settingName);
-					else if (item === "Open Settings") void vscode.commands.executeCommand("workbench.action.openSettings", settingName);
+					else if (item === "Open Settings")
+						void vscode.commands.executeCommand("workbench.action.openSettings", settingName);
 					else if (item === "Disable Headless LSP") {
 						set_configuration("lsp.headless", false);
 						prompt_for_reload();
@@ -186,22 +193,29 @@ export class ClientConnectionManager implements vscode.Disposable {
 
 		const port = await get_free_port();
 		if (this.disposed || generation !== this.lifecycleGeneration) return;
-		
+
 		this.client.port = port;
 		log.info(`starting headless LSP on port ${this.client.port}`);
 
 		const args = [
-			"--path", projectDir,
+			"--path",
+			projectDir,
 			"--editor",
 			"--headless",
 			"--no-window",
-			"--lsp-port", this.client.port.toString()
+			"--lsp-port",
+			this.client.port.toString(),
 		];
 
-		const lspProcess = subProcess("LSP", godotPath, { 
-			detached: true, 
-			windowsHide: true 
-		}, args);
+		const lspProcess = subProcess(
+			"LSP",
+			godotPath,
+			{
+				detached: true,
+				windowsHide: true,
+			},
+			args,
+		);
 
 		const lspStdout = createLogger("lsp.stdout");
 		lspProcess.stdout?.on("data", (data) => {
@@ -214,8 +228,8 @@ export class ClientConnectionManager implements vscode.Disposable {
 	}
 
 	private get_lsp_connection_string() {
-		const host = get_configuration("lsp.serverHost");
-		let port = get_configuration("lsp.serverPort");
+		const host = get_configuration("lsp.serverHost", "127.0.0.1");
+		let port = get_configuration("lsp.serverPort", 6008);
 		if (this.client.port !== -1) port = this.client.port;
 		return `${host}:${port}`;
 	}
@@ -301,8 +315,9 @@ export class ClientConnectionManager implements vscode.Disposable {
 				if (this.client.needsStart()) void this.client.start().then(() => log.info("LSP Client started"));
 				break;
 			case ClientStatus.DISCONNECTED:
-				this.create_new_client();
-				if (this.retry) this.status = this.client.port !== -1 ? ManagerStatus.INITIALIZING_LSP : ManagerStatus.RETRYING;
+				this.client = this.create_new_client(this.client);
+				if (this.retry)
+					this.status = this.client.port !== -1 ? ManagerStatus.INITIALIZING_LSP : ManagerStatus.RETRYING;
 				else this.status = ManagerStatus.DISCONNECTED;
 				this.retry = true;
 				break;
@@ -322,8 +337,8 @@ export class ClientConnectionManager implements vscode.Disposable {
 	}
 
 	private retry_connect_client() {
-		const autoRetry = get_configuration("lsp.autoReconnect.enabled");
-		const maxAttempts = get_configuration("lsp.autoReconnect.attempts");
+		const autoRetry = get_configuration("lsp.autoReconnect.enabled", true);
+		const maxAttempts = get_configuration("lsp.autoReconnect.attempts", 10);
 		if (autoRetry && this.reconnectionAttempts <= maxAttempts - 1) {
 			this.reconnectionAttempts++;
 			this.client.connect(this.target);
@@ -340,7 +355,10 @@ export class ClientConnectionManager implements vscode.Disposable {
 	private show_retrying_prompt() {
 		const lspTarget = this.get_lsp_connection_string();
 		const message = `Couldn't connect to the GDScript language server at ${lspTarget}. Is the Godot editor or language server running?`;
-		const options = this.target === TargetLSP.EDITOR ? ["Open workspace with Godot Editor", "Retry", "Ignore"] : ["Retry", "Ignore"];
+		const options =
+			this.target === TargetLSP.EDITOR
+				? ["Open workspace with Godot Editor", "Retry", "Ignore"]
+				: ["Retry", "Ignore"];
 		void vscode.window.showErrorMessage(message, ...options).then((item) => {
 			if (item === "Retry") void this.connect_to_language_server();
 			if (item === "Open workspace with Godot Editor") {

@@ -2,7 +2,16 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { parseGDScript } from "../analyzer/index.js";
 import { SemanticQueryEngine } from "../language/semantic/query_engine.js";
-import { BindingIndex, DependencyGraph, FileIndex, SymbolIndex, TypeResolutionIndex } from "./index.js";
+import {
+	FileIndex,
+	SymbolIndex,
+	TypeResolutionIndex,
+	createBindingIndex,
+	createDependencyGraph,
+	createFileIndex,
+	createSymbolIndex,
+	createTypeResolutionIndex,
+} from "./index.js";
 
 const uri = "file:///project/atype_test.gd";
 
@@ -23,12 +32,17 @@ func complete_here() -> void:
 	var value = AtypeTest.
 `;
 
-function createIndices(): { files: FileIndex; symbols: SymbolIndex; types: TypeResolutionIndex; engine: SemanticQueryEngine } {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
-	const types = new TypeResolutionIndex(files, symbols, bindings);
-	const dependencies = new DependencyGraph(files);
+function createIndices(): {
+	files: FileIndex;
+	symbols: SymbolIndex;
+	types: TypeResolutionIndex;
+	engine: SemanticQueryEngine;
+} {
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
+	const dependencies = createDependencyGraph(files);
 	files.update(uri, source, 1);
 	symbols.update(uri);
 	bindings.update(uri);
@@ -47,8 +61,14 @@ describe("named enum members", () => {
 		assert.equal(declaration.kind, "enum");
 		if (declaration.kind !== "enum") return;
 		assert.equal(declaration.name, "Values");
-		assert.deepEqual(declaration.members.map((member) => member.name), ["A", "B", "C"]);
-		assert.deepEqual(declaration.members.map((member) => member.value), ["1", "2", "A | 4"]);
+		assert.deepEqual(
+			declaration.members.map((member) => member.name),
+			["A", "B", "C"],
+		);
+		assert.deepEqual(
+			declaration.members.map((member) => member.value),
+			["1", "2", "A | 4"],
+		);
 		const text = "enum Values { A = 1, B = 2, C = A | 4 }\n";
 		for (const member of declaration.members) {
 			assert.equal(text.slice(member.range.start.offset, member.range.end.offset), member.name);
@@ -60,13 +80,27 @@ describe("named enum members", () => {
 		const symbols = files.get(uri)?.symbols ?? [];
 		const enumSymbol = symbols.find((symbol) => symbol.kind === "enum" && symbol.name === "AtypeTest");
 		assert.ok(enumSymbol);
-		const members = symbols.filter((symbol) => symbol.kind === "enum_member" && symbol.containerName === "AtypeTest");
-		assert.deepEqual(members.map((symbol) => symbol.name), ["O", "OQ", "OW", "OP", "OD"]);
-		assert.deepEqual(members.map((symbol) => symbol.type), ["AtypeTest", "AtypeTest", "AtypeTest", "AtypeTest", "AtypeTest"]);
+		const members = symbols.filter(
+			(symbol) => symbol.kind === "enum_member" && symbol.containerName === "AtypeTest",
+		);
+		assert.deepEqual(
+			members.map((symbol) => symbol.name),
+			["O", "OQ", "OW", "OP", "OD"],
+		);
+		assert.deepEqual(
+			members.map((symbol) => symbol.type),
+			["AtypeTest", "AtypeTest", "AtypeTest", "AtypeTest", "AtypeTest"],
+		);
 
 		const hidden = symbols.filter((symbol) => symbol.kind === "enum_member" && symbol.name.startsWith("HIDDEN"));
-		assert.deepEqual(hidden.map((symbol) => symbol.name), ["HIDDEN_A", "HIDDEN_B"]);
-		assert.deepEqual(hidden.map((symbol) => symbol.containerName), [undefined, undefined]);
+		assert.deepEqual(
+			hidden.map((symbol) => symbol.name),
+			["HIDDEN_A", "HIDDEN_B"],
+		);
+		assert.deepEqual(
+			hidden.map((symbol) => symbol.containerName),
+			[undefined, undefined],
+		);
 	});
 
 	it("treats a named enum as a type exposing exactly its members", () => {
@@ -76,7 +110,10 @@ describe("named enum members", () => {
 		assert.equal(enumType.uri, uri);
 		assert.equal(enumType.builtin, false);
 		assert.equal(enumType.symbol?.kind, "enum");
-		assert.deepEqual(types.getMembers(enumType).map((member) => member.name), ["O", "OQ", "OW", "OP", "OD"]);
+		assert.deepEqual(
+			types.getMembers(enumType).map((member) => member.name),
+			["O", "OQ", "OW", "OP", "OD"],
+		);
 		assert.equal(types.resolveReceiver(uri, completionOffset, "AtypeTest")?.name, "AtypeTest");
 		assert.equal(types.resolveName("unrelated"), undefined);
 	});
@@ -85,7 +122,10 @@ describe("named enum members", () => {
 		const { engine } = createIndices();
 		const result = engine.getCompletions(uri, { offset: completionOffset });
 		assert.equal(result.confidence, "exact");
-		assert.deepEqual(result.value?.map((item) => item.name), ["O", "OQ", "OW", "OP", "OD"]);
+		assert.deepEqual(
+			result.value?.map((item) => item.name),
+			["O", "OQ", "OW", "OP", "OD"],
+		);
 		assert.ok(result.value?.every((item) => item.kind === "enum_member"));
 	});
 
@@ -108,7 +148,10 @@ describe("named enum members", () => {
 		assert.equal(hover.value?.containerName, "AtypeTest");
 		const definition = engine.getDefinition(uri, { offset });
 		assert.equal(definition.value?.name, "O");
-		assert.ok(definition.value && definition.value.range.start.offset < offset, "definition points at the declaration");
+		assert.ok(
+			definition.value && definition.value.range.start.offset < offset,
+			"definition points at the declaration",
+		);
 		assert.equal(source.slice(definition.value!.range.start.offset, definition.value!.range.end.offset), "O");
 	});
 

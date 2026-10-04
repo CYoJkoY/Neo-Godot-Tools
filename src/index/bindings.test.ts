@@ -1,15 +1,15 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { FileIndex } from "./file_index";
-import { BindingIndex } from "./bindings";
-import { SymbolIndex } from "./symbol_index";
+import { BindingIndex, createBindingIndex } from "./bindings";
+import { createFileIndex } from "./file_index";
+import { createSymbolIndex } from "./symbol_index";
 
 function createIndex(source: string): BindingIndex {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
 	files.update("file:///player.gd", source);
 	symbols.update("file:///player.gd");
-	const bindings = new BindingIndex(files);
+	const bindings = createBindingIndex(files);
 	bindings.update("file:///player.gd");
 	return bindings;
 }
@@ -21,8 +21,11 @@ describe("binding index", () => {
 		const parameter = bindings.getBinding("file:///player.gd", source.indexOf("health +="), "health");
 		const references = bindings.findReferences(parameter!.id);
 		assert.equal(parameter?.kind, "parameter");
-		assert.equal((references).length, 3);
-		assert.equal(references.some((reference) => reference.range.start.offset === source.indexOf("self.health") + 5), false);
+		assert.equal(references.length, 3);
+		assert.equal(
+			references.some((reference) => reference.range.start.offset === source.indexOf("self.health") + 5),
+			false,
+		);
 	});
 
 	it("keeps two local variables with the same name in separate functions independent", () => {
@@ -33,7 +36,7 @@ describe("binding index", () => {
 		assert.ok(first);
 		assert.ok(second);
 		assert.notEqual(first?.id, second?.id);
-		assert.equal((bindings.findReferences(first!.id)).length, 2);
-		assert.equal((bindings.findReferences(second!.id)).length, 2);
+		assert.equal(bindings.findReferences(first!.id).length, 2);
+		assert.equal(bindings.findReferences(second!.id).length, 2);
 	});
 });

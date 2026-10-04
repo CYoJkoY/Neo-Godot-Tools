@@ -1,108 +1,149 @@
 import * as vscode from "vscode";
+import { HoverFallback } from "../fallback/hover";
+import { LanguageService } from "../language/service";
 import { SceneParser } from "../scene_tools";
 import { convert_resource_path_to_uri, convert_uid_to_uri, convert_uri_to_resource_path } from "../utils";
-import { LanguageService } from "../language/service";
-import { HoverFallback } from "../fallback/hover";
+import { RESOURCE_SELECTOR } from "./selectors";
 
-export class GDHoverProvider implements vscode.HoverProvider {
-	public parser = new SceneParser();
+/** `[extension, language id]` for the resource kinds the docs links point at. */
+const RESOURCE_LANGUAGES: Array<[string, string]> = [
+	[".gd", "gdscript"],
+	[".cs", "csharp"],
+	[".tscn", "gdscene"],
+	[".tres", "gdresource"],
+	[".png", "image"],
+	[".svg", "image"],
+];
 
-	constructor(private readonly context: vscode.ExtensionContext, private readonly languageService?: LanguageService, private readonly fallback = new HoverFallback()) {
-		const selector = [
-			{ language: "gdresource", scheme: "file" },
-			{ language: "gdscene", scheme: "file" },
-			{ language: "gdscript", scheme: "file" },
-		];
-		context.subscriptions.push(vscode.languages.registerHoverProvider(selector, this));
-	}
+const EXT_RESOURCE_WORD = /(?:Ext|Sub)Resource\(\s?"?(\w+)\s?"?\)/;
+const RES_PATH_WORD = /res:\/\/[^"^']*/;
+const UID_WORD = /uid:\/\/[0-9a-z]*/;
+const RES_PATH_LINK = /res:\/\/[^"^']*/g;
+const UID_LINK = /uid:\/\/[0-9a-z]*/g;
 
-	async provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Hover | undefined> {
-		if (document.languageId === "gdscript" && this.languageService) {
-			const local = this.languageService.getHover(document, position);
-			if (local) return local;
-			return this.fallback.provide(document, position, token);
-		}
-		return this.provideResourceHover(document, position);
-	}
+function languageFor(resourcePath: string): string | undefined {
+	return RESOURCE_LANGUAGES.find(([extension]) => resourcePath.endsWith(extension))?.[1];
+}
 
-	private async provideResourceHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
-		if (["gdresource", "gdscene"].includes(document.languageId)) {
-			const scene = this.parser.parse_scene(document);
-			const wordPattern = /(?:Ext|Sub)Resource\(\s?"?(\w+)\s?"?\)/;
-			const word = document.getText(document.getWordRangeAtPosition(position, wordPattern));
-			if (word.startsWith("ExtResource")) {
-				const match = word.match(wordPattern);
-				if (!match) return undefined;
-				const resource = scene.externalResources.get(match[1]);
-				if (!resource) return undefined;
-				const definition = resource.body;
-				const links = await this.getLinks(definition);
-				const contents = new vscode.MarkdownString(links);
-				const uri = await convert_resource_path_to_uri(resource.path);
-				contents.appendMarkdown("\n---\n");
-				contents.appendCodeblock(definition, "gdresource");
-				if (resource.type === "Texture") {
-					contents.appendMarkdown(`\n---\n<img src="${uri}" min-width=100px max-width=500px/>\n`);
-					contents.supportHtml = true;
-					contents.isTrusted = true;
-				}
-				if (resource.type === "Script") {
-					contents.appendMarkdown("\n---\n");
-					const text = (await vscode.workspace.openTextDocument(uri)).getText();
-					contents.appendCodeblock(text, "gdscript");
-				}
-				return new vscode.Hover(contents);
-			}
-			if (word.startsWith("SubResource")) {
-				const match = word.match(wordPattern);
-				if (!match) return undefined;
-				let definition = scene.subResources.get(match[1])?.body;
-				definition = definition?.replace(/Array\([0-9,\.\- ]*\)/, "Array(...)");
-				const contents = new vscode.MarkdownString();
-				contents.appendCodeblock(definition ?? `Definition not found for id ${match[1]}`, "gdresource");
-				return new vscode.Hover(contents);
-			}
-		}
+function imageMarkdown(uri: vscode.Uri | undefined): string {
+	return `<img src="${uri}" min-width=100px max-width=500px/>`;
+}
 
-		let link = document.getText(document.getWordRangeAtPosition(position, /res:\/\/[^"^']*/));
-		if (!link.startsWith("res://")) {
-			link = document.getText(document.getWordRangeAtPosition(position, /uid:\/\/[0-9a-z]*/));
-			if (link.startsWith("uid://")) {
-				const uri = await convert_uid_to_uri(link);
-				link = await convert_uri_to_resource_path(uri ?? vscode.Uri.parse(link));
-			}
-		}
-		if (!link.startsWith("res://")) return undefined;
-		let type = "";
-		if (link.endsWith(".gd")) type = "gdscript";
-		else if (link.endsWith(".cs")) type = "csharp";
-		else if (link.endsWith(".tscn")) type = "gdscene";
-		else if (link.endsWith(".tres")) type = "gdresource";
-		else if (link.endsWith(".png") || link.endsWith(".svg")) type = "image";
-		else return undefined;
-		const uri = await convert_resource_path_to_uri(link);
-		const contents = new vscode.MarkdownString();
-		if (type === "image") {
-			contents.appendMarkdown(`<img src="${uri}" min-width=100px max-width=500px/>`);
-			contents.supportHtml = true;
-			contents.isTrusted = true;
-		} else {
-			const text = (await vscode.workspace.openTextDocument(uri)).getText();
-			contents.appendCodeblock(text, type);
+/** Renders an image inline; `<img>` needs HTML support and trust. */
+function appendImage(contents: vscode.MarkdownString, markdown: string): void {
+	contents.appendMarkdown(markdown);
+	contents.supportHtml = true;
+	contents.isTrusted = true;
+}
+
+/** Resource links of an `ExtResource` definition body, one markdown bullet each. */
+async function getLinks(text: string): Promise<string> {
+	const resources = await Promise.all(
+		Array.from(text.matchAll(RES_PATH_LINK), async (match) => {
+			const uri = await convert_resource_path_to_uri(match[0]);
+			return uri instanceof vscode.Uri ? `* [${match[0]}](${uri})\n` : "";
+		}),
+	);
+	const uids = await Promise.all(
+		Array.from(text.matchAll(UID_LINK), async (match) => {
+			const uri = await convert_uid_to_uri(match[0]);
+			return uri instanceof vscode.Uri ? `* [${match[0]}](${uri})\n` : "";
+		}),
+	);
+	return [...resources, ...uids].join("");
+}
+
+/** The hover of an `ExtResource`/`SubResource` declaration in a scene document. */
+async function sceneHover(
+	document: vscode.TextDocument,
+	position: vscode.Position,
+	parser: SceneParser,
+): Promise<vscode.Hover | undefined> {
+	if (!["gdresource", "gdscene"].includes(document.languageId)) return undefined;
+	const word = document.getText(document.getWordRangeAtPosition(position, EXT_RESOURCE_WORD));
+	const match = word.match(EXT_RESOURCE_WORD);
+	if (!match) return undefined;
+	const scene = parser.parse_scene(document);
+
+	if (word.startsWith("ExtResource")) {
+		const resource = scene.externalResources.get(match[1]);
+		if (!resource) return undefined;
+		const links = await getLinks(resource.body);
+		const contents = new vscode.MarkdownString(links);
+		contents.appendMarkdown("\n---\n");
+		contents.appendCodeblock(resource.body, "gdresource");
+		const uri = await convert_resource_path_to_uri(resource.path);
+		if (resource.type === "Texture") appendImage(contents, `\n---\n${imageMarkdown(uri)}\n`);
+		if (resource.type === "Script") {
+			contents.appendMarkdown("\n---\n");
+			contents.appendCodeblock((await vscode.workspace.openTextDocument(uri)).getText(), "gdscript");
 		}
 		return new vscode.Hover(contents);
 	}
 
-	private async getLinks(text: string): Promise<string> {
-		let links = "";
-		for (const match of text.matchAll(/res:\/\/[^"^']*/g)) {
-			const uri = await convert_resource_path_to_uri(match[0]);
-			if (uri instanceof vscode.Uri) links += `* [${match[0]}](${uri})\n`;
-		}
-		for (const match of text.matchAll(/uid:\/\/[0-9a-z]*/g)) {
-			const uri = await convert_uid_to_uri(match[0]);
-			if (uri instanceof vscode.Uri) links += `* [${match[0]}](${uri})\n`;
-		}
-		return links;
+	const definition = scene.subResources.get(match[1])?.body?.replace(/Array\([0-9,\.\- ]*\)/, "Array(...)");
+	const contents = new vscode.MarkdownString();
+	contents.appendCodeblock(definition ?? `Definition not found for id ${match[1]}`, "gdresource");
+	return new vscode.Hover(contents);
+}
+
+/** The hover of a `res://` path or `uid://` id, in any language. */
+async function pathHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
+	const path = document.getText(document.getWordRangeAtPosition(position, RES_PATH_WORD));
+	const link = path.startsWith("res://") ? path : await uidToPath(document, position);
+	if (!link?.startsWith("res://")) return undefined;
+	const type = languageFor(link);
+	if (!type) return undefined;
+
+	const contents = new vscode.MarkdownString();
+	const uri = await convert_resource_path_to_uri(link);
+	if (type === "image") {
+		appendImage(contents, imageMarkdown(uri));
+		return new vscode.Hover(contents);
 	}
+	contents.appendCodeblock((await vscode.workspace.openTextDocument(uri)).getText(), type);
+	return new vscode.Hover(contents);
+}
+
+/** Resolves a `uid://` id under the cursor to the `res://` path it points at. */
+async function uidToPath(document: vscode.TextDocument, position: vscode.Position): Promise<string | undefined> {
+	const uid = document.getText(document.getWordRangeAtPosition(position, UID_WORD));
+	if (!uid.startsWith("uid://")) return undefined;
+	const uri = await convert_uid_to_uri(uid);
+	return await convert_uri_to_resource_path(uri ?? vscode.Uri.parse(uid));
+}
+
+export interface HoverProviderOptions {
+	/** Local semantic hover; without it only scene and path documents are served. */
+	languageService?: LanguageService;
+	fallback?: HoverFallback;
+}
+
+export interface GDHoverProvider extends vscode.HoverProvider {
+	/** Narrowed to a real hover: the caller never has to handle `null`. */
+	provideHover(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken,
+	): Promise<vscode.Hover | undefined>;
+}
+
+export function createHoverProvider(
+	context: vscode.ExtensionContext,
+	options: HoverProviderOptions = {},
+): GDHoverProvider {
+	const parser = new SceneParser();
+	const fallback = options.fallback ?? new HoverFallback();
+	const provider: GDHoverProvider = {
+		async provideHover(document, position, token): Promise<vscode.Hover | undefined> {
+			if (document.languageId === "gdscript" && options.languageService) {
+				const local = options.languageService.getHover(document, position);
+				if (local) return local;
+				return fallback.provide(document, position, token);
+			}
+			return (await sceneHover(document, position, parser)) ?? pathHover(document, position);
+		},
+	};
+	context.subscriptions.push(vscode.languages.registerHoverProvider(RESOURCE_SELECTOR, provider));
+	return provider;
 }

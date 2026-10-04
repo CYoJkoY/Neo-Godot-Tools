@@ -10,24 +10,25 @@
  * `npm run test:engine`.
  */
 
-const { spawnSync } = require("node:child_process");
-const fs = require("node:fs");
-const path = require("node:path");
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
-const ROOT = path.resolve(__dirname, "..");
-const BUILD_DIR = path.join(ROOT, "out-test");
-const STUB_REGISTER = path.join(__dirname, "vscode_stub_register.cjs");
+const ROOT = path.resolve(__dirname, "..", "..");
+/** `tsconfig.test.json` compiles that project under `out-test/src`. */
+const BUILD_DIR = path.join(ROOT, "out-test", "src");
+const STUB_REGISTER = path.join(ROOT, "out-test", "tools", "vscode_stub_register.js");
 
 const HOST_ONLY_TESTS = new Set([
 	"debugger/godot4/variables/debugger_variables.test.js",
 	"formatter/formatter.test.js",
 ]);
 
-function collect_tests(directory, result = []) {
+function collectTests(directory: string, result: string[] = []): string[] {
 	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
 		const full = path.join(directory, entry.name);
 		if (entry.isDirectory()) {
-			collect_tests(full, result);
+			collectTests(full, result);
 			continue;
 		}
 		if (entry.isFile() && entry.name.endsWith(".test.js")) result.push(full);
@@ -40,22 +41,25 @@ if (!fs.existsSync(BUILD_DIR)) {
 	process.exit(1);
 }
 
-const relative = (file) => path.relative(BUILD_DIR, file).split(path.sep).join("/");
-const tests = collect_tests(BUILD_DIR)
+const relative = (file: string) => path.relative(BUILD_DIR, file).split(path.sep).join("/");
+const tests = collectTests(BUILD_DIR)
 	.filter((file) => !HOST_ONLY_TESTS.has(relative(file)))
 	.sort();
 
 if (!tests.length) {
-	console.error("No test files found in out-test.");
+	console.error("No test files found in out-test/src.");
 	process.exit(1);
 }
 
 console.log(`Running ${tests.length} unit test files (skipping ${HOST_ONLY_TESTS.size} extension-host tests).`);
 
-const result = spawnSync(
-	process.execPath,
-	["--require", STUB_REGISTER, "--test", "--test-reporter=spec", ...tests],
-	{ cwd: ROOT, stdio: "inherit" },
-);
+const result = spawnSync(process.execPath, ["--require", STUB_REGISTER, "--test", "--test-reporter=spec", ...tests], {
+	cwd: ROOT,
+	stdio: "inherit",
+	env: {
+		...process.env,
+		NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT: process.env["NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT"] || ROOT,
+	},
+});
 
 process.exit(result.status ?? 1);

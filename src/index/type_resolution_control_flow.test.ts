@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { BindingIndex, FileIndex, SymbolIndex, TypeResolutionIndex } from "./index.js";
+import { createBindingIndex, createFileIndex, createSymbolIndex, createTypeResolutionIndex } from "./index.js";
 
-const files = new FileIndex();
-const symbols = new SymbolIndex(files);
-const bindings = new BindingIndex(files);
-const types = new TypeResolutionIndex(files, symbols, bindings);
+const files = createFileIndex();
+const symbols = createSymbolIndex(files);
+const bindings = createBindingIndex(files);
+const types = createTypeResolutionIndex(files, symbols, bindings);
 
 const playerUri = "file:///workspace/player.gd";
 files.update(playerUri, `class_name Player\nextends Node\n`, 1);

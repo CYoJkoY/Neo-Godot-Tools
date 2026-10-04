@@ -39,7 +39,7 @@ export class ScriptClassNameIndex {
 
 	private findInOpenDocuments(className: string): vscode.Uri | undefined {
 		const pattern = new RegExp(`^[ \\t]*class_name[ \\t]+${className}\\b`, "m");
-		for (const document of vscode.workspace.textDocuments ?? []) {
+		for (const document of vscode.workspace.textDocuments) {
 			if (!document.uri.fsPath.toLowerCase().endsWith(".gd")) continue;
 			if (pattern.test(document.getText())) return document.uri;
 		}
@@ -119,7 +119,7 @@ export class ScriptClassNameIndex {
 	}
 
 	private async readClassName(uri: vscode.Uri): Promise<string | undefined> {
-		const open = (vscode.workspace.textDocuments ?? []).find((document) => document.uri.toString() === uri.toString());
+		const open = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
 		if (open) return open.getText().match(CLASS_NAME_RE)?.[1];
 		try {
 			const stats = await fs.promises.stat(uri.fsPath);

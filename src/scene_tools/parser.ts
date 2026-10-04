@@ -1,9 +1,11 @@
-import * as fs from "node:fs";
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import { TextDocument, Uri, workspace } from "vscode";
-import { SceneNode, Scene, SceneResource } from "./types";
 import { createLogger } from "../utils";
+import { createLruCache } from "../utils/lru_cache";
+import { parseNodeProperties } from "./properties";
+import { Scene, SceneNode, SceneResource } from "./types";
 
 const log = createLogger("scenes.parser");
 
@@ -16,14 +18,34 @@ const log = createLogger("scenes.parser");
  * visible without paying that cost per node.
  */
 const SCRIPT_TYPE_CACHE_TTL_MS = 5_000;
-const scriptTypeCache = new Map<string, { type: string | undefined; checkedAt: number }>();
+const scriptTypeCache = createLruCache<string, { type: string | undefined }>({
+	capacity: 512,
+	ttlMs: SCRIPT_TYPE_CACHE_TTL_MS,
+});
 
 function cached_script_type(scriptPath: string, resolve: () => string | undefined): string | undefined {
 	const cached = scriptTypeCache.get(scriptPath);
-	if (cached && Date.now() - cached.checkedAt < SCRIPT_TYPE_CACHE_TTL_MS) return cached.type;
+	if (cached) return cached.type;
 	const type = resolve();
-	scriptTypeCache.set(scriptPath, { type, checkedAt: Date.now() });
+	scriptTypeCache.set(scriptPath, { type });
 	return type;
+}
+
+/**
+ * A section header at the start of a line: `[gd_scene ...]`, `[node ...]`,
+ * `[sub_resource ...]`, `[connection ...]`. Anchoring to the line keeps bracket
+ * text inside values (dictionary keys, strings) out of the section list, and
+ * matching every section lets a node body end where the next one begins.
+ */
+const SECTION_PATTERN = /^\[([A-Za-z_]\w*)\b[^\n]*/gm;
+
+function section_attributes(line: string) {
+	return {
+		type: line.match(/type="([^"]+)"/)?.[1] ?? "",
+		path: line.match(/path="([^"]+)"/)?.[1] ?? "",
+		uid: line.match(/uid="([^"]+)"/)?.[1] ?? "",
+		id: line.match(/\bid\s*=\s*"?([^"\s\]]+)"?/)?.[1] ?? "",
+	};
 }
 
 /**
@@ -70,7 +92,11 @@ export class SceneParser {
 
 	public parse_scene(document: TextDocument): Scene {
 		const filePath = document.uri.fsPath;
-		const scene = this.parse_text(filePath, document.getText(), (offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1);
+		const scene = this.parse_text(
+			filePath,
+			document.getText(),
+			(offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1,
+		);
 		this.prepare_scene(scene);
 		return scene;
 	}
@@ -118,72 +144,94 @@ export class SceneParser {
 		}
 	}
 
+	/**
+	 * One scan over the scene.
+	 *
+	 * The three sections were previously matched with three separate `matchAll`
+	 * passes over the whole text (`ext_resource`, `sub_resource`, `node`), each
+	 * building an array of every match before the parse even started. A single
+	 * anchored alternation walks the file once and keeps the document order that
+	 * the section-body slices rely on.
+	 */
 	private parse_text(filePath: string, text: string, lineAtOffset: (offset: number) => number): Scene {
 		const stats = fs.statSync(filePath);
 		const sourceFingerprint = createHash("sha1").update(text).digest("hex");
 		const existing = this.scenes.get(filePath);
-		if (existing && existing.mtime === stats.mtimeMs && existing.sourceFingerprint === sourceFingerprint) return existing;
+		if (existing && existing.mtime === stats.mtimeMs && existing.sourceFingerprint === sourceFingerprint)
+			return existing;
 
-		const scene = new Scene();
-		scene.path = filePath;
-		scene.mtime = stats.mtimeMs;
-		scene.sourceFingerprint = sourceFingerprint;
-		scene.title = basename(filePath);
+		const scene = new Scene({
+			path: filePath,
+			title: basename(filePath),
+			mtime: stats.mtimeMs,
+			source: text,
+			fingerprint: sourceFingerprint,
+		});
 		this.scenes.set(filePath, scene);
 
-		for (const match of text.matchAll(/\[ext_resource[^\n]*/g)) {
-			const line = match[0];
-			const type = line.match(/type="([^"]+)"/)?.[1] ?? "";
-			const resPath = line.match(/path="([^"]+)"/)?.[1] ?? "";
-			const uid = line.match(/uid="([^"]+)"/)?.[1] ?? "";
-			const id = line.match(/\bid\s*=\s*"?([^"\s\]]+)"?/)?.[1] ?? "";
-
-			if (id && match.index !== undefined) {
-				scene.externalResources.set(id, {
-					body: line,
-					path: resPath,
-					type,
-					uid,
-					id,
-					index: match.index,
-					line: lineAtOffset(match.index),
-				});
-			}
-		}
-
 		let lastResource: SceneResource | undefined;
-		for (const match of text.matchAll(/\[sub_resource[^\n]*/g)) {
-			if (match.index === undefined) continue;
-			const line = match[0];
-			const type = line.match(/type="([^"]+)"/)?.[1] ?? "";
-			const resPath = line.match(/path="([^"]+)"/)?.[1] ?? "";
-			const uid = line.match(/uid="([^"]+)"/)?.[1] ?? "";
-			const id = line.match(/\bid\s*=\s*"?([^"\s\]]+)"?/)?.[1] ?? "";
-			const resource: SceneResource = {
-				path: resPath,
-				type,
-				uid,
-				id,
-				index: match.index,
-				line: lineAtOffset(match.index),
-				body: "",
-			};
-			if (lastResource) lastResource.body = text.slice(lastResource.index, match.index).trimEnd();
-			if (id) scene.subResources.set(id, resource);
-			lastResource = resource;
-		}
-
 		let root = "";
 		const nodes: Record<string, SceneNode> = {};
 		let lastNode: SceneNode | undefined;
 
-		for (const match of text.matchAll(/\[node[^\n]*/g)) {
-			if (match.index === undefined) continue;
+		for (const match of text.matchAll(SECTION_PATTERN)) {
+			const index = match.index;
+			if (index === undefined) continue;
 			const line = match[0];
+			const kind = match[1];
+
+			if (kind === "ext_resource") {
+				const attributes = section_attributes(line);
+				if (!attributes.id) continue;
+				scene.externalResources.set(attributes.id, {
+					body: line,
+					path: attributes.path,
+					type: attributes.type,
+					uid: attributes.uid,
+					id: attributes.id,
+					index,
+					line: lineAtOffset(index),
+				});
+				continue;
+			}
+
+			if (kind === "sub_resource") {
+				const attributes = section_attributes(line);
+				const resource: SceneResource = {
+					path: attributes.path,
+					type: attributes.type,
+					uid: attributes.uid,
+					id: attributes.id,
+					index,
+					line: lineAtOffset(index),
+					body: "",
+				};
+				// A resource body ends where the next resource or node begins.
+				if (lastResource) lastResource.body = text.slice(lastResource.index, index).trimEnd();
+				if (attributes.id) scene.subResources.set(attributes.id, resource);
+				lastResource = resource;
+				continue;
+			}
+
+			// Any other section (node, connection, editable, gd_scene) ends the
+			// bodies that were open before it, so a node's body and properties
+			// never run into the connection list that follows the last node.
+			if (lastNode) {
+				lastNode.bodyEnd = index;
+				lastNode.body = text.slice(lastNode.position, index);
+				lastNode.parse_body();
+				lastNode = undefined;
+			}
+			if (lastResource) {
+				lastResource.body = text.slice(lastResource.index, index).trimEnd();
+				lastResource = undefined;
+			}
+			if (kind !== "node") continue;
+
 			const name = line.match(/name="([^"]+)"/)?.[1] || "unknown";
 			const explicitType = line.match(/type="([^"]+)"/)?.[1] ?? "";
-			let parent = line.match(/parent="([^"]+)"/)?.[1];
 			const instance = line.match(/instance=ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];
+			let parent = line.match(/parent="([^"]+)"/)?.[1];
 
 			let nodePath = "";
 			let relativePath = "";
@@ -201,29 +249,25 @@ export class SceneParser {
 				nodePath = `${parent}/${name}`;
 			}
 
-			if (lastNode) {
-				lastNode.body = text.slice(lastNode.position, match.index);
-				lastNode.parse_body();
-			}
-			if (lastResource) {
-				lastResource.body = text.slice(lastResource.index, match.index).trimEnd();
-				lastResource = undefined;
-			}
-
 			const parentNode = parent ? nodes[parent] : undefined;
 			const instanceResource = instance ? scene.externalResources.get(instance) : undefined;
-			const instanceScene = instanceResource ? this.load_instanced_scene(filePath, instanceResource.path) : undefined;
+			const instanceScene = instanceResource
+				? this.load_instanced_scene(filePath, instanceResource.path)
+				: undefined;
 			const inheritedType = this.resolve_inherited_node_type(parentNode, nodePath, nodes);
 			const type = explicitType || inheritedType || instanceScene?.root?.className || "Node";
 
-			const node = new SceneNode(name, type);
+			const node = new SceneNode({
+				label: name,
+				className: type,
+				path: nodePath,
+				relativePath,
+				parent,
+				text: line,
+				position: index,
+			});
 			node.explicitType = explicitType;
-			node.path = nodePath;
 			node.description = type;
-			node.relativePath = relativePath;
-			node.parent = parent;
-			node.text = line;
-			node.position = match.index;
 			node.instanceScene = instanceScene;
 			node.resourceUri = Uri.from({ scheme: "godot", path: nodePath });
 			scene.nodes.set(nodePath, node);
@@ -241,11 +285,18 @@ export class SceneParser {
 		}
 
 		if (lastNode) {
+			lastNode.bodyEnd = text.length;
 			lastNode.body = text.slice(lastNode.position);
 			lastNode.parse_body();
 		}
-
 		if (lastResource) lastResource.body = text.slice(lastResource.index).trimEnd();
+
+		// Overridden properties are parsed from the raw section text: the offsets
+		// they carry are what the Scene Preview edits.
+		for (const node of scene.nodes.values()) {
+			if (node.position < 0 || node.bodyEnd < 0) continue;
+			node.properties = parseNodeProperties(text, node.position, node.bodyEnd);
+		}
 		return scene;
 	}
 
@@ -319,12 +370,15 @@ export class SceneParser {
 	}
 
 	private clone_instanced_node(source: SceneNode, parent: SceneNode, targetPath: string): SceneNode {
-		const imported = new SceneNode(source.label, source.className);
-		imported.path = targetPath;
-		imported.relativePath = targetPath.slice(parent.path.length + 1);
-		imported.parent = parent.path;
-		imported.text = source.text;
-		imported.position = -1;
+		const imported = new SceneNode({
+			label: source.label,
+			className: source.className,
+			path: targetPath,
+			relativePath: targetPath.slice(parent.path.length + 1),
+			parent: parent.path,
+			text: source.text,
+			position: -1,
+		});
 		imported.body = source.body;
 		imported.unique = source.unique;
 		imported.hasScript = source.hasScript;
@@ -346,13 +400,17 @@ export class SceneParser {
 		if (!target.explicitType) target.setClassName(source.className);
 		if (!target.scriptId && source.scriptId) target.scriptId = source.scriptId;
 		if (!target.hasScript && source.hasScript) target.hasScript = true;
-		if (!target.customTypeScriptUid && source.customTypeScriptUid) target.customTypeScriptUid = source.customTypeScriptUid;
-		if (!target.customTypeScriptId && source.customTypeScriptId) target.customTypeScriptId = source.customTypeScriptId;
-		if (!target.customTypeScriptSubResourceId && source.customTypeScriptSubResourceId) target.customTypeScriptSubResourceId = source.customTypeScriptSubResourceId;
+		if (!target.customTypeScriptUid && source.customTypeScriptUid)
+			target.customTypeScriptUid = source.customTypeScriptUid;
+		if (!target.customTypeScriptId && source.customTypeScriptId)
+			target.customTypeScriptId = source.customTypeScriptId;
+		if (!target.customTypeScriptSubResourceId && source.customTypeScriptSubResourceId)
+			target.customTypeScriptSubResourceId = source.customTypeScriptSubResourceId;
 		if (!target.resourcePath && source.resourcePath) target.resourcePath = source.resourcePath;
 		if (!target.instanceScene && source.instanceScene) target.instanceScene = source.instanceScene;
 		if (source.unique) target.unique = true;
-		if (source.hasScript && !target.contextValue?.includes("hasScript")) target.contextValue = `${target.contextValue ?? ""}hasScript`;
+		if (source.hasScript && !target.contextValue?.includes("hasScript"))
+			target.contextValue = `${target.contextValue ?? ""}hasScript`;
 		target.inheritedFromScene ||= source.inheritedFromScene;
 	}
 
@@ -371,10 +429,20 @@ export class SceneParser {
 	private resolve_node_types(scene: Scene): void {
 		const nodes = Object.fromEntries(scene.nodes.entries());
 		for (const node of scene.nodes.values()) {
-			const inheritedType = this.resolve_inherited_node_type(node.parent ? nodes[node.parent] : undefined, node.path, nodes);
+			const inheritedType = this.resolve_inherited_node_type(
+				node.parent ? nodes[node.parent] : undefined,
+				node.path,
+				nodes,
+			);
 			const instanceType = node.instanceScene?.root?.className;
 			const customType = this.resolve_custom_type(scene, node);
-			const type = customType || node.explicitType || inheritedType || instanceType || (node.inheritedFromScene ? node.className : undefined) || "Node";
+			const type =
+				customType ||
+				node.explicitType ||
+				inheritedType ||
+				instanceType ||
+				(node.inheritedFromScene ? node.className : undefined) ||
+				"Node";
 			node.setClassName(type);
 			node.description = type;
 		}
@@ -383,7 +451,8 @@ export class SceneParser {
 	private resolve_custom_type(scene: Scene, node: SceneNode): string | undefined {
 		let resource: GDResourceLike | undefined;
 		if (node.customTypeScriptId) resource = scene.externalResources.get(node.customTypeScriptId);
-		if (!resource && node.customTypeScriptUid) resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
+		if (!resource && node.customTypeScriptUid)
+			resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
 		if (!resource && node.customTypeScriptSubResourceId) {
 			const subResource = scene.subResources.get(node.customTypeScriptSubResourceId);
 			const scriptId = subResource?.body.match(/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];
@@ -419,7 +488,11 @@ export class SceneParser {
 		}
 	}
 
-	private resolve_inherited_node_type(parentNode: SceneNode | undefined, nodePath: string, nodes: Record<string, SceneNode>): string | undefined {
+	private resolve_inherited_node_type(
+		parentNode: SceneNode | undefined,
+		nodePath: string,
+		nodes: Record<string, SceneNode>,
+	): string | undefined {
 		let owner = parentNode;
 		while (owner) {
 			if (owner.instanceScene) {
@@ -465,4 +538,12 @@ export class SceneParser {
 	}
 }
 
-type GDResourceLike = { type: string; path: string; uid: string; id: string; body: string; index: number; line: number };
+type GDResourceLike = {
+	type: string;
+	path: string;
+	uid: string;
+	id: string;
+	body: string;
+	index: number;
+	line: number;
+};

@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 import { DefinitionFallback } from "../fallback/definition.js";
 import { ReferencesFallback } from "../fallback/references.js";
 import { RenameFallback } from "../fallback/rename.js";
-import { GDHoverProvider } from "../providers/hover.js";
+import { createHoverProvider } from "../providers/hover.js";
 import { LanguageService } from "./service.js";
 
 function createService(): LanguageService {
@@ -198,11 +198,10 @@ func heal() -> void:
 				return new vscode.Hover(new vscode.MarkdownString("from language server"));
 			},
 		};
-		const provider = new GDHoverProvider(
-			{ subscriptions: [] } as unknown as vscode.ExtensionContext,
-			service,
-			fallback as never,
-		);
+		const provider = createHoverProvider({ subscriptions: [] } as unknown as vscode.ExtensionContext, {
+			languageService: service,
+			fallback: fallback as never,
+		});
 		const document = documentFor(mainUri, source);
 		const token = { isCancellationRequested: false } as vscode.CancellationToken;
 

@@ -14,7 +14,12 @@ import { describe, it } from "node:test";
 
 const SCRIPT = path.resolve(__dirname, "publish_changelog.sh");
 
-function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}): { status: number; stdout: string; stderr: string } {
+function run(
+	command: string,
+	args: string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv = {},
+): { status: number; stdout: string; stderr: string } {
 	const result = spawnSync(command, args, { cwd, encoding: "utf8", env: { ...process.env, ...env } });
 	return { status: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
@@ -43,7 +48,10 @@ function fixture(ghBehavior: "policy-error" | "creates-pr" | "unexpected-error")
 	git(root, "clone", origin, work);
 	git(work, "config", "user.name", "Test");
 	git(work, "config", "user.email", "test@example.invalid");
-	fs.writeFileSync(path.join(work, "CHANGELOG.md"), "# Changelog\n\n<!-- generated-release-notes:start -->\nold\n<!-- generated-release-notes:end -->\n");
+	fs.writeFileSync(
+		path.join(work, "CHANGELOG.md"),
+		"# Changelog\n\n<!-- generated-release-notes:start -->\nold\n<!-- generated-release-notes:end -->\n",
+	);
 	git(work, "add", "CHANGELOG.md");
 	git(work, "commit", "-m", "chore: initial changelog");
 	git(work, "push", "origin", "master");
@@ -85,10 +93,14 @@ function installScript(repo: string): void {
 	fs.copyFileSync(SCRIPT, path.join(repo, "tools", "publish_changelog.sh"));
 }
 
-function publish(repo: string, bin: string, env: Record<string, string> = {}): { status: number; stdout: string; stderr: string; output: string } {
+function publish(
+	repo: string,
+	bin: string,
+	env: Record<string, string> = {},
+): { status: number; stdout: string; stderr: string; output: string } {
 	const outputFile = path.join(repo, "step-output.txt");
 	const result = run("bash", ["tools/publish_changelog.sh"], repo, {
-		PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+		PATH: `${bin}${path.delimiter}${process.env["PATH"] ?? ""}`,
 		DEFAULT_BRANCH: "master",
 		GITHUB_OUTPUT: outputFile,
 		...env,
@@ -103,7 +115,10 @@ describe("changelog publishing", { skip: enabled ? false : "requires bash" }, ()
 		const test = fixture("policy-error");
 		try {
 			installScript(test.work);
-			fs.writeFileSync(path.join(test.work, "CHANGELOG.md"), "# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n");
+			fs.writeFileSync(
+				path.join(test.work, "CHANGELOG.md"),
+				"# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n",
+			);
 			const result = publish(test.work, test.bin);
 			assert.equal(result.status, 0, result.stderr);
 			assert.match(result.output, /pull-request-operation=direct/);
@@ -121,13 +136,20 @@ describe("changelog publishing", { skip: enabled ? false : "requires bash" }, ()
 		const test = fixture("creates-pr");
 		try {
 			installScript(test.work);
-			fs.writeFileSync(path.join(test.work, "CHANGELOG.md"), "# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n");
+			fs.writeFileSync(
+				path.join(test.work, "CHANGELOG.md"),
+				"# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n",
+			);
 			const result = publish(test.work, test.bin);
 			assert.equal(result.status, 0, result.stderr);
 			assert.match(result.output, /pull-request-operation=created/);
 
 			git(test.work, "fetch", "origin");
-			assert.match(git(test.work, "show", "origin/master:CHANGELOG.md"), /old/, "the default branch must not be written directly");
+			assert.match(
+				git(test.work, "show", "origin/master:CHANGELOG.md"),
+				/old/,
+				"the default branch must not be written directly",
+			);
 			assert.match(git(test.work, "show", "origin/automation/changelog:CHANGELOG.md"), /new/);
 		} finally {
 			test.dispose();
@@ -152,7 +174,10 @@ describe("changelog publishing", { skip: enabled ? false : "requires bash" }, ()
 		const test = fixture("unexpected-error");
 		try {
 			installScript(test.work);
-			fs.writeFileSync(path.join(test.work, "CHANGELOG.md"), "# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n");
+			fs.writeFileSync(
+				path.join(test.work, "CHANGELOG.md"),
+				"# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n",
+			);
 			const result = publish(test.work, test.bin, { CHANGELOG_DIRECT_PUSH: "true" });
 			assert.equal(result.status, 0, result.stderr);
 			assert.match(result.output, /pull-request-operation=direct/);
@@ -167,7 +192,10 @@ describe("changelog publishing", { skip: enabled ? false : "requires bash" }, ()
 		const test = fixture("unexpected-error");
 		try {
 			installScript(test.work);
-			fs.writeFileSync(path.join(test.work, "CHANGELOG.md"), "# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n");
+			fs.writeFileSync(
+				path.join(test.work, "CHANGELOG.md"),
+				"# Changelog\n\n<!-- generated-release-notes:start -->\nnew\n<!-- generated-release-notes:end -->\n",
+			);
 			const result = publish(test.work, test.bin);
 			assert.notEqual(result.status, 0, "unexpected failures must not silently rewrite the default branch");
 			assert.match(result.stderr, /network unreachable/);

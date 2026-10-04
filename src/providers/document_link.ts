@@ -1,102 +1,80 @@
 import * as vscode from "vscode";
-import {
-	Uri,
-	Range,
-	Position,
-	type TextDocument,
-	type CancellationToken,
+import type {
+	CancellationToken,
 	DocumentLink,
-	type DocumentLinkProvider,
-	type ExtensionContext,
+	DocumentLinkProvider,
+	ExtensionContext,
+	Range,
+	TextDocument,
+	Uri,
 } from "vscode";
 import { SceneParser } from "../scene_tools";
-import { convert_resource_path_to_uri, convert_uids_to_uris, createLogger } from "../utils";
+import { convert_resource_path_to_uri, convert_uids_to_uris } from "../utils";
+import { RESOURCE_SELECTOR } from "./selectors";
 
-const log = createLogger("providers.document_links");
+const POSITION_ZERO = new vscode.Position(0, 0);
 
-export class GDDocumentLinkProvider implements DocumentLinkProvider {
-	public parser = new SceneParser();
+function makeMatchRange(document: TextDocument, match: RegExpMatchArray): Range {
+	if (match.index === undefined) return new vscode.Range(POSITION_ZERO, POSITION_ZERO);
+	const start = document.positionAt(match.index);
+	return new vscode.Range(start, document.positionAt(match.index + match[0].length));
+}
 
-	constructor(private context: ExtensionContext) {
-		const selector = [
-			{ language: "gdresource", scheme: "file" },
-			{ language: "gdscene", scheme: "file" },
-			{ language: "gdscript", scheme: "file" },
-		];
-		context.subscriptions.push(
-			vscode.languages.registerDocumentLinkProvider(selector, this),
-		);
-	}
+const EXT_RESOURCE_PATTERN = /ExtResource\(\s?"?(\w+)\s?"?\)/g;
+const SUB_RESOURCE_PATTERN = /SubResource\(\s?"?(\w+)\s?"?\)/g;
+const RES_PATH_PATTERN = /res:\/\/([^"'\n]*)/g;
+const UID_PATTERN = /uid:\/\/([0-9a-z]*)/g;
 
-	async provideDocumentLinks(document: TextDocument, token: CancellationToken): Promise<DocumentLink[]> {
-		const scene = this.parser.parse_scene(document);
-		const text = document.getText();
-		const path = document.uri.fsPath;
+/** Links to the `ExtResource`/`SubResource` declarations inside the same file. */
+function sceneLinks(document: TextDocument, text: string, parser: SceneParser): DocumentLink[] {
+	const scene = parser.parse_scene(document);
+	const path = document.uri.fsPath;
+	const at = (line: number | undefined): Uri => vscode.Uri.from({ scheme: "file", path, fragment: `${line},0` });
+	const makeLink = (match: RegExpMatchArray, uri: Uri, tooltip?: string): DocumentLink => {
+		const link = new vscode.DocumentLink(makeMatchRange(document, match), uri);
+		if (tooltip) link.tooltip = tooltip;
+		return link;
+	};
+	return [
+		...Array.from(text.matchAll(EXT_RESOURCE_PATTERN), (match) =>
+			makeLink(match, at(scene.externalResources.get(match[1])?.line), "Jump to resource definition"),
+		),
+		...Array.from(text.matchAll(SUB_RESOURCE_PATTERN), (match) =>
+			makeLink(match, at(scene.subResources.get(match[1])?.line)),
+		),
+	];
+}
 
-		const links: DocumentLink[] = [];
-
-		if (["gdresource", "gdscene"].includes(document.languageId)) {
-			for (const match of text.matchAll(/ExtResource\(\s?"?(\w+)\s?"?\)/g)) {
-				const id = match[1];
-				const uri = Uri.from({
-					scheme: "file",
-					path: path,
-					fragment: `${scene.externalResources.get(id)?.line},0`,
-				});
-
-				const r = this.create_range(document, match);
-				const link = new DocumentLink(r, uri);
-				link.tooltip = "Jump to resource definition";
-				links.push(link);
-			}
-
-			for (const match of text.matchAll(/SubResource\(\s?"?(\w+)\s?"?\)/g)) {
-				const id = match[1];
-				const uri = Uri.from({
-					scheme: "file",
-					path: path,
-					fragment: `${scene.subResources.get(id)?.line},0`,
-				});
-
-				const r = this.create_range(document, match);
-				const link = new DocumentLink(r, uri);
-				links.push(link);
-			}
-		}
-		for (const match of text.matchAll(/res:\/\/([^"'\n]*)/g)) {
-			const r = this.create_range(document, match);
+/** Links to the `res://` paths and `uid://` ids anywhere in the document. */
+async function resourceLinks(document: TextDocument, text: string): Promise<DocumentLink[]> {
+	const paths = await Promise.all(
+		Array.from(text.matchAll(RES_PATH_PATTERN), async (match) => {
 			const uri = await convert_resource_path_to_uri(match[0]);
-			if (uri instanceof Uri) {
-				links.push(new DocumentLink(r, uri));
-			}
-		}
+			return uri instanceof vscode.Uri
+				? new vscode.DocumentLink(makeMatchRange(document, match), uri)
+				: undefined;
+		}),
+	);
+	const uidMatches = Array.from(text.matchAll(UID_PATTERN));
+	const uidMap = await convert_uids_to_uris([...new Set(uidMatches.map((match) => match[0]))]);
+	const uids = uidMatches.map((match) => {
+		const uri = uidMap.get(match[0]);
+		return uri instanceof vscode.Uri ? new vscode.DocumentLink(makeMatchRange(document, match), uri) : undefined;
+	});
+	return [...paths, ...uids].filter((link): link is DocumentLink => link !== undefined);
+}
 
-		const uids: Set<string> = new Set();
-		const uid_matches: Array<[string, Range]> = [];
-		for (const match of text.matchAll(/uid:\/\/([0-9a-z]*)/g)) {
-			const r = this.create_range(document, match);
-			uids.add(match[0]);
-			uid_matches.push([match[0], r]);
-		}
+export type GDDocumentLinkProvider = DocumentLinkProvider;
 
-		const uid_map = await convert_uids_to_uris(Array.from(uids));
-		for (const uid of uid_matches) {
-			const uri = uid_map.get(uid[0]);
-			if (uri instanceof vscode.Uri) {
-				links.push(new DocumentLink(uid[1], uri));
-			}
-		}
-
-		return links;
-	}
-
-	private create_range(document: TextDocument, match: RegExpMatchArray) {
-		if (match.index === undefined) {
-			return new Range(new Position(0, 0), new Position(0, 0));
-		}
-		const start = document.positionAt(match.index);
-		const end = document.positionAt(match.index + match[0].length);
-		const r = new Range(start, end);
-		return r;
-	}
+export function createDocumentLinkProvider(context: ExtensionContext): GDDocumentLinkProvider {
+	const parser = new SceneParser();
+	const provider: GDDocumentLinkProvider = {
+		async provideDocumentLinks(document: TextDocument, _token: CancellationToken): Promise<DocumentLink[]> {
+			const text = document.getText();
+			if (!["gdresource", "gdscene"].includes(document.languageId)) return resourceLinks(document, text);
+			return [...sceneLinks(document, text, parser), ...(await resourceLinks(document, text))];
+		},
+	};
+	context.subscriptions.push(vscode.languages.registerDocumentLinkProvider(RESOURCE_SELECTOR, provider));
+	return provider;
 }

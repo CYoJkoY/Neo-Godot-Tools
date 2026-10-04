@@ -13,17 +13,6 @@ class_name Hero
 @export var gradient: Gradient
 `;
 
-function documentWith(body: string) {
-	return parseResourceDocument(`[gd_resource type="Resource" script_class="Hero" format=3]
-
-[ext_resource type="Script" path="res://hero.gd" id="1_script"]
-
-[resource]
-script = ExtResource("1_script")
-${body}
-`);
-}
-
 function metadataFor(text: string): PropertyMetadata[] {
 	return collectPropertyMetadata({ document: parseResourceDocument(text), scriptSource: SCRIPT });
 }

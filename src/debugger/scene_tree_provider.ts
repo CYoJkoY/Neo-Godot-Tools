@@ -74,7 +74,7 @@ export class SceneTreeProvider implements TreeDataProvider<SceneNode> {
 
 export class SceneNode extends TreeItem {
 	constructor(
-		public label: string,
+		public override label: string,
 		public class_name: string,
 		public object_id: number,
 		public children: SceneNode[],

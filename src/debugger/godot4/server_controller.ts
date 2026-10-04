@@ -16,19 +16,37 @@ import {
 } from "../../utils";
 import { prompt_for_godot_executable } from "../../utils/prompts";
 import { killSubProcesses, subProcess } from "../../utils/subspawn";
-import { GodotStackFrame, GodotVariable } from "../debug_runtime";
+import { GodotStackFrame, type GodotValue, GodotVariable } from "../debug_runtime";
 import { AttachRequestArguments, LaunchRequestArguments, pinnedScene } from "../debugger";
 import { GodotDebugSession } from "./debug_session";
 import { get_sub_values, parse_next_scene_node, split_buffers } from "./helpers";
+import { VariablesManager } from "./variables/variables_manager";
 import { DecodedVariant, VariantDecoder } from "./variables/variant_decoder";
 import { VariantEncoder } from "./variables/variant_encoder";
-import { RawObject } from "./variables/variants";
-import { VariablesManager } from "./variables/variables_manager";
+import { ObjectId, RawObject } from "./variables/variants";
 
 const log = createLogger("debugger.controller", { output: "Godot Debugger" });
 const socketLog = createLogger("debugger.socket");
 //initialize bbcodeParser and set default output color to grey
 const bbcodeParser = new BBCodeToAnsi("\u001b[38;2;211;211;211m");
+
+/** Extra fields merged into a debugger output event body. */
+interface OutputExtras {
+	source?: { name: string };
+	line?: GodotValue;
+	group?: "start" | "startCollapsed" | "end";
+}
+
+/** Renders a protocol value as text. */
+function as_string(value: GodotValue): string {
+	if (typeof value === "string") return value;
+	return value === undefined || value === null ? "" : `${value}`;
+}
+
+/** Reads a protocol value as a number. */
+function as_number(value: GodotValue): number {
+	return typeof value === "number" ? value : Number(value ?? 0);
+}
 
 class Command {
 	public command = "";
@@ -42,11 +60,9 @@ class GodotPartialStackVars {
 	Locals: GodotVariable[] = [];
 	Members: GodotVariable[] = [];
 	Globals: GodotVariable[] = [];
-	public remaining: number;
-	public stack_frame_id: number;
-	constructor(stack_frame_id: number) {
-		this.stack_frame_id = stack_frame_id;
-	}
+	public remaining = 0;
+
+	constructor(public stack_frame_id: number) {}
 
 	public reset(remaining: number) {
 		this.remaining = remaining;
@@ -55,11 +71,16 @@ class GodotPartialStackVars {
 		this.Globals = [];
 	}
 
-	public append(name: string, godotScopeIndex: 0 | 1 | 2, type: number, value: any, sub_values?: GodotVariable[]) {
-		const scopeName = ["Locals", "Members", "Globals"][godotScopeIndex];
-		const scope = this[scopeName];
+	public append(
+		name: string,
+		godotScopeIndex: 0 | 1 | 2,
+		type: number,
+		value: DecodedVariant,
+		sub_values?: GodotVariable[],
+	) {
+		const scope = [this.Locals, this.Members, this.Globals][godotScopeIndex];
 		// const objectId = value instanceof ObjectId ? value : undefined; // won't work, unless the value is re-created through new ObjectId(godot_id)
-		const godot_id = type === 24 ? value?.id : undefined;
+		const godot_id = type === 24 && value instanceof ObjectId ? value.id : undefined;
 		scope.push({ id: godot_id, name, value, type, sub_values } as GodotVariable);
 		this.remaining--;
 	}
@@ -71,15 +92,16 @@ export class ServerController {
 	private decoder = new VariantDecoder();
 	private draining = false;
 	private exception = "";
-	private threadId: number;
+	private threadId = 0;
 	private server?: net.Server;
 	private socket?: net.Socket;
 	private steppingOut = false;
 	private didFirstOutput = false;
 	private partialStackVars?: GodotPartialStackVars;
-	private projectVersionMajor: number;
-	private projectVersionMinor: number;
-	private projectVersionPoint: number;
+	/** Major and point are reported by the development server; only minor gates behaviour. */
+	public projectVersionMajor = 0;
+	private projectVersionMinor = 0;
+	public projectVersionPoint = 0;
 
 	public constructor(public session: GodotDebugSession) {}
 
@@ -142,7 +164,7 @@ export class ServerController {
 		this.send_command("get_stack_frame_vars", [stack_frame_id]);
 	}
 
-	public set_object_property(objectId: bigint, label: string, newParsedValue) {
+	public set_object_property(objectId: bigint, label: string, newParsedValue: GodotValue) {
 		this.send_command("scene:set_object_property", [objectId, label, newParsedValue]);
 	}
 
@@ -187,7 +209,7 @@ export class ServerController {
 			log.info("Using 'editorPath.godot4' from settings");
 
 			const settingName = "editorPath.godot4";
-			godotPath = get_configuration(settingName);
+			godotPath = get_configuration(settingName, "godot");
 
 			log.info(`Verifying version of '${godotPath}'`);
 			result = verify_godot_version(godotPath, "4");
@@ -288,20 +310,19 @@ export class ServerController {
 		log.info(`Launching game process using command: '${command}'`);
 		const debugProcess = subProcess("debug", command, { shell: true, detached: true });
 
-		debugProcess.stdout.on("data", (data) => {});
-		debugProcess.stderr.on("data", (data) => {});
-		debugProcess.on("close", (code) => {});
+		// The listeners keep the child process from blocking on a full pipe.
+		debugProcess.stdout.on("data", () => {});
+		debugProcess.stderr.on("data", () => {});
+		debugProcess.on("close", () => {});
 	}
 
 	private stash?: Buffer;
 
 	private on_data(buffer: Buffer) {
-		if (this.stash) {
-			buffer = Buffer.concat([this.stash, buffer]);
-			this.stash = undefined;
-		}
+		const received = this.stash ? Buffer.concat([this.stash, buffer]) : buffer;
+		this.stash = undefined;
 
-		const buffers = split_buffers(buffer);
+		const buffers = split_buffers(received);
 		for (const chunk of buffers) {
 			const data = this.decoder.get_dataset(chunk)?.slice(1);
 			if (data === undefined) {
@@ -324,7 +345,7 @@ export class ServerController {
 
 			socket.on("data", this.on_data.bind(this));
 
-			socket.on("close", (had_error) => {
+			socket.on("close", () => {
 				// log.debug("socket close");
 				this.abort();
 			});
@@ -334,7 +355,7 @@ export class ServerController {
 				this.abort();
 			});
 
-			socket.on("error", (error) => {
+			socket.on("error", () => {
 				// log.debug("socket error");
 				// this.session.sendEvent(new TerminatedEvent());
 				// this.stop();
@@ -365,7 +386,7 @@ export class ServerController {
 
 			socket.on("data", this.on_data.bind(this));
 
-			socket.on("close", (had_error) => {
+			socket.on("close", () => {
 				// log.debug("socket close");
 				// this.session.sendEvent(new TerminatedEvent());
 				// this.stop();
@@ -377,7 +398,7 @@ export class ServerController {
 				// this.stop();
 			});
 
-			socket.on("error", (error) => {
+			socket.on("error", () => {
 				// log.error("socket error", error);
 			});
 
@@ -432,17 +453,19 @@ export class ServerController {
 				break;
 			case "scene:scene_tree": {
 				const tree = parse_next_scene_node(command.parameters);
-				this.session.sceneTree.fill_tree(tree);
+				this.session.sceneTree?.fill_tree(tree);
 				break;
 			}
 			case "scene:inspect_object": {
 				if (this.session.variables_manager === undefined) {
-					log.error("Unexpected 'scene:inspect_object' received. Should be inside 'debug_enter' / 'debug_exit'.");
+					log.error(
+						"Unexpected 'scene:inspect_object' received. Should be inside 'debug_enter' / 'debug_exit'.",
+					);
 					return;
 				}
 				let godot_id = BigInt(command.parameters[0] as number);
 				const className: string = command.parameters[1] as string;
-				const properties: [string, string, number, string, number, any][] = command.parameters[2] as [string, string, number, string, number, any][];
+				const properties = command.parameters[2] as [string, string, number, string, number, DecodedVariant][];
 
 				// message:inspect_object returns the id as an unsigned 64 bit integer, but it is decoded as a signed 64 bit integer,
 				// thus we need to convert it to its equivalent unsigned value here.
@@ -463,7 +486,7 @@ export class ServerController {
 				const rawObject = new RawObject(className);
 				let category = "";
 				for (const prop of properties) {
-					const [name, class_name, hint, hint_string, usage, value, ...tail]: [string, string, number, string, number, any] = prop;
+					const [name, , , , usage, value]: [string, string, number, string, number, DecodedVariant] = prop;
 					if (usage === 128) {
 						category = name;
 						continue; // not a variable - just a category grouping element for UI for subsequent items
@@ -478,8 +501,11 @@ export class ServerController {
 							var_name = name.slice("Constants/".length);
 						} else if (name.includes("/")) {
 							var_name = name;
-						} else { // extra check for potential override values:
-							log.error(`Unknown property name: '${name}'. Expected it to start with "Members/" or "Constants/" or contain "/"`);
+						} else {
+							// extra check for potential override values:
+							log.error(
+								`Unknown property name: '${name}'. Expected it to start with "Members/" or "Constants/" or contain "/"`,
+							);
 							var_name = name;
 						}
 					}
@@ -562,7 +588,7 @@ export class ServerController {
 				const name: string = command.parameters[0];
 				const scope: 0 | 1 | 2 = command.parameters[1]; // 0 = locals, 1 = members, 2 = globals
 				const type: number = command.parameters[2];
-				const value: any = command.parameters[3];
+				const value = command.parameters[3];
 				const subValues: GodotVariable[] = await get_sub_values(value, this.session.variables_manager);
 				this.partialStackVars.append(name, scope, type, value, subValues);
 
@@ -598,7 +624,7 @@ export class ServerController {
 				const console = debug.activeDebugConsole;
 				const params = command.parameters[0] as DecodedVariant[];
 				for (const output of params) {
-					for (const line of (output as string || "").split("\n")) {
+					for (const line of ((output as string) || "").split("\n")) {
 						console.appendLine(bbcodeParser.parse(line));
 					}
 				}
@@ -617,26 +643,26 @@ export class ServerController {
 	async handle_error(command: Command) {
 		const params = command.parameters;
 		const e = {
-			hr: params[0],
-			min: params[1],
-			sec: params[2],
-			msec: params[3],
-			file: params[4] as string,
-			func: params[5] as string,
-			line: params[6],
-			error: params[7] as string,
-			desc: params[8] as string,
-			warning: params[9] as boolean,
-			stack: [] as { msg: string; extras: any }[],
+			hr: as_number(params[0]),
+			min: as_number(params[1]),
+			sec: as_number(params[2]),
+			msec: as_number(params[3]),
+			file: as_string(params[4]),
+			func: as_string(params[5]),
+			line: as_number(params[6]),
+			error: as_string(params[7]),
+			desc: as_string(params[8]),
+			warning: params[9] === true,
+			stack: [] as { msg: string; extras: OutputExtras }[],
 		};
-		const stackCount = params[10] as number ?? 0;
+		const stackCount = as_number(params[10]);
 		for (let i = 0; i < stackCount; i += 3) {
-			const file = params[11 + i] as string;
-			const func = params[12 + i] as string;
-			const line = params[13 + i] as number;
+			const file = as_string(params[11 + i]);
+			const func = as_string(params[12 + i]);
+			const line = as_number(params[13 + i]);
 			const msg = `${file.slice("res://".length)}:${line} @ ${func}()`;
 			const uri = await convert_resource_path_to_uri(file);
-			const extras = {
+			const extras: OutputExtras = {
 				source: { name: uri?.toString() ?? "" },
 				line: line,
 			};
@@ -737,11 +763,13 @@ export class ServerController {
 				if (this.session.debug_data.stack_count > 1) {
 					continueStepping = this.session.debug_data.stack_count === stackCount;
 				} else {
-					const fileSame = stackFrames[0].file === this.session.debug_data.last_frame.file;
-					const funcSame = stackFrames[0].function === this.session.debug_data.last_frame.function;
-					const lineGreater = stackFrames[0].line >= this.session.debug_data.last_frame.line;
-
-					continueStepping = fileSame && funcSame && lineGreater;
+					const last = this.session.debug_data.last_frame;
+					continueStepping = Boolean(
+						last &&
+							stackFrames[0].file === last.file &&
+							stackFrames[0].function === last.function &&
+							stackFrames[0].line >= last.line,
+					);
 				}
 			}
 		}
@@ -768,8 +796,8 @@ export class ServerController {
 		}
 	}
 
-	private send_command(command: string, parameters?: any[]) {
-		const commandArray: any[] = [command];
+	private send_command(command: string, parameters?: GodotValue[]) {
+		const commandArray: GodotValue[] = [command];
 		if (this.projectVersionMinor >= 2) {
 			commandArray.push(this.threadId);
 		}

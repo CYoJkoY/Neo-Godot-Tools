@@ -1,10 +1,4 @@
-import {
-	GDScriptDeclaration,
-	GDScriptDiagnostic,
-	GDScriptFunction,
-	GDScriptScript,
-	SourceRange,
-} from "../analyzer/index.js";
+import type { GDScriptDeclaration, GDScriptDiagnostic, GDScriptScript, SourceRange } from "../analyzer/index.js";
 
 export interface IndexedParameter {
 	name: string;
@@ -28,6 +22,8 @@ export interface IndexedSymbol {
 	kind: IndexedSymbolKind;
 	uri: string;
 	range: SourceRange;
+	/** Offset of the declaring identifier inside `range`. */
+	nameOffset?: number;
 	containerName?: string;
 	/** Range of the enclosing class declaration, for nested declarations. */
 	containerRange?: SourceRange;
@@ -92,6 +88,7 @@ export function declarationToSymbol(
 		kind: declaration.kind,
 		uri,
 		range: declaration.range,
+		nameOffset: declaration.nameOffset,
 		containerName,
 		containerRange,
 	};
@@ -125,7 +122,14 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 			if (declaration.kind === "enum") {
 				// Named enums are types whose members are only reachable through the
 				// enum name; members of unnamed enums act as plain script constants.
-				const symbol = declarationToSymbol(declaration, uri, containerName, source, sourceLines, containerRange);
+				const symbol = declarationToSymbol(
+					declaration,
+					uri,
+					containerName,
+					source,
+					sourceLines,
+					containerRange,
+				);
 				if (symbol) symbols.push(symbol);
 				for (const member of declaration.members) {
 					const documentation = sourceLines
@@ -136,6 +140,7 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 						kind: "enum_member",
 						uri,
 						range: member.range,
+						nameOffset: member.range.start.offset,
 						containerName: declaration.name ?? containerName,
 						containerRange,
 						type: declaration.name,

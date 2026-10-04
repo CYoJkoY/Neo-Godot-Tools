@@ -1,12 +1,12 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { DependencyGraph } from "./dependency_graph.js";
-import { FileIndex } from "./file_index.js";
+import { createDependencyGraph } from "./dependency_graph.js";
+import { createFileIndex } from "./file_index.js";
 
 describe("DependencyGraph", () => {
 	it("refreshes unresolved dependencies when a target file is added", () => {
-		const files = new FileIndex();
-		const graph = new DependencyGraph(files);
+		const files = createFileIndex();
+		const graph = createDependencyGraph(files);
 		const sourceUri = "file:///project/source.gd";
 		const targetUri = "file:///project/base.gd";
 
@@ -16,14 +16,12 @@ describe("DependencyGraph", () => {
 
 		files.update(targetUri, "class_name Base");
 		assert.deepEqual(graph.update(targetUri), [sourceUri]);
-		assert.deepEqual(graph.getDependencies(sourceUri), [
-			{ from: sourceUri, to: targetUri, reason: "preload" },
-		]);
+		assert.deepEqual(graph.getDependencies(sourceUri), [{ from: sourceUri, to: targetUri, reason: "preload" }]);
 	});
 
 	it("refreshes dependents after a target file is removed", () => {
-		const files = new FileIndex();
-		const graph = new DependencyGraph(files);
+		const files = createFileIndex();
+		const graph = createDependencyGraph(files);
 		const sourceUri = "file:///project/source.gd";
 		const targetUri = "file:///project/base.gd";
 

@@ -18,15 +18,18 @@
 	},
 	"linter": {
 		"rules": {
+			"complexity": {
+				"useLiteralKeys": "off"
+			},
 			"style": {
 				"noUselessElse": "off",
 				"useImportType": "off",
-				"noParameterAssign": "warn",
+				"noParameterAssign": "error",
 				"noUnusedTemplateLiteral": "off",
 				"noNonNullAssertion": "off"
 			},
 			"suspicious": {
-				"noExplicitAny": "off"
+				"noExplicitAny": "error"
 			}
 		}
 	}

@@ -1,21 +1,19 @@
-import type { DocumentSymbol, Range, SymbolKind } from "vscode-languageclient";
+import type { DocumentSymbol } from "vscode-languageclient";
 
 export interface NativeSymbolInspectParams {
 	native_class: string;
 	symbol_name: string;
 }
 
-export class GodotNativeSymbol implements DocumentSymbol {
-	name: string;
-	detail?: string;
-	kind: SymbolKind;
-	tags?: 1[];
-	deprecated?: boolean;
-	range: Range;
-	selectionRange: Range;
-	children?: DocumentSymbol[];
-	documentation: string;
-	native_class: string;
+/**
+ * A class or member as reported by `textDocument/nativeSymbol`.
+ *
+ * Declared as an interface: the value comes from the Godot language server, so
+ * there is no constructor to run — it is parsed from the protocol response.
+ */
+export interface GodotNativeSymbol extends DocumentSymbol {
+	documentation?: string;
+	native_class?: string;
 	class_info?: GodotNativeClassInfo;
 }
 

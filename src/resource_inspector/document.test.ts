@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
 	applyResourceEdits,
+	createDocumentParseCache,
 	parseResourceDocument,
 	resourceReference,
 	rewriteReferences,
@@ -45,7 +46,10 @@ describe("resource document parsing", () => {
 		assert.equal(document.subResources[0].id, "Gradient_1");
 		assert.equal(document.subResources[0].type, "Gradient");
 		assert.equal(document.subResources[0].properties[0].name, "colors");
-		assert.deepEqual(document.properties.map((property) => property.name), ["script", "name", "speed", "gradient"]);
+		assert.deepEqual(
+			document.properties.map((property) => property.name),
+			["script", "name", "speed", "gradient"],
+		);
 		assert.equal(document.properties[2].value.kind, "float");
 		assert.equal(document.properties[3].value.kind, "SubResource");
 	});
@@ -89,21 +93,27 @@ describe("resource document editing", () => {
 
 	it("inserts a new property into the [resource] section", () => {
 		const result = applyResourceEdits(SOURCE, [{ kind: "setProperty", name: "health", value: "10" }]);
-		assert.ok(result.text.includes('[resource]\nhealth = 10\n'));
+		assert.ok(result.text.includes("[resource]\nhealth = 10\n"));
 	});
 
 	it("reverts to a default value or removes the property", () => {
-		const withDefault = applyResourceEdits(SOURCE, [{ kind: "revertProperty", name: "speed", defaultValue: "1.0" }]);
+		const withDefault = applyResourceEdits(SOURCE, [
+			{ kind: "revertProperty", name: "speed", defaultValue: "1.0" },
+		]);
 		assert.ok(withDefault.text.includes("speed = 1.0"));
 		const withoutDefault = applyResourceEdits(SOURCE, [{ kind: "revertProperty", name: "speed" }]);
 		assert.ok(!withoutDefault.text.includes("speed"));
-		assert.ok(withoutDefault.text.includes("name = &\"Hero\""));
+		assert.ok(withoutDefault.text.includes('name = &"Hero"'));
 	});
 
 	it("adds a sub-resource with a unique id", () => {
-		const result = applyResourceEdits(SOURCE, [{ kind: "addSubResource", type: "Gradient", properties: { colors: "PackedColorArray()" } }]);
+		const result = applyResourceEdits(SOURCE, [
+			{ kind: "addSubResource", type: "Gradient", properties: { colors: "PackedColorArray()" } },
+		]);
 		assert.deepEqual(result.createdIds, ["Gradient_2"]);
-		assert.ok(result.text.includes('[sub_resource type="Gradient" id="Gradient_2"]\ncolors = PackedColorArray()\n'));
+		assert.ok(
+			result.text.includes('[sub_resource type="Gradient" id="Gradient_2"]\ncolors = PackedColorArray()\n'),
+		);
 		assert.ok(result.text.indexOf("Gradient_2") < result.text.indexOf("[resource]"));
 		// The new block is separated from its neighbours by a single blank line.
 		assert.ok(!result.text.includes("\n\n\n"));
@@ -112,13 +122,19 @@ describe("resource document editing", () => {
 	it("duplicates a sub-resource without touching references to the original", () => {
 		const result = applyResourceEdits(SOURCE, [{ kind: "duplicateSubResource", id: "Gradient_1" }]);
 		assert.deepEqual(result.createdIds, ["Gradient_2"]);
-		assert.ok(result.text.includes('[sub_resource type="Gradient" id="Gradient_2"]\ncolors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 1)'));
+		assert.ok(
+			result.text.includes(
+				'[sub_resource type="Gradient" id="Gradient_2"]\ncolors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 1)',
+			),
+		);
 		assert.ok(result.text.includes('gradient = SubResource("Gradient_1")'));
 		assert.ok(!result.text.includes("\n\n\n"));
 	});
 
 	it("renames a sub-resource and rewrites its references", () => {
-		const result = applyResourceEdits(SOURCE, [{ kind: "renameSubResource", id: "Gradient_1", newId: "Gradient_9" }]);
+		const result = applyResourceEdits(SOURCE, [
+			{ kind: "renameSubResource", id: "Gradient_1", newId: "Gradient_9" },
+		]);
 		assert.ok(result.text.includes('[sub_resource type="Gradient" id="Gradient_9"]'));
 		assert.ok(result.text.includes('gradient = SubResource("Gradient_9")'));
 		assert.ok(!result.text.includes("Gradient_1"));
@@ -132,9 +148,13 @@ describe("resource document editing", () => {
 	});
 
 	it("adds an external resource with a Godot-style header", () => {
-		const result = applyResourceEdits(SOURCE, [{ kind: "addExtResource", type: "Texture2D", path: "res://icon.svg", uid: "uid://icon" }]);
+		const result = applyResourceEdits(SOURCE, [
+			{ kind: "addExtResource", type: "Texture2D", path: "res://icon.svg", uid: "uid://icon" },
+		]);
 		assert.deepEqual(result.createdIds, ["2_res"]);
-		assert.ok(result.text.includes('[ext_resource type="Texture2D" uid="uid://icon" path="res://icon.svg" id="2_res"]'));
+		assert.ok(
+			result.text.includes('[ext_resource type="Texture2D" uid="uid://icon" path="res://icon.svg" id="2_res"]'),
+		);
 		assert.ok(!result.text.includes("\n\n\n"));
 		// The new resource is inserted after the existing ones, before the sub-resources.
 		assert.ok(result.text.indexOf("2_res") < result.text.indexOf("[sub_resource"));
@@ -152,19 +172,33 @@ describe("resource document editing", () => {
 	});
 
 	it("edits a sub-resource property by target", () => {
-		const result = applyResourceEdits(SOURCE, [{ kind: "setProperty", name: "colors", target: "Gradient_1", value: "PackedColorArray(0, 0, 0, 1)" }]);
-		assert.equal(result.text, SOURCE.replace("colors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 1)", "colors = PackedColorArray(0, 0, 0, 1)"));
+		const result = applyResourceEdits(SOURCE, [
+			{ kind: "setProperty", name: "colors", target: "Gradient_1", value: "PackedColorArray(0, 0, 0, 1)" },
+		]);
+		assert.equal(
+			result.text,
+			SOURCE.replace(
+				"colors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 1)",
+				"colors = PackedColorArray(0, 0, 0, 1)",
+			),
+		);
 	});
 
 	it("adds and reverts a missing sub-resource property", () => {
-		const added = applyResourceEdits(SOURCE, [{ kind: "setProperty", name: "interpolation_mode", target: "Gradient_1", value: "1" }]);
-		assert.ok(added.text.includes('colors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 1)\ninterpolation_mode = 1'));
-		const reverted = applyResourceEdits(added.text, [{ kind: "revertProperty", name: "interpolation_mode", target: "Gradient_1" }]);
+		const added = applyResourceEdits(SOURCE, [
+			{ kind: "setProperty", name: "interpolation_mode", target: "Gradient_1", value: "1" },
+		]);
+		assert.ok(added.text.includes("colors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 1)\ninterpolation_mode = 1"));
+		const reverted = applyResourceEdits(added.text, [
+			{ kind: "revertProperty", name: "interpolation_mode", target: "Gradient_1" },
+		]);
 		assert.ok(!reverted.text.includes("interpolation_mode"));
 	});
 
 	it("ignores edits aimed at unknown sub-resources", () => {
-		const result = applyResourceEdits(SOURCE, [{ kind: "setProperty", name: "colors", target: "Missing", value: "1" }]);
+		const result = applyResourceEdits(SOURCE, [
+			{ kind: "setProperty", name: "colors", target: "Missing", value: "1" },
+		]);
 		assert.equal(result.text, SOURCE);
 	});
 
@@ -186,7 +220,9 @@ describe("resource document editing", () => {
 	});
 
 	it("adds legacy numeric IDs and references and keeps load_steps in sync", () => {
-		const legacy = SOURCE.replace("format=3", "format=2").replace('id="1_script"', "id=4").replace('ExtResource("1_script")', "ExtResource( 4 )");
+		const legacy = SOURCE.replace("format=3", "format=2")
+			.replace('id="1_script"', "id=4")
+			.replace('ExtResource("1_script")', "ExtResource( 4 )");
 		const result = applyResourceEdits(legacy, [
 			{ kind: "addExtResource", type: "Texture", path: "res://icon.png" },
 			{ kind: "addExtResource", type: "Texture", path: "res://other.png" },
@@ -226,5 +262,52 @@ gradient = SubResource( 1 )
 		const result = applyResourceEdits(SOURCE, [{ kind: "deleteExtResource", id: "1_script" }]);
 		assert.ok(!result.text.includes("[ext_resource"));
 		assert.ok(result.text.includes("script = null"));
+	});
+});
+
+describe("resource document parse cache", () => {
+	it("parses once per version and re-parses after a change", () => {
+		const cache = createDocumentParseCache();
+		let reads = 0;
+		const read = () => {
+			reads++;
+			return SOURCE;
+		};
+
+		const first = cache.parse("file:///hero.tres", 1, read);
+		const again = cache.parse("file:///hero.tres", 1, read);
+		assert.equal(reads, 1);
+		assert.equal(first, again);
+		assert.equal(cache.size, 1);
+
+		const edited = SOURCE.replace('script_class="Hero"', 'script_class="Villain"');
+		const next = cache.parse("file:///hero.tres", 2, () => edited);
+		assert.equal(reads, 1);
+		assert.equal(next.scriptClass, "Villain");
+		assert.equal(cache.parse("file:///hero.tres", 2, read), next);
+	});
+
+	it("keeps documents apart and forgets an invalidated one", () => {
+		const cache = createDocumentParseCache();
+		const other = `[gd_resource type="ShaderMaterial" format=3]\n\n[resource]\nshader = null\n`;
+		cache.parse("file:///a.tres", 7, () => SOURCE);
+		const shader = cache.parse("file:///b.tres", 7, () => other);
+		assert.equal(shader.resourceType, "ShaderMaterial");
+		assert.equal(cache.size, 2);
+
+		cache.invalidate("file:///a.tres");
+		assert.equal(cache.size, 1);
+		let reads = 0;
+		cache.parse("file:///a.tres", 7, () => {
+			reads++;
+			return SOURCE;
+		});
+		assert.equal(reads, 1);
+	});
+
+	it("stays bounded", () => {
+		const cache = createDocumentParseCache(2);
+		for (const name of ["a", "b", "c"]) cache.parse(`file:///${name}.tres`, 1, () => SOURCE);
+		assert.equal(cache.size, 2);
 	});
 });

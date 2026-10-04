@@ -9,7 +9,7 @@ export * from "./settings_updater";
 export * from "./vscode_utils";
 
 export function is_debug_mode(): boolean {
-	return process.env.VSCODE_DEBUG_MODE === "true";
+	return process.env["VSCODE_DEBUG_MODE"] === "true";
 }
 
 export async function find_file(file: string): Promise<vscode.Uri | null> {
@@ -30,7 +30,7 @@ export async function get_free_port(): Promise<number> {
 		const srv = createServer();
 		srv.listen(0, () => {
 			const port = (srv.address() as AddressInfo).port;
-			srv.close((err) => res(port));
+			srv.close(() => res(port));
 		});
 	});
 }

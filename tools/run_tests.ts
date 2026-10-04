@@ -1,7 +1,7 @@
 #!/usr/bin/env ts-node
+import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve_godot_binary } from "./resolve_godot";
 
@@ -65,8 +65,8 @@ async function main(): Promise<void> {
 	write_vscode_test_config();
 
 	const testEnv = { ...process.env };
-	if (process.env.NEO_GODOT_TOOLS_DEBUG !== "false") {
-		testEnv.VSCODE_DEBUG_MODE = "true";
+	if (process.env["NEO_GODOT_TOOLS_DEBUG"] !== "false") {
+		testEnv["VSCODE_DEBUG_MODE"] = "true";
 	}
 	const testArgs = grep ? ["test", "--", "--grep", grep] : ["test"];
 	const testProcess = execFile("npm", testArgs, { shell: true, cwd: ROOT_DIR, env: testEnv });

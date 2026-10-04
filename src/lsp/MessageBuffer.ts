@@ -14,17 +14,28 @@ const CRLF: string = "\r\n";
 
 type Headers = { [key: string]: string };
 
+/**
+ * Receives protocol notifications such as a partially received message.
+ *
+ * The reader's own `firePartialMessage` is protected by the jsonrpc base class,
+ * so the buffer calls this forwarding method instead.
+ */
+export interface MessageBufferListener {
+	notifyPartialMessage(message: { messageToken: number; waitingTime: number }): void;
+}
+
 export default class MessageBuffer {
 	private encoding: BufferEncoding = "utf8";
 	private index = 0;
 	private buffer: Buffer = Buffer.allocUnsafe(DefaultSize);
 
-	private nextMessageLength: number;
-	private messageToken: number;
+	/** Length of the message being received, or -1 while reading headers. */
+	private nextMessageLength = -1;
+	private messageToken = 0;
 	private partialMessageTimer: NodeJS.Timeout | undefined;
 	private _partialMessageTimeout = 10000;
 
-	constructor(private reader: any) {}
+	constructor(private reader: MessageBufferListener) {}
 
 	public append(chunk: Buffer | string): void {
 		let toAppend: Buffer = <Buffer>chunk;
@@ -145,7 +156,7 @@ export default class MessageBuffer {
 			(token, timeout) => {
 				this.partialMessageTimer = undefined;
 				if (token === this.messageToken) {
-					this.reader.firePartialMessage({ messageToken: token, waitingTime: timeout });
+					this.reader.notifyPartialMessage({ messageToken: token, waitingTime: timeout });
 					this.setPartialMessageTimer();
 				}
 			},

@@ -21,7 +21,7 @@ import {
 	workspace,
 } from "vscode";
 import { createLogger, get_project_version, register_command, set_context } from "../utils";
-import { GodotVariable } from "./debug_runtime";
+import { type GodotValue, GodotVariable } from "./debug_runtime";
 import { GodotDebugSession as Godot3DebugSession } from "./godot3/debug_session";
 import { GodotDebugSession as Godot4DebugSession } from "./godot4/debug_session";
 import { GodotObject } from "./godot4/variables/godot_object_promise";
@@ -50,6 +50,30 @@ export interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArgum
 	additional_options: string;
 }
 
+/**
+ * A `launch.json` entry as written by the user. Every Godot specific field is
+ * optional: the debugger fills in the defaults before the session starts.
+ */
+export interface GodotDebugConfiguration extends DebugConfiguration {
+	address?: string;
+	port?: number;
+	project?: string;
+	scene?: string;
+	editor_path?: string;
+	additional_options?: string;
+	profiling?: boolean;
+	single_threaded_scene?: boolean;
+	debug_collisions?: boolean;
+	debug_paths?: boolean;
+	debug_navigation?: boolean;
+	debug_avoidance?: boolean;
+	debug_stringnames?: boolean;
+	frame_delay?: number;
+	time_scale?: number;
+	disable_vsync?: boolean;
+	fixed_fps?: number;
+}
+
 export interface AttachRequestArguments extends DebugProtocol.AttachRequestArguments {
 	address: string;
 	port: number;
@@ -68,13 +92,12 @@ class GDFileDecorationProvider implements FileDecorationProvider {
 		this.emitter.fire(uri);
 	}
 
-	provideFileDecoration(uri: Uri, token: CancellationToken): FileDecoration | undefined {
+	provideFileDecoration(uri: Uri, _token: CancellationToken): FileDecoration | undefined {
 		if (uri.scheme !== "file") return undefined;
 		if (pinnedScene !== undefined && uri.fsPath === pinnedScene.fsPath) {
-			return {
-				badge: "🖈",
-			};
+			return { badge: "🖈" };
 		}
+		return undefined;
 	}
 }
 
@@ -108,7 +131,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 		);
 	}
 
-	public async createDebugAdapterDescriptor(session: DebugSession): Promise<DebugAdapterDescriptor> {
+	public async createDebugAdapterDescriptor(_session: DebugSession): Promise<DebugAdapterDescriptor> {
 		log.info("Creating debug session");
 		const projectVersion = await get_project_version();
 		log.info(`Project version identified as ${projectVersion}`);
@@ -130,9 +153,9 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 	}
 
 	public resolveDebugConfiguration(
-		folder: WorkspaceFolder | undefined,
-		config: DebugConfiguration,
-		token?: CancellationToken,
+		_folder: WorkspaceFolder | undefined,
+		config: GodotDebugConfiguration,
+		_token?: CancellationToken,
 	): ProviderResult<DebugConfiguration> {
 		// request is actually a required field according to vscode
 		// however, setting it here lets us catch a possible misconfiguration
@@ -157,7 +180,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 			return undefined;
 		}
 
-		if (config.address.includes("://")) {
+		if (config.address?.includes("://")) {
 			window.showErrorMessage("Can't launch debug session: 'address' cannot include a protocol.", "Ok");
 			return undefined;
 		}
@@ -167,9 +190,8 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public debug_current_file() {
 		log.info("Attempting to debug current file");
-		const configs: DebugConfiguration[] = workspace
-			.getConfiguration("launch", window.activeTextEditor?.document.uri)
-			.get("configurations") || [];
+		const configs: GodotDebugConfiguration[] =
+			workspace.getConfiguration("launch", window.activeTextEditor?.document.uri).get("configurations") || [];
 		const launches = configs.filter((c) => c.request === "launch");
 		const currents = configs.filter((c) => c.scene === "current");
 
@@ -201,7 +223,8 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 
 	public debug_pinned_file() {
 		log.info("Attempting to debug pinned scene");
-		const configs: DebugConfiguration[] = workspace.getConfiguration("launch", pinnedScene).get("configurations") || [];
+		const configs: GodotDebugConfiguration[] =
+			workspace.getConfiguration("launch", pinnedScene).get("configurations") || [];
 		const launches = configs.filter((c) => c.request === "launch");
 		const currents = configs.filter((c) => c.scene === "pinned");
 
@@ -253,7 +276,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 		this.fileDecorations.update(_uri);
 	}
 
-	public unpinFile(uri: Uri) {
+	public unpinFile(_uri: Uri) {
 		log.info(`Unpinning debug target file: '${pinnedScene}'`);
 		set_context("pinnedScene", []);
 		const previousPinnedScene = pinnedScene;
@@ -338,7 +361,7 @@ export class GodotDebugger implements DebugAdapterDescriptorFactory, DebugConfig
 		const type = typeof previous_value;
 		const is_float = type === "number" && !Number.isInteger(previous_value);
 		const value = await window.showInputBox({ value: `${property.description}` });
-		let new_parsed_value: any;
+		let new_parsed_value: GodotValue;
 		switch (type) {
 			case "string":
 				new_parsed_value = value;

@@ -32,6 +32,9 @@ jobs:
           npm run test:unit
           npm run test:release
 
+      - name: Coding standard ratchet
+        run: npm run check:standards
+
       - name: Lint and build extension
         run: |
           npm run lint
