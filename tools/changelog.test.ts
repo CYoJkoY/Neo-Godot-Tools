@@ -63,6 +63,27 @@ describe("tag-based changelog", () => {
 			assert.equal(buildChangelog(result.content, { cwd }).content, result.content);
 		}));
 
+	it("generates pending release notes on a package version bump before the tag exists", () =>
+		fixture((cwd, commit) => {
+			commit("feat: original release");
+			git(cwd, "tag", "v1.0.0");
+			commit("feat(resources): add resource arrays");
+			commit("chore(package): bump version to 1.1.0");
+
+			const pending = buildChangelog(MANUAL, { cwd, pendingVersion: "1.1.0" });
+			assert.match(pending.content, /### 1\.1\.0 — .* \(pending\)/);
+			assert.match(pending.content, /resource arrays/);
+			assert.ok(!pending.content.includes("bump version"));
+			assert.ok(!buildChangelog(MANUAL, { cwd }).content.includes("### 1.1.0"));
+			assert.match(pending.notes.get("v1.1.0") ?? "", /resource arrays/);
+
+			git(cwd, "tag", "v1.1.0");
+			const released = buildChangelog(pending.content, { cwd, pendingVersion: "1.1.0" });
+			assert.match(released.content, /### 1\.1\.0 —/);
+			assert.ok(!released.content.includes("(pending)"));
+			assert.equal((released.content.match(/### 1\.1\.0 —/g) ?? []).length, 1);
+		}));
+
 	it("uses changed files as a fallback for an empty commit subject", () =>
 		fixture((cwd, commit) => {
 			commit("feat: base");
@@ -214,4 +235,47 @@ describe("tag-based changelog", () => {
 			assert.equal(cli("--check").status, 0);
 			assert.equal(cli("--notes-file", "notes.md").status, 1);
 		}));
+
+	it("reads the pending release version from package.json in the CLI", () =>
+		fixture((cwd, commit) => {
+			commit("feat: current stable release");
+			git(cwd, "tag", "v1.0.0");
+			commit("feat: package-version feature");
+			fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ version: "1.1.0" }));
+			fs.writeFileSync(path.join(cwd, "CHANGELOG.md"), MANUAL);
+			const root = path.resolve(__dirname, "..");
+			const generated = spawnSync(
+				process.execPath,
+				["-r", require.resolve("ts-node/register"), path.join(root, "tools/changelog.ts"), "--pending-version"],
+				{
+					cwd,
+					encoding: "utf8",
+					env: { ...process.env, TS_NODE_PROJECT: path.join(root, "tsconfig.json") },
+				},
+			);
+			assert.equal(generated.status, 0, generated.stderr);
+			const changelog = fs.readFileSync(path.join(cwd, "CHANGELOG.md"), "utf8");
+			assert.ok(changelog.includes("### 1.1.0 —") && changelog.includes("(pending)"));
+		}));
+
+	it("triggers changelog synchronization on package version changes, not tags", () => {
+		const root = path.resolve(__dirname, "..");
+		const workflow = fs.readFileSync(path.join(root, ".github/workflows/changelog.yml"), "utf8");
+		assert.match(workflow, /push:\n\s+paths:\n\s+- "package\.json"/);
+		assert.match(workflow, /Check whether package version changed/);
+		assert.match(workflow, /--pending-version/);
+		assert.doesNotMatch(workflow, /tags:/);
+		assert.doesNotMatch(workflow, /^\s+delete:\s*$/m);
+
+		const releaseWorkflow = fs.readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
+		assert.ok(
+			releaseWorkflow.indexOf("npm run changelog") < releaseWorkflow.indexOf("- name: Package VSIX"),
+			"the release workflow must refresh CHANGELOG.md before packaging the VSIX",
+		);
+		const packageIgnore = fs.readFileSync(path.join(root, ".vscodeignore"), "utf8");
+		assert.ok(
+			packageIgnore.split(/\r?\n/).includes("!CHANGELOG.md"),
+			"the VSIX package must include the generated changelog",
+		);
+	});
 });

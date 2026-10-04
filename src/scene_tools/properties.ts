@@ -132,7 +132,8 @@ export function planPropertyWrite(
 	// Append after the last property, or directly under the node header.
 	const last = section.properties[section.properties.length - 1];
 	const insertion = last ? lineBreakEnd(text, last.end, section.bodyEnd) : section.headerEnd;
-	const prefix = section.properties.length ? "" : "\n";
+	const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+	const prefix = section.properties.length ? "" : lineEnding;
 	return { start: insertion, end: insertion, newText: `${prefix}${name} = ${value}` };
 }
 

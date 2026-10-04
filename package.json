@@ -54,6 +54,7 @@
       { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.pinFile", "title": "Pin Scene File", "icon": "resources/pin_off.svg" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.unpinFile", "title": "Unpin Scene File", "icon": "resources/pin_on.svg" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.openPinnedFile", "title": "Open the currently pinned scene" },
+      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openPropertyInspector", "title": "Edit Scene Node Properties", "icon": "$(edit)" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.editProperty", "title": "Edit Node Property", "icon": "$(edit)" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.addProperty", "title": "Add Node Property", "icon": "$(add)" },
       { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.removeProperty", "title": "Remove Node Property", "icon": "$(trash)" },
@@ -178,6 +179,7 @@
         { "command": "neoGodotTools.listGodotClasses", "when": "neoGodotTools.context.connectedToLSP" },
         { "command": "neoGodotTools.scenePreview.goToDefinition", "when": "false" },
         { "command": "neoGodotTools.scenePreview.openDocumentation", "when": "false" },
+        { "command": "neoGodotTools.scenePreview.openPropertyInspector", "when": "false" },
         { "command": "neoGodotTools.scenePreview.copyNodePath", "when": "false" },
         { "command": "neoGodotTools.scenePreview.copyResourcePath", "when": "false" },
         { "command": "neoGodotTools.scenePreview.openScript", "when": "false" },
@@ -221,6 +223,8 @@
         { "command": "neoGodotTools.scenePreview.openScript", "when": "view == neoGodotTools.scenePreview && viewItem =~ /hasScript/", "group": "1@2" },
         { "command": "neoGodotTools.scenePreview.openScene", "when": "view == neoGodotTools.scenePreview && viewItem =~ /openable/", "group": "inline" },
         { "command": "neoGodotTools.scenePreview.openScript", "when": "view == neoGodotTools.scenePreview && viewItem =~ /hasScript/", "group": "inline" },
+        { "command": "neoGodotTools.scenePreview.openPropertyInspector", "when": "view == neoGodotTools.scenePreview && viewItem =~ /sceneNode/", "group": "1@0" },
+        { "command": "neoGodotTools.scenePreview.openPropertyInspector", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties", "group": "1@0" },
         { "command": "neoGodotTools.scenePreview.editProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty", "group": "1@1" },
         { "command": "neoGodotTools.scenePreview.removeProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty", "group": "1@2" },
         { "command": "neoGodotTools.scenePreview.editProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty", "group": "inline" },
@@ -253,7 +257,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4", "@types/chai": "^4.3.11", "@types/chai-as-promised": "^8.0.1", "@types/chai-subset": "^1.3.5", "@types/marked": "^4.0.8", "@types/mocha": "^10.0.6", "@types/node": "^18.19.75", "@types/prismjs": "^1.16.8", "@types/sinon": "^17.0.4", "@types/vscode": "^1.96.0", "@types/ws": "^8.5.4", "@vscode/test-cli": "^0.0.10", "@vscode/test-electron": "^2.3.8", "@vscode/vsce": "^2.29.0", "chai": "^4.5.0", "chai-as-promised": "^8.0.1", "chai-subset": "^1.6.0", "esbuild": "^0.25.0", "mocha": "^10.8.2", "sinon": "^19.0.2", "ts-node": "^10.9.1", "tsconfig-paths": "^4.2.0", "typescript": "^5.9.3" },
   "dependencies": {
-    "@vscode/debugadapter": "^1.68.0", "@vscode/debugprotocol": "^1.68.0", "await-notify": "^1.0.1", "bbcode-to-ansi": "^1.0.0", "global": "^4.4.0", "marked": "^4.0.11", "net": "^1.0.2", "prismjs": "^1.30.0", "terminate": "^2.5.0", "vscode-languageclient": "^9.0.1", "vscode-oniguruma": "^2.0.0", "vscode-textmate": "^9.0.0", "ws": "^8.17.1", "ya-bbcode": "^4.0.0" },
+    "@vscode/debugadapter": "^1.68.0", "@vscode/debugprotocol": "^1.68.0", "await-notify": "^1.0.1", "bbcode-to-ansi": "^1.0.0", "global": "^4.4.0", "marked": "^4.0.11", "net": "^1.0.2", "prismjs": "^1.30.0", "terminate": "^2.5.0", "vscode-jsonrpc": "^8.2.0", "vscode-languageclient": "^9.0.1", "vscode-oniguruma": "^2.0.0", "vscode-textmate": "^9.0.0", "ws": "^8.17.1", "ya-bbcode": "^4.0.0" },
   "homepage": "https://github.com/CYoJkoY/Neo-Godot-Tools",
   "keywords": ["godot", "gdscript", "game development", "language server", "debugger", "code completion", "go to definition", "intellisense"],
   "pricing": "Free",

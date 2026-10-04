@@ -42,6 +42,8 @@ interface WebviewMessage {
 	command: string;
 	target?: string;
 	name?: string;
+	index?: number;
+	subType?: string;
 }
 
 interface WebviewSandbox {
@@ -57,6 +59,11 @@ interface WebviewSandbox {
 		model: unknown,
 		commit: (...args: unknown[]) => void,
 		revert: (...args: unknown[]) => void,
+	): TestElement;
+	arrayEditor(
+		property: Record<string, unknown>,
+		model: Record<string, unknown>,
+		set: (value: string) => void,
 	): TestElement;
 	render(model: unknown): void;
 	document: { body: TestElement; activeElement?: TestElement; getElementById(id: string): TestElement };
@@ -536,6 +543,111 @@ describe("resource inspector webview", () => {
 		assert.ok(nonce);
 		assert.ok(html.includes(`<script nonce="${nonce}">`));
 		assert.ok(!html.includes("script-src 'unsafe-inline'"));
+	});
+
+	it("renders Resource arrays as reference pickers and routes browse per entry", () => {
+		const webview = loadWebview();
+		const commits: string[] = [];
+		const property = {
+			name: "materials",
+			raw: 'Array[Material]([SubResource("Material_1"), null])',
+			target: "node:Root",
+			metadata: { type: "Array[Material]" },
+			widget: { kind: "array", elementType: "Material" },
+		};
+		const model = {
+			format: "3",
+			editorKind: "sceneNode",
+			extResources: [{ id: "2_res", type: "Material", path: "res://materials/main.tres" }],
+			subResourceTypes: [{ id: "Material_1", type: "Material" }],
+		};
+		const editor = webview.arrayEditor(property, model, (value) => commits.push(value));
+		const selects = descendants(editor, (el) => el.tagName === "select");
+		assert.equal(selects.length, 2);
+		assert.equal(selects[0].value, 'SubResource("Material_1")');
+		selects[0].value = 'ExtResource("2_res")';
+		fire(selects[0], "change");
+		assert.equal(commits[0], 'Array[Material]([ExtResource("2_res"), null])');
+
+		const firstRow = editor.children[0];
+		const browse = firstRow.children[1].children.find((child) => child.textContent === "Browse…");
+		assert.ok(browse);
+		fire(browse, "click");
+		assert.equal(webview.messages.at(-1)?.command, "pickArrayResource");
+		assert.equal(webview.messages.at(-1)?.name, "materials");
+		assert.equal(webview.messages.at(-1)?.target, "node:Root");
+		const create = firstRow.children[1].children.find((child) => child.textContent === "New");
+		assert.ok(create);
+		fire(create, "click");
+		assert.equal(webview.messages.at(-1)?.command, "createArraySubResource");
+		assert.equal(webview.messages.at(-1)?.index, 0);
+		assert.equal(webview.messages.at(-1)?.subType, "Material");
+	});
+
+	it("routes embedded scene-resource edits with an unambiguous target", () => {
+		const webview = loadWebview();
+		webview.render({
+			uri: "file:///project/level.tscn",
+			resourceType: "Node",
+			nodeName: "Root",
+			nodePath: "Root",
+			scenePath: "level.tscn",
+			editorKind: "sceneNode",
+			format: "3",
+			properties: [],
+			subResources: [
+				{
+					id: "Material_1",
+					type: "StandardMaterial3D",
+					properties: [
+						{
+							name: "roughness",
+							raw: "0.5",
+							metadata: { type: "float" },
+							widget: { kind: "number" },
+							definedInFile: true,
+							modified: true,
+						},
+					],
+				},
+			],
+			subResourceTypes: [{ id: "Material_1", type: "StandardMaterial3D" }],
+			extResources: [],
+			diagnostics: [],
+		});
+		const app = webview.document.getElementById("app");
+		const field = descendants(app, (el) => el.getAttribute("aria-label") === "roughness")[0];
+		field.value = "0.8";
+		fire(field, "change");
+		assert.equal(webview.messages.at(-1)?.command, "setProperty");
+		assert.equal(webview.messages.at(-1)?.target, "sub:Material_1");
+	});
+
+	it("renders the TSCN property editor without .tres lock and add-property controls", () => {
+		const webview = loadWebview();
+		webview.render({
+			uri: "file:///project/level.tscn",
+			fileName: "level.tscn",
+			resourceType: "CharacterBody2D",
+			nodeName: "Player",
+			nodePath: "Player",
+			scenePath: "level.tscn",
+			editorKind: "sceneNode",
+			format: "3",
+			properties: [],
+			subResources: [],
+			subResourceTypes: [],
+			extResources: [],
+			diagnostics: [],
+		});
+		const app = webview.document.getElementById("app");
+		assert.equal(descendants(app, (el) => el.tagName === "h2")[0].textContent, "Player · CharacterBody2D");
+		assert.equal(descendants(app, (el) => el.tagName === "h3")[0].textContent, "Node properties");
+		const buttons = descendants(app, (el) => el.tagName === "button").map((button) => button.textContent);
+		assert.ok(buttons.includes("Open scene text"));
+		assert.ok(buttons.includes("↻  Reload"));
+		assert.ok(!buttons.includes("🔓 Auto"));
+		assert.ok(!buttons.includes("+  Add property"));
 	});
 
 	it("keeps list containers when entries change", () => {

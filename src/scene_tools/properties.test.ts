@@ -71,7 +71,10 @@ pressed = false
 [connection signal="pressed" from="." to="." method="on_pressed"]
 `;
 		const properties = parseNodeProperties(text, 0, text.length);
-		assert.deepEqual(properties.map((property) => property.name), ["pressed"]);
+		assert.deepEqual(
+			properties.map((property) => property.name),
+			["pressed"],
+		);
 		assert.equal(properties[0].raw, "false");
 	});
 
@@ -117,6 +120,22 @@ pressed = false
 		assert.equal(
 			updated,
 			'[node name="Root" type="Node"]\n\n[node name="Child" type="Node" parent="."]\nvisible = false\n',
+		);
+	});
+
+	it("uses the document line ending when it adds the first override", () => {
+		const text = '[node name="Root" type="Node"]\r\n';
+		const section: NodeSection = {
+			headerStart: 0,
+			headerEnd: text.indexOf("\r"),
+			bodyEnd: text.length,
+			properties: [],
+		};
+		const plan = planPropertyWrite(text, section, "visible", "false");
+		assert.ok(plan);
+		assert.equal(
+			applyEdit(text, plan.start, plan.end, plan.newText),
+			'[node name="Root" type="Node"]\r\nvisible = false\r\n',
 		);
 	});
 

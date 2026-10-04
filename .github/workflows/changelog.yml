@@ -1,13 +1,10 @@
-name: Sync changelog from release tags
+name: Sync changelog on package version changes
 
 on:
   push:
-    tags:
-      - "v*"
-  delete:
+    paths:
+      - "package.json"
   workflow_dispatch:
-  schedule:
-    - cron: "21 3 * * *"
 
 permissions:
   contents: write
@@ -18,7 +15,9 @@ concurrency:
 
 jobs:
   sync:
-    if: ${{ github.event_name != 'delete' || (github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')) }}
+    # Ignore package.json edits on feature branches; the generated changelog is
+    # synchronized from the repository's default branch only.
+    if: ${{ github.event_name != 'push' || github.ref_name == github.event.repository.default_branch }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch
@@ -27,24 +26,54 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
+      - name: Check whether package version changed
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" != "push" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          previous_version=""
+          if [ -n "$BEFORE_SHA" ] && git cat-file -e "$BEFORE_SHA:package.json" 2>/dev/null; then
+            previous_version="$(git show "$BEFORE_SHA:package.json" | node -e 'let text = ""; process.stdin.on("data", chunk => text += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(text).version ?? ""));')"
+          fi
+          current_version="$(node -p "require('./package.json').version")"
+          echo "package.json version: ${previous_version:-<missing>} -> $current_version"
+          if [ "$previous_version" = "$current_version" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Synchronize live tags
+        if: steps.version.outputs.changed == 'true'
         run: git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
 
       - name: Setup Node.js
+        if: steps.version.outputs.changed == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: 22
 
       - name: Install dependencies
+        if: steps.version.outputs.changed == 'true'
         run: npm install
 
       - name: Test tag range generation
+        if: steps.version.outputs.changed == 'true'
         run: npm run test:release
 
-      - name: Rebuild changelog
-        run: npm run changelog
+      - name: Rebuild changelog for the pending package version
+        if: steps.version.outputs.changed == 'true'
+        run: npm run changelog -- --pending-version
 
       - name: Commit and push changelog
+        if: steps.version.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

@@ -73,6 +73,11 @@ describe("scene parser", () => {
 			assert.equal([...scene.externalResources.keys()].join(","), "1_abc,2_def");
 			assert.equal(scene.externalResources.get("1_abc")?.path, "res://player.gd");
 			assert.equal(scene.subResources.get("RectangleShape2D_1")?.type, "RectangleShape2D");
+			assert.deepEqual(
+				scene.subResources.get("RectangleShape2D_1")?.properties.map((property) => property.name),
+				["size"],
+			);
+			assert.equal(scene.subResources.get("RectangleShape2D_1")?.properties[0].raw, "Vector2(32, 32)");
 			assert.equal(
 				scene.subResources.get("RectangleShape2D_1")?.body,
 				'[sub_resource type="RectangleShape2D" id="RectangleShape2D_1"]\nsize = Vector2(32, 32)',

@@ -13,6 +13,7 @@ const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:\.dev\d+)?$/;
 interface GitTag extends ReleaseInfo {
 	hash: string;
 	date: string;
+	pending?: boolean;
 }
 
 export interface ChangelogOptions {
@@ -21,6 +22,10 @@ export interface ChangelogOptions {
 	ref?: string;
 	/** Generate a standalone release body even for a manually documented old tag. */
 	notesTag?: string;
+	/** Add draft notes for a package version before its release tag is pushed. */
+	pendingVersion?: string;
+	/** Commit to use as the draft release target; defaults to HEAD. */
+	pendingRef?: string;
 }
 
 function git(cwd: string, args: string[]): string {
@@ -71,6 +76,26 @@ function previousTag(cwd: string, target: GitTag, tags: GitTag[]): GitTag | unde
 		);
 }
 
+/**
+ * Builds the draft entry for the version currently declared in package.json.
+ * This lets the changelog land with the version bump, before release tagging
+ * triggers VSIX packaging. Once the tag exists, the real tag replaces it.
+ */
+function pendingRelease(cwd: string, version: string, tags: GitTag[], ref?: string): GitTag | undefined {
+	const release = parse_release_tag(`v${version}`);
+	const matchingTag = tags.find((tag) => tag.tag === release.tag);
+	if (matchingTag) return undefined;
+
+	const hash = git(cwd, ["rev-parse", "--verify", "--end-of-options", `${ref ?? "HEAD"}^{commit}`]);
+	const prior = tags
+		.filter((tag) => !tag.isDevelopment && isAncestor(cwd, tag.hash, hash))
+		.sort(compareReleases)
+		.at(-1);
+	if (prior && compareReleases(release, prior) <= 0) return undefined;
+
+	return { ...release, hash, date: git(cwd, ["show", "-s", "--format=%cs", hash]), pending: true };
+}
+
 function escapeMarkdown(text: string): string {
 	return text.replace(/[\\`*_\[\]<>|]/g, "\\$&");
 }
@@ -90,7 +115,8 @@ function releaseBody(cwd: string, target: GitTag, tags: GitTag[]): string {
 		// Source-version bookkeeping and this bot's own commits are not release features.
 		if (
 			/^(?:chore|build)(?:\([^)]*\))?:\s*bump\b.*\bversion\b/i.test(subject) ||
-			subject === "docs(changelog): refresh tag-based release notes"
+			subject === "docs(changelog): refresh tag-based release notes" ||
+			subject === "docs(changelog): update changelog [skip ci]"
 		)
 			continue;
 		const conventional = subject.match(/^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.+)$/);
@@ -155,6 +181,10 @@ export function buildChangelog(
 		.sort(compareReleases);
 	const cutoff = manualVersions.at(-1);
 	const tags = readTags(cwd);
+	const pending = options.pendingVersion
+		? pendingRelease(cwd, options.pendingVersion, tags, options.pendingRef)
+		: undefined;
+	const targets = (pending ? [...tags, pending] : tags).sort(compareReleases);
 	const refHash = options.ref
 		? git(cwd, ["rev-parse", "--verify", "--end-of-options", `${options.ref}^{commit}`])
 		: undefined;
@@ -163,17 +193,17 @@ export function buildChangelog(
 	const refTag = tags.find((tag) => tag.tag === options.ref?.replace(/^refs\/tags\//, ""));
 	const notes = new Map<string, string>();
 	const sections: string[] = [];
-	for (const tag of tags.slice().reverse()) {
+	for (const tag of targets.slice().reverse()) {
 		if (refTag && compareReleases(tag, refTag) > 0) continue;
 		if (refHash && !isAncestor(cwd, tag.hash, refHash)) continue;
 		const generated = !cutoff || compareReleases(tag, cutoff) > 0;
 		if (!generated && tag.tag !== options.notesTag) continue;
 		const body = releaseBody(cwd, tag, tags);
 		notes.set(tag.tag, body);
-		if (generated)
-			sections.push(
-				`### ${tag.tag.slice(1)} — ${tag.date}${tag.isDevelopment ? " (development)" : ""}\n\n${body}`,
-			);
+		if (generated) {
+			const note = tag.pending ? " (pending)" : tag.isDevelopment ? " (development)" : "";
+			sections.push(`### ${tag.tag.slice(1)} — ${tag.date}${note}\n\n${body}`);
+		}
 	}
 	if (options.notesTag && !notes.has(options.notesTag))
 		throw new Error(
@@ -197,16 +227,44 @@ function main(): void {
 	let check = false;
 	for (let index = 0; index < args.length; index++) {
 		const argument = args[index];
-		if (argument === "--check") check = true;
-		else if (["--ref", "--tag", "--notes-file"].includes(argument)) {
-			const value = args[++index];
-			if (!value || value.startsWith("--")) throw new Error(`Missing value for ${argument}`);
-			if (argument === "--ref") options.ref = value;
-			else if (argument === "--tag") {
-				parse_release_tag(value);
-				options.notesTag = value;
-			} else notesFile = value;
-		} else throw new Error(`Unknown argument: ${argument}`);
+		switch (argument) {
+			case "--check":
+				check = true;
+				break;
+			case "--pending-version": {
+				const packageJson = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8")) as Record<
+					string,
+					unknown
+				>;
+				options.pendingVersion = parse_release_tag(`v${String(packageJson["version"])}`).version;
+				break;
+			}
+			case "--ref":
+			case "--tag":
+			case "--notes-file":
+			case "--pending-ref": {
+				const value = args[++index];
+				if (!value || value.startsWith("--")) throw new Error(`Missing value for ${argument}`);
+				switch (argument) {
+					case "--ref":
+						options.ref = value;
+						break;
+					case "--pending-ref":
+						options.pendingRef = value;
+						break;
+					case "--tag":
+						parse_release_tag(value);
+						options.notesTag = value;
+						break;
+					default:
+						notesFile = value;
+						break;
+				}
+				break;
+			}
+			default:
+				throw new Error(`Unknown argument: ${argument}`);
+		}
 	}
 	if (notesFile && !options.notesTag) throw new Error("--notes-file requires --tag.");
 	const changelogPath = path.resolve("CHANGELOG.md");

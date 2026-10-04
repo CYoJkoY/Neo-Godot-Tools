@@ -193,7 +193,42 @@ const openSubResources = new Set();
 const closedSubResources = new Set();
 const openVectors = new Set();
 
+function sceneResourceReference(kind, id, format) {
+	return format === "2" && /^\d+$/.test(id) ? kind + "Resource( " + id + " )" : kind + "Resource(" + JSON.stringify(id) + ")";
+}
+
+function sceneResourceChoices(model) {
+	const choices = [];
+	for (const resource of (model && model.extResources) || []) {
+		choices.push({ value: sceneResourceReference("Ext", resource.id, model.format), label: (resource.path || resource.id) + " · " + resource.type });
+	}
+	for (const resource of (model && (model.subResourceTypes || model.subResources)) || []) {
+		choices.push({ value: sceneResourceReference("Sub", resource.id, model.format), label: resource.type + " · " + resource.id });
+	}
+	return choices;
+}
+
+function resourceArrayElementType(property) {
+	const declared = property.metadata && property.metadata.type;
+	const typed = typeof declared === "string" && declared.match(/^Array\[([^\]]+)\]$/);
+	return typed ? typed[1].trim() : property.widget && property.widget.elementType;
+}
+
+function isResourceElementType(type) {
+	if (!type) return false;
+	const normalized = String(type).trim();
+	return !new Set([
+		"Variant", "Object", "Node", "Node2D", "Node3D", "CanvasItem", "Control", "Viewport", "Window", "SceneTree", "Engine",
+		"Callable", "Signal", "RID", "bool", "int", "float", "String", "StringName", "NodePath", "Color", "Vector2", "Vector2i",
+		"Vector3", "Vector3i", "Vector4", "Vector4i", "Rect2", "Rect2i", "Transform2D", "Transform3D", "Projection", "Basis",
+		"Quaternion", "Plane", "AABB", "Array", "Dictionary", "PackedByteArray", "PackedInt32Array", "PackedInt64Array",
+		"PackedFloat32Array", "PackedFloat64Array", "PackedStringArray", "PackedVector2Array", "PackedVector3Array", "PackedVector4Array",
+		"PackedColorArray", "byte", "string", "vector2", "vector3", "color",
+	]).has(normalized);
+}
+
 function propertyRow(property, model, commit, revert) {
+	const sceneNode = model && model.editorKind === "sceneNode";
 	const defaultValue = property.metadata && property.metadata.source !== "file" ? property.metadata.defaultValue : undefined;
 	// The extension compares parsed literals; the webview must not guess defaults.
 	const modified = property.modified === undefined ? Boolean(property.definedInFile) : property.modified;
@@ -284,18 +319,18 @@ function propertyRow(property, model, commit, revert) {
 		]);
 		control.addEventListener("toggle", () => { if (control.open) openVectors.add(vectorKey); else openVectors.delete(vectorKey); });
 	} else if (widget.kind === "array") {
-		control = arrayEditor(property, set);
+		control = arrayEditor(property, model, set);
 	} else if (widget.kind === "dictionary") {
 		control = dictionaryEditor(property, set);
 	} else if (widget.kind === "resource") {
 		const references = [];
-		const referenceValue = (kind, id) => model && model.format === "2" && /^\d+$/.test(id) ? kind + "Resource( " + id + " )" : kind + "Resource(" + JSON.stringify(id) + ")";
+		const referenceValue = (kind, id) => sceneResourceReference(kind, id, model && model.format);
 		const type = property.metadata && property.metadata.type;
-		const compatible = type && type !== "Resource" && type !== "Variant" ? type : undefined;
-		// Script and Shader slots must not offer unrelated textures/materials.
+		const compatible = type && type !== "Resource" && type !== "Variant" && type !== "Object" ? type : undefined;
+		// Script and Shader slots must not offer unrelated resource classes.
 		const accepts = (actual) => (type !== "Script" && type !== "Shader") || actual === type;
 		for (const resource of (model && model.extResources) || []) if (accepts(resource.type)) references.push({ value: referenceValue("Ext", resource.id), id: resource.id, kind: "Ext", label: (resource.path || resource.id) + " · " + resource.type });
-		for (const sub of (model && model.subResources) || []) if (accepts(sub.type)) references.push({ value: referenceValue("Sub", sub.id), id: sub.id, kind: "Sub", label: sub.type + " · " + sub.id });
+		for (const sub of (model && (model.subResourceTypes || model.subResources)) || []) if (accepts(sub.type)) references.push({ value: referenceValue("Sub", sub.id), id: sub.id, kind: "Sub", label: sub.type + " · " + sub.id });
 		const picker = element("select", { class: "res-picker", "aria-label": property.name });
 		picker.appendChild(element("option", { value: "null", text: "None (null)" }));
 		for (const reference of references) picker.appendChild(element("option", { value: reference.value, text: reference.label }));
@@ -317,7 +352,8 @@ function propertyRow(property, model, commit, revert) {
 		control = element("div", { class: "res" }, [main]);
 		const actions = [];
 		if (current && current.kind === "Ext") actions.push(element("button", { class: "text-button", text: "↗ Open", title: current.label, onclick: () => post("openExtResource", { id: current.id }) }));
-		if (widget.creatable && compatible && compatible !== "Script") actions.push(element("button", { class: "text-button", text: "New " + compatible, title: "Create a " + compatible + " and assign it", onclick: () => post("createSubResource", { name: property.name, target: property.target, subType: compatible }) }));
+		const creatableType = compatible || (type === "Resource" ? "Resource" : undefined);
+		if (widget.creatable && creatableType && creatableType !== "Script" && creatableType !== "Shader") actions.push(element("button", { class: "text-button", text: "New " + creatableType, title: "Create a " + creatableType + " and assign it", onclick: () => post("createSubResource", { name: property.name, target: property.target, subType: creatableType }) }));
 		if (actions.length) control.appendChild(element("div", { class: "res-actions" }, actions));
 	} else if (widget.kind === "textarea") {
 		control = element("textarea", { rows: "4", value: property.raw, "aria-label": property.name, onchange: (event) => set(normalizeTextValue(event.target.value, metaType, widget.kind)) });
@@ -332,7 +368,11 @@ function propertyRow(property, model, commit, revert) {
 	control.className = (control.className || "") + " property-control";
 	row.appendChild(control);
 
-	const revertButton = element("button", { class: "revert", text: "⟲", title: defaultValue !== undefined ? "Revert to default (" + defaultValue + ")" : "Remove override" });
+	const revertButton = element("button", {
+		class: "revert",
+		text: "⟲",
+		title: sceneNode ? "Remove node override" : defaultValue !== undefined ? "Revert to default (" + defaultValue + ")" : "Remove override",
+	});
 	revertButton.disabled = property.definedInFile === false;
 	revertButton.addEventListener("click", () => revert(property.name, defaultValue, property.target));
 	row.appendChild(revertButton);
@@ -419,21 +459,63 @@ function defaultListEntry(form) {
 	return "null";
 }
 
-function arrayEditor(property, set) {
+function arrayEditor(property, model, set) {
 	const form = listForm(property.raw);
 	const items = parseList(property.raw);
+	const declaredElementType = resourceArrayElementType(property);
+	const hasResourceReference = items.some((item) => {
+		const value = item.trim();
+		return value.startsWith("ExtResource(") || value.startsWith("ExtResource (") || value.startsWith("SubResource(") || value.startsWith("SubResource (");
+	});
+	const isSceneNode = model && model.editorKind === "sceneNode";
+	const resourceArray = Boolean(isSceneNode) && (isResourceElementType(declaredElementType) || hasResourceReference);
+	const choices = sceneResourceChoices(model);
 	const container = element("div", {});
 	const render = () => {
 		container.textContent = "";
 		items.forEach((item, index) => {
-			const input = element("input", { type: "text", value: item });
-			input.addEventListener("change", () => { items[index] = input.value; commit(); });
-			const up = element("button", { text: "\u2191", onclick: () => { if (index > 0) { items.splice(index - 1, 0, items.splice(index, 1)[0]); commit(); } } });
-			const down = element("button", { text: "\u2193", onclick: () => { if (index < items.length - 1) { items.splice(index + 1, 0, items.splice(index, 1)[0]); commit(); } } });
-			const remove = element("button", { text: "\u2715", onclick: () => { items.splice(index, 1); commit(); } });
-			container.appendChild(element("div", { class: "entry" }, [input, up, down, remove]));
+			let input;
+			if (resourceArray) {
+				input = element("select", { "aria-label": property.name + " resource " + (index + 1) });
+				input.appendChild(element("option", { value: "null", text: "None (null)" }));
+				for (const choice of choices) input.appendChild(element("option", { value: choice.value, text: choice.label }));
+				const raw = item.trim();
+				const selected = raw === "nil" ? "null" : raw;
+				if (!Array.from(input.children).some((option) => option.value === selected)) {
+					input.appendChild(element("option", { value: selected, text: "Current: " + raw }));
+				}
+				input.value = selected;
+				input.addEventListener("change", () => { items[index] = input.value; commit(); });
+			} else {
+				input = element("input", { type: "text", value: item });
+				input.addEventListener("change", () => { items[index] = input.value; commit(); });
+			}
+			const actions = [];
+			if (resourceArray && isSceneNode) {
+				actions.push(element("button", {
+					class: "text-button",
+					text: "Browse…",
+					title: "Add or choose an external resource",
+					onclick: () => post("pickArrayResource", { name: property.name, target: property.target, index: index }),
+				}));
+				actions.push(element("button", {
+					class: "text-button",
+					text: "New",
+					title: "Create an embedded resource for this entry",
+					onclick: () => post("createArraySubResource", { name: property.name, target: property.target, index: index, subType: declaredElementType || "Resource" }),
+				}));
+			}
+			actions.push(
+				element("button", { text: "\u2191", title: "Move up", onclick: () => { if (index > 0) { items.splice(index - 1, 0, items.splice(index, 1)[0]); commit(); } } }),
+				element("button", { text: "\u2193", title: "Move down", onclick: () => { if (index < items.length - 1) { items.splice(index + 1, 0, items.splice(index, 1)[0]); commit(); } } }),
+				element("button", { text: "\u2715", title: "Remove entry", onclick: () => { items.splice(index, 1); commit(); } }),
+			);
+			container.appendChild(element("div", { class: "entry array-entry" + (resourceArray ? " resource-entry" : "") }, [
+				input,
+				element("div", { class: "array-entry-actions" }, actions),
+			]));
 		});
-		container.appendChild(element("button", { text: "Add entry", onclick: () => { items.push(defaultListEntry(form)); commit(); } }));
+		container.appendChild(element("button", { class: "text-button", text: "Add entry", onclick: () => { items.push(defaultListEntry(form)); commit(); } }));
 	};
 	function commit() {
 		// Write the value back in the container it came from, so editing an array
@@ -550,30 +632,30 @@ function render(model, resources) {
 		renderEmpty(resources);
 		return;
 	}
+	const sceneNode = model.editorKind === "sceneNode";
 	const headerChildren = [
-		element("div", { class: "eyebrow", text: "GODOT RESOURCE" + (model.format ? " · FORMAT " + model.format : "") }),
-		element("h2", { text: model.resourceType + (model.scriptClass ? " · " + model.scriptClass : "") }),
+		element("div", { class: "eyebrow", text: (sceneNode ? "SCENE NODE" : "GODOT RESOURCE") + (model.format ? " · FORMAT " + model.format : "") }),
+		element("h2", { text: sceneNode ? (model.nodeName || "Node") + " · " + model.resourceType : model.resourceType + (model.scriptClass ? " · " + model.scriptClass : "") }),
 	];
-	if (model.resourcePath || model.fileName) {
-		headerChildren.push(element("div", { class: "resource-path", text: model.resourcePath || model.fileName }));
-	}
+	const location = sceneNode ? (model.scenePath || model.fileName || "") + "  ›  " + (model.nodePath || "") : model.resourcePath || model.fileName;
+	if (location) headerChildren.push(element("div", { class: "resource-path", text: location }));
 	app.appendChild(element("header", { class: "resource-header" }, headerChildren));
 
 	const toolbarButtons = [
-		element("button", { class: "filled", text: "Open raw text", onclick: () => post("openText", {}) }),
+		element("button", { class: "filled", text: sceneNode ? "Open scene text" : "Open raw text", onclick: () => post("openText", {}) }),
 	];
-	if (model.scriptPath) {
+	if (!sceneNode && model.scriptPath) {
 		toolbarButtons.push(element("button", { class: "tonal", text: "Script", title: model.scriptPath, onclick: () => post("openScript", {}) }));
 	}
-	toolbarButtons.push(
-		element("button", {
+	if (!sceneNode) {
+		toolbarButtons.push(element("button", {
 			class: "tonal" + (model.locked ? " active" : ""),
 			text: model.locked ? "🔒 Locked" : "🔓 Auto",
 			title: model.locked ? "Unlock to follow the active .tres editor" : "Lock inspector to this .tres resource",
 			onclick: () => post("toggleLock", {}),
-		}),
-		element("button", { class: "tonal", text: "↻  Reload", onclick: () => post("reload", {}) }),
-	);
+		}));
+	}
+	toolbarButtons.push(element("button", { class: "tonal", text: "↻  Reload", onclick: () => post("reload", {}) }));
 	app.appendChild(element("div", { class: "toolbar" }, toolbarButtons));
 
 	if (model.diagnostics && model.diagnostics.length) {
@@ -585,14 +667,14 @@ function render(model, resources) {
 	}
 
 	const propertyHeader = element("div", { class: "section-heading" }, [
-		element("h3", { text: "Properties" }),
-		element("span", { id: "property-count", class: "count", text: model.properties.length + " properties" }),
+		element("h3", { text: sceneNode ? "Node properties" : "Properties" }),
+			element("span", { id: "property-count", class: "count", text: model.properties.length + " properties" }),
 	]);
 	app.appendChild(propertyHeader);
 	const tools = element("div", { class: "property-tools" });
 	const search = element("input", { id: "property-search", type: "search", placeholder: "Search properties…", value: currentSearch, "aria-label": "Search properties" });
 	search.addEventListener("input", () => { currentSearch = search.value; applyPropertyFilters(); });
-	const modifiedButton = element("button", { id: "modified-filter", class: "filter-button" + (modifiedOnly ? " active" : ""), text: "●  Modified" });
+	const modifiedButton = element("button", { id: "modified-filter", class: "filter-button" + (modifiedOnly ? " active" : ""), text: sceneNode ? "●  Overrides" : "●  Modified" });
 	modifiedButton.setAttribute("aria-pressed", String(modifiedOnly));
 	modifiedButton.addEventListener("click", () => { modifiedOnly = !modifiedOnly; render(model); });
 	tools.appendChild(search);
@@ -612,29 +694,31 @@ function render(model, resources) {
 		propertyContainer.appendChild(propertyRow(property, model, commit, revert));
 	}
 	app.appendChild(propertyContainer);
-	app.appendChild(element("button", { class: "tonal add-resource", text: "+  Add property", onclick: () => post("addProperty", {}) }));
+	if (!sceneNode) app.appendChild(element("button", { class: "tonal add-resource", text: "+  Add property", onclick: () => post("addProperty", {}) }));
 
+	if (!sceneNode || model.subResources.length) {
 	const subSection = element("section", { class: "resource-section" });
 	subSection.appendChild(element("div", { class: "section-heading" }, [
-		element("h3", { text: "Sub-resources" }),
+		element("h3", { text: sceneNode ? "Embedded resources" : "Sub-resources" }),
 		element("span", { class: "count", text: model.subResources.length + " total" }),
 	]));
 	const defaultSubOpen = model.subResources.length <= 2;
 	for (const sub of model.subResources) {
 		const body = element("div", { class: "subresource-body" });
-		for (const property of sub.properties) body.appendChild(propertyRow(Object.assign({}, property, { target: sub.id }), model, commit, revert));
-		const actions = element("div", { class: "subresource-actions" }, [
+		for (const property of sub.properties) body.appendChild(propertyRow(Object.assign({}, property, { target: sceneNode ? "sub:" + sub.id : sub.id }), model, commit, revert));
+		const actions = sceneNode ? undefined : element("div", { class: "subresource-actions" }, [
 			element("button", { class: "text-button", text: "+ Property", onclick: () => post("addProperty", { target: sub.id }) }),
 			element("button", { class: "text-button", text: "Duplicate", onclick: () => post("duplicateSubResource", { id: sub.id }) }),
 			element("button", { class: "text-button", text: "Rename", onclick: () => post("renameSubResource", { id: sub.id }) }),
 			element("button", { class: "text-button danger", text: "Delete", onclick: () => post("deleteSubResource", { id: sub.id }) }),
 		]);
 		const isOpen = openSubResources.has(sub.id) || (defaultSubOpen && !closedSubResources.has(sub.id));
-		const card = element("details", Object.assign({ class: "resource-card" }, isOpen ? { open: "open" } : {}), [
+		const cardChildren = [
 			element("summary", {}, [element("span", { class: "resource-type", text: sub.type, title: sub.type }), element("code", { text: sub.id, title: sub.id })]),
 			body,
-			actions,
-		]);
+		];
+		if (actions) cardChildren.push(actions);
+		const card = element("details", Object.assign({ class: "resource-card" }, isOpen ? { open: "open" } : {}), cardChildren);
 		card.addEventListener("toggle", () => {
 			if (card.open) {
 				openSubResources.add(sub.id);
@@ -646,10 +730,14 @@ function render(model, resources) {
 		});
 		subSection.appendChild(card);
 	}
-	const addSub = element("button", { class: "tonal add-resource", text: "+  Add sub-resource", onclick: () => post("addSubResource", {}) });
-	subSection.appendChild(addSub);
+	if (!sceneNode) {
+		const addSub = element("button", { class: "tonal add-resource", text: "+  Add sub-resource", onclick: () => post("addSubResource", {}) });
+		subSection.appendChild(addSub);
+	}
 	app.appendChild(subSection);
+	}
 
+	if (!sceneNode || model.extResources.length) {
 	const extSection = element("section", { class: "resource-section" });
 	extSection.appendChild(element("div", { class: "section-heading" }, [
 		element("h3", { text: "External resources" }),
@@ -660,7 +748,7 @@ function render(model, resources) {
 		const link = element("button", { text: (resource.broken ? "⚠  " : "↗  ") + (resource.path || resource.id), title: resource.path || resource.id, class: "resource-link" + (resource.broken ? " broken" : ""), onclick: open });
 		bindImagePreview(link, resource.imagePreview);
 		const pathCell = element("div", { class: "resource-link-cell" }, [imageThumbnail(resource.imagePreview, open), link]);
-		const removeBtn = element("button", { class: "revert", text: "\u2715", title: "Remove external resource", onclick: () => post("deleteExtResource", { id: resource.id }) });
+		const removeBtn = sceneNode ? undefined : element("button", { class: "revert", text: "\u2715", title: "Remove external resource", onclick: () => post("deleteExtResource", { id: resource.id }) });
 		extSection.appendChild(element("div", { class: "external-row" }, [
 			element("code", { class: "resource-id", text: resource.id }),
 			element("span", { class: "type-badge", text: resource.type }),
@@ -668,8 +756,9 @@ function render(model, resources) {
 			removeBtn,
 		]));
 	}
-	extSection.appendChild(element("button", { class: "tonal add-resource", text: "+  Add external resource", onclick: () => post("addExternalResource", {}) }));
+	if (!sceneNode) extSection.appendChild(element("button", { class: "tonal add-resource", text: "+  Add external resource", onclick: () => post("addExternalResource", {}) }));
 	app.appendChild(extSection);
+	}
 	applyPropertyFilters();
 	renderedResourceUri = model.uri;
 	if (searchWasFocused && typeof search.focus === "function") search.focus({ preventScroll: true });
@@ -813,6 +902,8 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.preview-caption { margin-top: 6px; font-size: 11px; overflow-wrap: anywhere; }
 	.preview-status { color: var(--ri-muted); font-size: 10px; }
 	.entry { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center; margin: 5px 0; }
+	.entry.array-entry { grid-template-columns: minmax(0, 1fr) auto; }
+	.array-entry-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 	.entry.kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 	.entry button, .res button, .toolbar button, .text-button { font-size: 11px; }
 	button:not(.revert) { border: 0; border-radius: 8px; cursor: pointer; }

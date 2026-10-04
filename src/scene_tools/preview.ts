@@ -35,6 +35,7 @@ import {
 	promptPropertyValue,
 } from "./property_editor";
 import { type Scene, SceneNode, ScenePropertiesGroup, ScenePropertyItem } from "./types";
+import { createScenePropertyInspector, type ScenePropertyInspector } from "./property_inspector.js";
 
 export type SceneTreeElement = SceneNode | ScenePropertiesGroup | ScenePropertyItem;
 
@@ -64,6 +65,7 @@ export class ScenePreviewProvider
 	onDidChangeTreeData = this.changeTreeEvent.event;
 
 	private readonly nodeProperties: NodePropertyMetadata;
+	private readonly propertyInspector: ScenePropertyInspector;
 
 	constructor(
 		private context: ExtensionContext,
@@ -74,6 +76,7 @@ export class ScenePreviewProvider
 			dragAndDropController: this,
 		});
 		this.nodeProperties = new NodePropertyMetadata(options);
+		this.propertyInspector = createScenePropertyInspector(context, this.parser, this.nodeProperties);
 
 		context.subscriptions.push(
 			register_command("scenePreview.lock", this.lock_preview.bind(this)),
@@ -87,6 +90,9 @@ export class ScenePreviewProvider
 			register_command("scenePreview.goToDefinition", this.go_to_definition.bind(this)),
 			register_command("scenePreview.openDocumentation", this.open_documentation.bind(this)),
 			register_command("scenePreview.refresh", this.refresh.bind(this)),
+			register_command("scenePreview.openPropertyInspector", (item?: ScenePropertiesGroup | SceneNode) =>
+				this.open_property_inspector(item),
+			),
 			register_command("scenePreview.editProperty", (item?: ScenePropertyItem) => this.edit_property(item)),
 			register_command("scenePreview.addProperty", (item?: ScenePropertiesGroup) => this.add_property(item)),
 			register_command("scenePreview.removeProperty", (item?: ScenePropertyItem) => this.remove_property(item)),
@@ -132,6 +138,12 @@ export class ScenePreviewProvider
 		for (const timer of this.pendingSceneChanges.values()) clearTimeout(timer);
 		this.pendingSceneChanges.clear();
 		this.nodeProperties.clear();
+		this.propertyInspector.dispose();
+	}
+
+	public refresh_property_inspector(): void {
+		this.nodeProperties.clear();
+		this.propertyInspector.refresh();
 	}
 
 	public handleDrag(
@@ -517,6 +529,13 @@ export class ScenePreviewProvider
 		const node = scene.nodes.get(nodePath);
 		if (!node || node.position < 0 || node.bodyEnd < 0) return undefined;
 		return { document, scene, node };
+	}
+
+	private async open_property_inspector(item?: ScenePropertiesGroup | SceneNode) {
+		const node = item instanceof ScenePropertiesGroup ? item.node : item;
+		const scenePath = this.currentScene || this.scene?.path;
+		if (!node || !scenePath) return;
+		await this.propertyInspector.open(vscode.Uri.file(scenePath), node.path);
 	}
 
 	private async edit_property(item?: ScenePropertyItem) {

@@ -35,6 +35,9 @@ importers:
       terminate:
         specifier: ^2.5.0
         version: 2.8.0
+      vscode-jsonrpc:
+        specifier: ^8.2.0
+        version: 8.2.0
       vscode-languageclient:
         specifier: ^9.0.1
         version: 9.0.1
