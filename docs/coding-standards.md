@@ -84,13 +84,13 @@ outside the ratchet — fixtures legitimately collect into arrays and mutate loc
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
 | `class` declarations | 127 | debugger, tools, providers, the parser cursor (§5) |
-| `let` / `var` declarations | 311 | debugger, resource inspector, and the lexer/parser cursors |
-| `for` loops | 215 | debugger, resource inspector |
+| `let` / `var` declarations | 290 | debugger, resource inspector, and the lexer/parser cursors |
+| `for` loops | 210 | debugger, resource inspector |
 | `while` / `do` loops | 38 | protocol loops, the lexer/parser cursors (§5) |
-| `} else` branches | 187 | debugger, resource inspector |
+| `} else` branches | 186 | debugger, resource inspector |
 | `throw` statements | 40 | parameter validation and protocol errors |
 
-Total tracked constructs: 918 in 122 source files; 32 loops are justified with `// perf:` (§5).
+Total tracked constructs: 891 in 122 source files; 32 loops are justified with `// perf:` (§5).
 
 `as` assertions and `readonly` coverage are not ratcheted — they are reviewed per file during the §6
 migration — and the census strips comments and strings, so prose such as "renders a value as text"
@@ -101,7 +101,7 @@ The 2026-10-04 migration of §6 step 2 took the total from 1091 to 1025: `src/ut
 class-free, and `src/analyzer` lost the `else` chains and mutable declaration locals, with its
 scanning loops recorded under `// perf:`.
 
-Step 3 started from `src/index` and took the total from 1025 to 918. The seven index classes
+Step 3 started from `src/index` (1025 -> 918) and continues in `src/providers` (918 -> 891 so far). The seven index classes
 (`FileIndex`, `SymbolIndex`, `DependencyGraph`, `TypeResolutionIndex`, `BindingIndex`,
 `ReferenceIndex`, `InheritedMemberResolver`) are now `create*` factories over module-local state,
 so callers depend on an exported interface instead of a class. The query helpers followed:
@@ -122,6 +122,14 @@ through `dropFromGroup`. The five map helpers the three modules had grown (`addT
 `bindings.ts` was differentially verified the same way (180 973 probes over the fixtures plus the
 `update` → `remove` → `re-update` → `clear` lifecycle, zero differences); that harness caught an
 infinite recursion in the first version of the scope chain, which the unit tests then confirmed.
+
+`src/providers/documentation_builder.ts` (27 -> 0) followed: the class page groups members by
+section through a record of two lists instead of eleven string accumulators, the documentation
+builder is a pipeline of pattern steps, and the bbcode code-block conversion now uses
+`replaceAll` with a replacer function - `replace(marker, string)` expanded `$$`, `` $` `` and `$&`
+inside GDScript samples, which the differential harness showed by rendering 51 documents and
+pages against the previous revision (`/tmp/docsdiff/diff.cjs`: 102 renders, the only differences
+are that fix). A unit test pins the behaviour.
 
 ## 5. Exceptions (deliberate, with reasons)
 

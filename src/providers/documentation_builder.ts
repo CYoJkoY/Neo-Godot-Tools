@@ -3,12 +3,11 @@ import * as Prism from "prismjs";
 import * as csharp from "prismjs/components/prism-csharp";
 import * as vscode from "vscode";
 import { SymbolKind } from "vscode-languageclient";
-import { createLogger, get_extension_uri } from "../utils";
+import { get_extension_uri } from "../utils";
 import { doc_symbol_anchor } from "../utils/doc_anchor";
 import type { GodotNativeSymbol } from "./documentation_types";
 import yabbcode = require("ya-bbcode");
 
-const log = createLogger("providers.docs_builder");
 const parser = new yabbcode();
 
 // The C# grammar is only registered with Prism once its module has been touched.
@@ -23,10 +22,8 @@ marked.setOptions({
 });
 
 // TODO: find a better way to apply this theming
-let options = "";
-const theme = vscode.window.activeColorTheme.kind;
-if (theme === vscode.ColorThemeKind.Dark) {
-	options = `{
+const theme_options: Partial<Record<vscode.ColorThemeKind, string>> = {
+	[vscode.ColorThemeKind.Dark]: `{
 		viewport: null,
 		styles: {
 			'header,footer,section,article': '#d4d4d480',
@@ -37,9 +34,8 @@ if (theme === vscode.ColorThemeKind.Dark) {
 		view: '#79797933',
 		drag: '#bfbfbf33',
 		interval: 50
-	}`;
-} else if (theme === vscode.ColorThemeKind.Light) {
-	options = `{
+	}`,
+	[vscode.ColorThemeKind.Light]: `{
 		viewport: null,
 		styles: {
 			'header,footer,section,article': 'rgba(0,0,0,0.08)',
@@ -50,8 +46,10 @@ if (theme === vscode.ColorThemeKind.Dark) {
 		view: 'rgba(0,0,0,0.08)',
 		drag: 'rgba(0,0,0,0.08)',
 		interval: 50
-	}`;
-}
+	}`,
+};
+/** Pagemap options for the current theme; empty for the high-contrast themes. */
+const options = theme_options[vscode.window.activeColorTheme.kind] ?? "";
 
 /**
  * Scrolls the documentation page to a symbol. Anchors are kind-prefixed
@@ -146,14 +144,13 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 	const prismCssUri = webview.asWebviewUri(get_extension_uri("media", "prism.css"));
 	const docsCssUri = webview.asWebviewUri(get_extension_uri("media", "docs.css"));
 
-	let initialFocus = "";
-	if (target) {
-		initialFocus = `
+	const initialFocus = target
+		? `
 			window.addEventListener('load', event => {
 				ngdtFocus(${JSON.stringify(target)});
 			});
-		`;
-	}
+		`
+		: "";
 
 	return /*html*/ `<!DOCTYPE html>
 		<html>
@@ -206,198 +203,172 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 
 export function make_symbol_document(symbol: GodotNativeSymbol): string {
 	const classlink = make_link(symbol.native_class, undefined);
+	return symbol.kind === SymbolKind.Class
+		? make_class_document(symbol, classlink)
+		: make_member_document(symbol, classlink);
+}
 
-	function make_function_signature(s: GodotNativeSymbol, with_class = false) {
-		const parts = /\((.*)?\)\s*\-\>\s*(([A-z0-9]+)?)$/.exec(s.detail ?? "");
-		if (!parts) {
-			return "";
+/** Signature line of a function-like member, linking the return type and name. */
+function make_function_signature(s: GodotNativeSymbol, classlink: string, with_class = false): string {
+	const parts = /\((.*)?\)\s*\-\>\s*(([A-z0-9]+)?)$/.exec(s.detail ?? "");
+	if (!parts) return "";
+	const ret_type = make_link(parts[2] || "void", undefined);
+	const args = (parts[1] || "")
+		.replace(/\:\s([A-z0-9_]+)(\,\s*)?/g, ': <a href="" onclick="inspect(\'$1\')">$1</a>$2')
+		.replace(/\s=\s(.*?)[\,\)]/g, "");
+	return `${ret_type} ${with_class ? `${classlink}.` : ""}${element("a", s.name, {
+		href: `#${symbol_element_id(s)}`,
+	})}( ${args} )`;
+}
+
+/** Index entry and body of one native member, by kind. */
+function make_symbol_elements(
+	s: GodotNativeSymbol,
+	classlink: string,
+	with_class = false,
+): { index?: string; body: string } {
+	switch (s.kind) {
+		case SymbolKind.Property:
+		case SymbolKind.Variable: {
+			// var Control.anchor_left: float
+			const parts = /\.([A-z_0-9]+)\:\s(.*)$/.exec(s.detail ?? "");
+			if (!parts) return { body: "" };
+			const type = make_link(parts[2], undefined);
+			const name = element("a", s.name, { href: `#${symbol_element_id(s)}` });
+			const title = element("h4", `${type} ${with_class ? `${classlink}.` : ""}${s.name}`);
+			return {
+				index: `${type} ${name}`,
+				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+			};
 		}
-		const ret_type = make_link(parts[2] || "void", undefined);
-		let args = (parts[1] || "").replace(
-			/\:\s([A-z0-9_]+)(\,\s*)?/g,
-			': <a href="" onclick="inspect(\'$1\')">$1</a>$2',
-		);
-		args = args.replace(/\s=\s(.*?)[\,\)]/g, "");
-		return `${ret_type} ${with_class ? `${classlink}.` : ""}${element("a", s.name, {
-			href: `#${symbol_element_id(s)}`,
-		})}( ${args} )`;
+		case SymbolKind.Constant: {
+			// const Control.FOCUS_ALL: FocusMode = 2
+			// const Control.NOTIFICATION_RESIZED = 40
+			const parts = /\.([A-Za-z_0-9]+)(\:\s*)?([A-z0-9_\.]+)?\s*=\s*(.*)$/.exec(s.detail ?? "");
+			if (!parts) return { body: "" };
+			const type = make_link(parts[3] || "int", undefined);
+			const value = element("code", parts[4]);
+			const title = element("p", `${type} ${with_class ? `${classlink}.` : ""}${parts[1]} = ${value}`);
+			return {
+				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+			};
+		}
+		case SymbolKind.Event: {
+			const parts = /\.([A-z0-9]+)\((.*)?\)/.exec(s.detail ?? "");
+			if (!parts) return { body: "" };
+			const args = (parts[2] || "").replace(
+				/\:\s([A-z0-9_]+)(\,\s*)?/g,
+				': <a href="" onclick="inspect(\'$1\')">$1</a>$2',
+			);
+			const prefix = with_class ? "signal " : "";
+			const title = element("p", `${prefix}${with_class ? `${classlink}.` : ""}${s.name}( ${args} )`);
+			return {
+				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+			};
+		}
+		case SymbolKind.Method:
+		case SymbolKind.Function:
+		case SymbolKind.Constructor:
+		case SymbolKind.Operator: {
+			const signature = make_function_signature(s, classlink, with_class);
+			const title = element("h4", signature);
+			return {
+				index: signature,
+				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+			};
+		}
+		default:
+			return { body: "" };
 	}
+}
 
-	function make_symbol_elements(s: GodotNativeSymbol, with_class = false): { index?: string; body: string } {
-		switch (s.kind) {
-			case SymbolKind.Property:
-			case SymbolKind.Variable: {
-				// var Control.anchor_left: float
-				const parts = /\.([A-z_0-9]+)\:\s(.*)$/.exec(s.detail ?? "");
-				if (!parts) {
-					return { body: "" };
-				}
-				const type = make_link(parts[2], undefined);
-				const name = element("a", s.name, { href: `#${symbol_element_id(s)}` });
-				const title = element("h4", `${type} ${with_class ? `${classlink}.` : ""}${s.name}`);
-				const doc = element("p", format_documentation(s.documentation, symbol.native_class));
-				const div = element("div", title + doc);
-				return {
-					index: `${type} ${name}`,
-					body: div,
-				};
-			}
-			case SymbolKind.Constant: {
-				// const Control.FOCUS_ALL: FocusMode = 2
-				// const Control.NOTIFICATION_RESIZED = 40
-				const parts = /\.([A-Za-z_0-9]+)(\:\s*)?([A-z0-9_\.]+)?\s*=\s*(.*)$/.exec(s.detail ?? "");
-				if (!parts) {
-					return { body: "" };
-				}
-				const type = make_link(parts[3] || "int", undefined);
-				const name = parts[1];
-				const value = element("code", parts[4]);
+/** Member kinds of a class page, in the order the sections are emitted. */
+const MEMBER_SECTIONS = [
+	{ key: "properties", title: "Properties", index: true, kinds: [SymbolKind.Property, SymbolKind.Variable] },
+	{ key: "constructors", title: "Constructors", index: true, kinds: [SymbolKind.Constructor] },
+	{ key: "methods", title: "Methods", index: true, kinds: [SymbolKind.Method, SymbolKind.Function] },
+	{ key: "operators", title: "Operators", index: true, kinds: [SymbolKind.Operator] },
+	{ key: "signals", title: "Signals", index: false, kinds: [SymbolKind.Event] },
+	{ key: "constants", title: "Constants", index: false, kinds: [SymbolKind.Constant] },
+] as const;
 
-				const title = element("p", `${type} ${with_class ? `${classlink}.` : ""}${name} = ${value}`);
-				const doc = element("p", format_documentation(s.documentation, symbol.native_class));
-				const div = element("div", title + doc);
-				return {
-					body: div,
-				};
-			}
-			case SymbolKind.Event: {
-				const parts = /\.([A-z0-9]+)\((.*)?\)/.exec(s.detail ?? "");
-				if (!parts) {
-					return { body: "" };
-				}
-				const args = (parts[2] || "").replace(
-					/\:\s([A-z0-9_]+)(\,\s*)?/g,
-					': <a href="" onclick="inspect(\'$1\')">$1</a>$2',
-				);
-				const title = element(
+const DESCRIPTION_SECTIONS = [
+	["properties", "Property Descriptions"],
+	["constructors", "Constructor Descriptions"],
+	["methods", "Method Descriptions"],
+	["operators", "Operator Descriptions"],
+] as const;
+
+const OTHER_SECTION = "others";
+
+/** Section key of a member kind; everything unknown lands under "Other Members". */
+function section_of(kind: SymbolKind | undefined): string {
+	return (
+		MEMBER_SECTIONS.find((section) => (section.kinds as readonly SymbolKind[]).includes(kind as SymbolKind))?.key ??
+		OTHER_SECTION
+	);
+}
+
+function make_class_document(symbol: GodotNativeSymbol, classlink: string): string {
+	// Two lists per section: the anchor index at the top, the descriptions below.
+	const index: Record<string, string[]> = {};
+	const body: Record<string, string[]> = {};
+	const push = (groups: Record<string, string[]>, key: string, item: string): void => {
+		groups[key] = [...(groups[key] ?? []), item];
+	};
+
+	const extended = symbol.class_info?.extended_classes;
+	const inheritance = [
+		symbol.class_info?.inherits
+			? element("p", `Inherits: ${make_link(symbol.class_info.inherits, undefined)}`)
+			: "",
+		// The line is emitted whenever the array is present, and its first entry is
+		// prefixed with a space: `Inherited by: A, B`.
+		extended
+			? element(
 					"p",
-					`${with_class ? `signal ${with_class ? `${classlink}.` : ""}` : ""}${s.name}( ${args} )`,
-				);
-				const doc = element("p", format_documentation(s.documentation, symbol.native_class));
-				const div = element("div", title + doc);
-				return {
-					body: div,
-				};
-			}
-			case SymbolKind.Method:
-			case SymbolKind.Function:
-			case SymbolKind.Constructor:
-			case SymbolKind.Operator: {
-				const signature = make_function_signature(s, with_class);
-				const title = element("h4", signature);
-				const doc = element("p", format_documentation(s.documentation, symbol.native_class));
-				const div = element("div", title + doc);
-				return {
-					index: signature,
-					body: div,
-				};
-			}
-			default:
-				return { body: "" };
-		}
-	}
+					`Inherited by:${extended.map((name, index) => `${index ? ", " : " "}${make_link(name, name)}`).join("")}`,
+				)
+			: "",
+	].join("");
 
-	if (symbol.kind === SymbolKind.Class) {
-		let doc = element("h2", `Class: ${symbol.name}`);
-		if (symbol.class_info?.inherits) {
-			const inherits = make_link(symbol.class_info.inherits, undefined);
-			doc += element("p", `Inherits: ${inherits}`);
-		}
+	((symbol.children ?? []) as GodotNativeSymbol[]).map((child) => {
+		const key = section_of(child.kind);
+		const elements = make_symbol_elements(child, classlink);
+		const attributes = { id: symbol_element_id(child), "data-symbol": child.name };
+		if (MEMBER_SECTIONS.some((section) => section.key === key && section.index))
+			push(index, key, element("li", elements.index ?? ""));
+		push(body, key, element("li", elements.body, attributes));
+	});
 
-		if (symbol.class_info?.extended_classes) {
-			let inherited = "";
-			for (const c of symbol.class_info.extended_classes) {
-				inherited += (inherited ? ", " : " ") + make_link(c, c);
-			}
-			doc += element("p", `Inherited by:${inherited}`);
-		}
+	const add_group = (title: string, block: string): string =>
+		block ? element("h3", title) + element("ul", block) : "";
+	const list = (groups: Record<string, string[]>): Record<string, string> =>
+		Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, items.join("")]));
 
-		doc += element("p", format_documentation(symbol.documentation, symbol.native_class));
+	const indexes = list(index);
+	const bodies = list(body);
+	const sections = MEMBER_SECTIONS.map((section) =>
+		add_group(section.title, section.index ? (indexes[section.key] ?? "") : (bodies[section.key] ?? "")),
+	).join("");
+	const descriptions = DESCRIPTION_SECTIONS.map(([key, title]) => add_group(title, bodies[key] ?? "")).join("");
 
-		let constants = "";
-		let signals = "";
-		let constructors_index = "";
-		let constructors = "";
-		let methods_index = "";
-		let methods = "";
-		let operators_index = "";
-		let operators = "";
-		let properties_index = "";
-		let propertyies = "";
-		let others = "";
+	return [
+		element("h2", `Class: ${symbol.name}`),
+		inheritance,
+		element("p", format_documentation(symbol.documentation, symbol.native_class)),
+		sections,
+		descriptions,
+		add_group("Other Members", bodies[OTHER_SECTION] ?? ""),
+		element("script", `var godot_class = "${symbol.native_class}";`),
+	].join("");
+}
 
-		if (symbol.children) {
-			for (const s of symbol.children as GodotNativeSymbol[]) {
-				const elements = make_symbol_elements(s);
-				if (!elements) {
-					log.debug(`Unable to render symbol "${s.name}" (unhandled SymbolKind ${s.kind})`);
-					continue;
-				}
-				const id = symbol_element_id(s);
-				switch (s.kind) {
-					case SymbolKind.Property:
-					case SymbolKind.Variable:
-						properties_index += element("li", elements.index ?? "");
-						propertyies += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-					case SymbolKind.Constant:
-						constants += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-					case SymbolKind.Event:
-						signals += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-					case SymbolKind.Constructor:
-						constructors_index += element("li", elements.index ?? "");
-						constructors += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-					case SymbolKind.Method:
-					case SymbolKind.Function:
-						methods_index += element("li", elements.index ?? "");
-						methods += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-					case SymbolKind.Operator:
-						operators_index += element("li", elements.index ?? "");
-						operators += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-					default:
-						others += element("li", elements.body, { id, "data-symbol": s.name });
-						break;
-				}
-			}
-		}
-
-		const add_group = (title: string, block: string) => {
-			if (block) {
-				doc += element("h3", title);
-				doc += element("ul", block);
-			}
-		};
-
-		add_group("Properties", properties_index);
-		add_group("Constructors", constructors_index);
-		add_group("Methods", methods_index);
-		add_group("Operators", operators_index);
-		add_group("Signals", signals);
-		add_group("Constants", constants);
-		add_group("Property Descriptions", propertyies);
-		add_group("Constructor Descriptions", constructors);
-		add_group("Method Descriptions", methods);
-		add_group("Operator Descriptions", operators);
-		add_group("Other Members", others);
-		doc += element("script", `var godot_class = "${symbol.native_class}";`);
-
-		return doc;
-	}
-	let doc = "";
-	const elements = make_symbol_elements(symbol, true);
-	if (elements.index) {
-		const symbols: SymbolKind[] = [SymbolKind.Function, SymbolKind.Method];
-		if (!symbols.includes(symbol.kind)) {
-			doc += element("h2", elements.index);
-		}
-	}
-	doc += element("div", elements.body);
-	return doc;
+function make_member_document(symbol: GodotNativeSymbol, classlink: string): string {
+	const elements = make_symbol_elements(symbol, classlink, true);
+	const is_callable = symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Method;
+	const heading = elements.index && !is_callable ? element("h2", elements.index) : "";
+	return heading + element("div", elements.body);
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -435,53 +406,44 @@ function make_codeblock(code: string, language: string) {
 	return marked.parse(`\`\`\`${language}\n${_code}\n\`\`\``);
 }
 
+/**
+ * Renders every `[<tag>]…[/<tag>]` block of `html` as a highlighted code block.
+ *
+ * `replaceAll` with a replacer function (instead of `replace` with a string)
+ * keeps `$&`, `` $` `` and `$'` inside the code literal - GDScript documentation
+ * uses `$NodePath`, and a string replacement would interpret those sequences.
+ */
+function highlight_blocks(html: string, tag: string, language: string): string {
+	const block_pattern = new RegExp(`\\[${tag}].*?\\[\\/${tag}]`, "gs");
+	const marker_pattern = new RegExp(`\\[\\/?${tag}\\](<br\\/>)?`, "g");
+	return html.replaceAll(block_pattern, (block) =>
+		make_codeblock(block.replaceAll(marker_pattern, "").replaceAll("<br/>", "\n"), language),
+	);
+}
+
 function format_documentation(bbcode: string | undefined, classname: string | undefined) {
 	// ya-bbcode doesn't parse [code skip-lint] as a [code] tag
-	const _bbcode = (bbcode ?? "").replaceAll("[code skip-lint]", "[code]");
-	let html = parser.parse(_bbcode.trim());
-
-	html = html.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "");
-	html = html.replaceAll("&quot;", '"');
-
-	for (const match of html.matchAll(/\[codeblock].*?\[\/codeblock]/gs)) {
-		let block = match[0];
-		block = block.replaceAll(/\[\/?codeblock\](<br\/>)?/g, "");
-		block = block.replaceAll("<br/>", "\n");
-		html = html.replace(match[0], make_codeblock(block, "gdscript"));
-	}
-	for (const match of html.matchAll(/\[gdscript].*?\[\/gdscript]/gs)) {
-		let block = match[0];
-		block = block.replaceAll(/\[\/?gdscript\](<br\/>)?/g, "");
-		block = block.replaceAll("<br/>", "\n");
-		html = html.replace(match[0], make_codeblock(block, "gdscript"));
-	}
-	for (const match of html.matchAll(/\[csharp].*?\[\/csharp]/gs)) {
-		let block = match[0];
-		block = block.replaceAll(/\[\/?csharp\](<br\/>)?/g, "");
-		block = block.replaceAll("<br/>", "\n");
-		html = html.replace(match[0], make_codeblock(block, "csharp"));
-	}
-
-	html = html.replaceAll("<br/>		", "");
-	// [param <name>]
-	html = html.replaceAll(/\[param\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, "<code>$1</code>");
-	// [method <name>]
-	html = html.replaceAll(
-		/\[method\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g,
-		`<a href="" onclick="inspect('${classname}', '$1')">$1</a>`,
+	const parsed = parser.parse((bbcode ?? "").replaceAll("[code skip-lint]", "[code]").trim());
+	// Code blocks first: their content is already HTML and must not be re-scanned
+	// by the reference patterns below.
+	const code = (["codeblock", "gdscript", "csharp"] as const).reduce(
+		(html, tag) => highlight_blocks(html, tag, tag === "csharp" ? "csharp" : "gdscript"),
+		parsed.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "").replaceAll("&quot;", '"'),
 	);
-	// [<reference>]
-	html = html.replaceAll(
-		/\[(\w+)\]/g,
-		`<a href="" onclick="inspect('$1')">$1</a>`
+	const reference_patterns: Array<[RegExp, string]> = [
+		// [param <name>]
+		[/\[param\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, "<code>$1</code>"],
+		// [method <name>]
+		[/\[method\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, `<a href="" onclick="inspect('${classname}', '$1')">$1</a>`],
+		// [<reference>]
+		[/\[(\w+)\]/g, `<a href="" onclick="inspect('$1')">$1</a>`],
+		// [method <class>.<name>]
+		[/\[\w+\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\.(\w+)\]/g, `<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`],
+	];
+	return reference_patterns.reduce(
+		(html, [pattern, replacement]) => html.replaceAll(pattern, replacement),
+		code.replaceAll("<br/>		", ""),
 	);
-	// [method <class>.<name>]
-	html = html.replaceAll(
-		/\[\w+\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\.(\w+)\]/g,
-		`<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`
-	);
-
-	return html;
 }
 
 const GDScriptGrammar = {

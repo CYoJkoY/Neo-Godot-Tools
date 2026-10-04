@@ -772,9 +772,9 @@
 	"src/providers/documentation_builder.ts": {
 		"counts": {
 			"class": 0,
-			"else": 1,
-			"for": 5,
-			"let": 21,
+			"else": 0,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
 			"while": 0
 		},
