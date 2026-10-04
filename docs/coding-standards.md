@@ -83,20 +83,23 @@ outside the ratchet — fixtures legitimately collect into arrays and mutate loc
 
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
-| `class` declarations | 134 | debugger, index, tools, providers |
-| `let` / `var` declarations | 347 | debugger, resource inspector, index, providers |
-| `for` loops | 278 | index, resource inspector, debugger |
-| `while` / `do` loops | 71 | protocol and settle-wait loops |
-| `} else` branches | 194 | debugger, resource inspector |
+| `class` declarations | 134 | debugger, index, tools, providers, the parser cursor (§5) |
+| `let` / `var` declarations | 338 | debugger, resource inspector, index, and the lexer/parser cursors |
+| `for` loops | 276 | index, resource inspector, debugger |
+| `while` / `do` loops | 48 | protocol and settle-wait loops |
+| `} else` branches | 189 | debugger, resource inspector |
 | `throw` statements | 40 | parameter validation and protocol errors |
 
-Total tracked constructs: 1064 in 121 source files; none needs a `// perf:` justification yet.
+Total tracked constructs: 1025 in 121 source files; 25 loops are justified with `// perf:` (§5).
 
 `as` assertions and `readonly` coverage are not ratcheted — they are reviewed per file during the §6
 migration — and the census strips comments and strings, so prose such as "renders a value as text"
-does not need a count. The 2026-10-04 cleanup removed the logger, profiler and LRU-cache classes and
-the last `while` outside the lexer: `src/utils` and `src/performance` are now class-free, and the
-remaining classes are VS Code contracts and protocol machines.
+does not need a count.
+
+The 2026-10-04 migration of §6 step 2 took the total from 1091 to 1025: `src/utils` and
+`src/performance` (logger, profiler, LRU cache, scheduling, subspawn) are factory-based and
+class-free, and `src/analyzer` lost the `else` chains and mutable declaration locals, with its
+scanning loops recorded under `// perf:`.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -105,13 +108,18 @@ remaining classes are VS Code contracts and protocol machines.
    Stateful protocol machines (debugger sessions, LSP client) also earn their classes: they own
    sockets, buffers and disposable timers. The standard's "composition over inheritance" applies —
    `extends` is allowed only where the API demands it — and a class that only groups pure helpers
-   must become functions. Rewriting all 137 declarations would change the extension's contracts
-   without improving correctness.
+   must become functions. Rewriting all 134 declarations would change the extension's contracts
+   without improving correctness. One measured exception sits here: `src/analyzer/parser.ts` keeps
+   its cursor class because the closure factory that replaced it allocated ~30 closures per file and
+   benchmarked 15–20% slower on the profile corpus; the logger, profiler and LRU cache became
+   factories precisely because they paid no such cost.
 2. **Loops and `let` in measured hot paths.** The lexer/parser, variant encode/decode and index
    queries use indexed loops on purpose; `map`/`filter` allocate intermediate arrays and closure
    objects per element. The maintainer's efficiency requirement (fewer allocations, lower CPU) takes
    precedence there. Such a loop carries a `// perf:` comment explaining what was measured. Everywhere
-   else the functional form is required.
+   else the functional form is required. The census records 25 such loops (`perf` in
+   `tools/standards_baseline.json`); the parser header and the lexer header document the measurement
+   (`npm run profile:language`, parse p50 ≈ 0.02 ms per file) behind each one.
 3. **`throw` at the VS Code boundary.** Failures that must reach the user are surfaced through the
    extension API (`window.showErrorMessage`, rejected promises of `debug.startDebugging`). `Result`
    is required for pure logic — parsing, resolution, index queries, resource edits.

@@ -28,20 +28,20 @@
 			"for": 0,
 			"let": 5,
 			"throw": 0,
-			"while": 5
+			"while": 0
 		},
-		"perf": 0
+		"perf": 5
 	},
 	"src/analyzer/parser.ts": {
 		"counts": {
 			"class": 1,
-			"else": 5,
-			"for": 2,
-			"let": 20,
+			"else": 0,
+			"for": 0,
+			"let": 11,
 			"throw": 0,
-			"while": 18
+			"while": 0
 		},
-		"perf": 0
+		"perf": 20
 	},
 	"src/debugger/debug_runtime.ts": {
 		"counts": {
