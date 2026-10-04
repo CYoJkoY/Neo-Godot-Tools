@@ -11,6 +11,14 @@
 
 <!-- generated-release-notes:start -->
 
+### 2.13.1 — 2026-10-04 (pending)
+
+Changes since [v2.13.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.0...v2.13.1).
+
+#### Changed
+
+- Add standalone TSCN property inspector and changelog sync ([#104](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/104))
+
 ### 2.13.0 — 2026-10-04
 
 Changes since [v2.12.5](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.5...v2.13.0).
@@ -20,13 +28,6 @@ Changes since [v2.12.5](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12
 - Update .github/workflows/changelog.yml, .github/workflows/release.yml ([d4ee651](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/d4ee6513d966af298fb426b608f99b182d2a9db2))
 - Inner-class navigation, Scene Preview node properties, and TypeScript-only tooling ([#103](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/103))
 - Update biome.json, pnpm-lock.yaml, pnpm-workspace.yaml ([8d3c369](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/8d3c3690eaf40046b2a31d3da353defda9fed7ce))
-
-#### Documentation
-
-- **changelog:** update changelog \[skip ci\] ([b0b42a7](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/b0b42a75e9b32183126f3d7c6c1f96d4beecff7c))
-- **changelog:** update changelog \[skip ci\] ([0a6b14c](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/0a6b14ce8606b64cf779ce4bf8f8ba98da8c1c0a))
-- **changelog:** update changelog \[skip ci\] ([a332caa](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/a332caa7f712a52f9ce6f03e53dfc615bb88d1b8))
-- **changelog:** update changelog \[skip ci\] ([c716bc8](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/c716bc81b61c12c95798526d6f61ac2492ff20a3))
 
 #### Maintenance
 
