@@ -105,6 +105,7 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	globals.lsp.onStatusChanged(() => {
 		void globals.resourceInspector?.refresh();
+		globals.scenePreviewProvider?.refresh_property_inspector();
 	});
 	globals.linkProvider = createDocumentLinkProvider(context);
 	globals.dropsProvider = createDocumentDropEditProvider(context);

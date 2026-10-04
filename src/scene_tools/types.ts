@@ -53,6 +53,7 @@ export class SceneNode extends TreeItem {
 	constructor(init: SceneNodeInit) {
 		super(init.label, TreeItemCollapsibleState.None);
 		this.label = init.label;
+		this.contextValue = "sceneNode";
 		this.className = init.className;
 		this.path = init.path;
 		this.relativePath = init.relativePath;
@@ -153,7 +154,7 @@ export class Scene {
 	public readonly sourceFingerprint: string;
 	public root: SceneNode | undefined;
 	public externalResources = new Map<string, GDResource>();
-	public subResources = new Map<string, GDResource>();
+	public subResources = new Map<string, SceneResource>();
 	public nodes = new Map<string, SceneNode>();
 
 	constructor(init: SceneInit) {
@@ -168,12 +169,15 @@ export class Scene {
 /** Properties of a node, grouped in the Scene Preview tree. */
 export class ScenePropertiesGroup extends TreeItem {
 	constructor(public node: SceneNode) {
-		super("Properties", TreeItemCollapsibleState.Collapsed);
-		this.description = node.properties.length ? String(node.properties.length) : "none";
+		super("Edit properties…", TreeItemCollapsibleState.None);
+		this.description = node.properties.length ? `${node.properties.length} overridden` : "open inspector";
 		this.contextValue = "sceneProperties";
-		this.tooltip = node.properties.length
-			? "Overridden properties of this node"
-			: "This node overrides no properties";
+		this.tooltip = "Open the dedicated Scene Property Editor for this node";
+		this.command = {
+			command: "neoGodotTools.scenePreview.openPropertyInspector",
+			title: "Edit node properties",
+			arguments: [node],
+		};
 	}
 }
 
@@ -199,5 +203,8 @@ export interface SceneResource {
 	id: string;
 	index: number;
 	line: number;
+	/** Offset of the next section, or the end of the scene. */
+	bodyEnd: number;
 	body: string;
+	properties: SceneProperty[];
 }

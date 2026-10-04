@@ -204,10 +204,15 @@ export class SceneParser {
 					id: attributes.id,
 					index,
 					line: lineAtOffset(index),
+					bodyEnd: -1,
 					body: "",
+					properties: [],
 				};
 				// A resource body ends where the next resource or node begins.
-				if (lastResource) lastResource.body = text.slice(lastResource.index, index).trimEnd();
+				if (lastResource) {
+					lastResource.bodyEnd = index;
+					lastResource.body = text.slice(lastResource.index, index).trimEnd();
+				}
 				if (attributes.id) scene.subResources.set(attributes.id, resource);
 				lastResource = resource;
 				continue;
@@ -223,6 +228,7 @@ export class SceneParser {
 				lastNode = undefined;
 			}
 			if (lastResource) {
+				lastResource.bodyEnd = index;
 				lastResource.body = text.slice(lastResource.index, index).trimEnd();
 				lastResource = undefined;
 			}
@@ -289,7 +295,22 @@ export class SceneParser {
 			lastNode.body = text.slice(lastNode.position);
 			lastNode.parse_body();
 		}
-		if (lastResource) lastResource.body = text.slice(lastResource.index).trimEnd();
+		if (lastResource) {
+			lastResource.bodyEnd = text.length;
+			lastResource.body = text.slice(lastResource.index).trimEnd();
+		}
+		scene.subResources = new Map(
+			Array.from(
+				scene.subResources,
+				([id, resource]) =>
+					[
+						id,
+						resource.bodyEnd >= 0
+							? { ...resource, properties: parseNodeProperties(text, resource.index, resource.bodyEnd) }
+							: resource,
+					] as const,
+			),
+		);
 
 		// Overridden properties are parsed from the raw section text: the offsets
 		// they carry are what the Scene Preview edits.
