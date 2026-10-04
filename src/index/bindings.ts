@@ -1,4 +1,5 @@
 import { GDScriptDeclaration, GDScriptFunction, GDScriptToken, SourceRange } from "../analyzer/index.js";
+import { addToGroup, dropFromGroup } from "./collections.js";
 import { ChainLink, parseChainEndingAt } from "./expression.js";
 import { FileIndex } from "./file_index.js";
 import { IndexedFile, IndexedSymbol } from "./symbol.js";
@@ -83,23 +84,17 @@ function bindingKind(symbol: IndexedSymbol): BindingKind | undefined {
 
 /** Type after `:`: `Outer.Inner`, `Array[int]`, `Callable`. */
 function readTypeName(tokens: readonly GDScriptToken[], start: number): string | undefined {
-	const parts: string[] = [];
-	for (let index = start; index < tokens.length; index++) {
-		const token = tokens[index];
-		const value = token.value;
-		if (token.kind === "identifier") {
-			if (parts.length && parts[parts.length - 1] !== ".") break;
-			parts.push(value);
-			continue;
-		}
-		if (value === ".") {
-			if (!parts.length || parts[parts.length - 1] === ".") break;
-			parts.push(value);
-			continue;
-		}
-		break;
-	}
-	return parts.length ? parts.join("") : undefined;
+	return scanTypeName(tokens, start, "") || undefined;
+}
+
+/** `Ident(.Ident)*` from `index`, stopping at the first token that breaks it. */
+function scanTypeName(tokens: readonly GDScriptToken[], index: number, parts: string): string {
+	const token = tokens[index];
+	if (!token) return parts;
+	if (token.kind === "identifier" && (!parts || parts.endsWith(".")))
+		return scanTypeName(tokens, index + 1, `${parts}${token.value}`);
+	if (token.value === "." && parts && !parts.endsWith(".")) return scanTypeName(tokens, index + 1, `${parts}.`);
+	return parts;
 }
 
 function addBinding(scope: Scope, binding: Binding): void {
@@ -109,7 +104,7 @@ function addBinding(scope: Scope, binding: Binding): void {
 }
 
 function addParameters(scope: Scope, fn: GDScriptFunction, uri: string): void {
-	for (const parameter of fn.parameters)
+	fn.parameters.map((parameter) =>
 		addBinding(scope, {
 			id: `${uri}:${parameter.range.start.offset}`,
 			name: parameter.name,
@@ -119,33 +114,36 @@ function addParameters(scope: Scope, fn: GDScriptFunction, uri: string): void {
 			nameOffset: parameter.range.start.offset,
 			scopeRange: scope.range,
 			type: parameter.type,
-		});
+		}),
+	);
 }
 
 function addLocalDeclarations(tokens: readonly GDScriptToken[], fn: GDScriptFunction, scope: Scope, uri: string): void {
 	if (!fn.bodyRange) return;
-	for (let index = 1; index < tokens.length; index++) {
-		const token = tokens[index];
-		const previous = tokens[index - 1];
-		if (token.start < fn.bodyRange.start.offset || token.end > fn.bodyRange.end.offset) continue;
-		if (
-			token.kind !== "identifier" ||
-			(previous.value !== "var" && previous.value !== "const") ||
-			previous.line !== token.line
+	const body = fn.bodyRange;
+	tokens
+		.map((token, index) => ({ token, index, previous: tokens[index - 1] }))
+		.filter(
+			({ token, previous }) =>
+				previous !== undefined &&
+				token.kind === "identifier" &&
+				(previous.value === "var" || previous.value === "const") &&
+				previous.line === token.line &&
+				token.start >= body.start.offset &&
+				token.end <= body.end.offset,
 		)
-			continue;
-		const type = tokens[index + 1]?.value === ":" ? readTypeName(tokens, index + 2) : undefined;
-		addBinding(scope, {
-			id: `${uri}:${token.start}`,
-			name: token.value,
-			kind: "local",
-			uri,
-			declarationRange: tokenRange(token),
-			nameOffset: token.start,
-			scopeRange: scope.range,
-			type,
-		});
-	}
+		.map(({ token, index }) =>
+			addBinding(scope, {
+				id: `${uri}:${token.start}`,
+				name: token.value,
+				kind: "local",
+				uri,
+				declarationRange: tokenRange(token),
+				nameOffset: token.start,
+				scopeRange: scope.range,
+				type: tokens[index + 1]?.value === ":" ? readTypeName(tokens, index + 2) : undefined,
+			}),
+		);
 }
 
 function createScope(range: SourceRange, kind: ScopeKind, parent?: Scope): Scope {
@@ -154,62 +152,77 @@ function createScope(range: SourceRange, kind: ScopeKind, parent?: Scope): Scope
 	return scope;
 }
 
+/** Binding record for an indexed symbol declared inside `scopeRange`. */
+function symbolBinding(
+	symbol: IndexedSymbol,
+	kind: BindingKind,
+	uri: string,
+	scopeRange: SourceRange,
+	containerName?: string,
+): Binding {
+	return {
+		id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
+		name: symbol.name,
+		kind,
+		uri,
+		declarationRange: symbol.range,
+		nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
+		scopeRange,
+		containerName,
+		type: symbol.type,
+		returnType: symbol.returnType,
+	};
+}
+
 function buildScopes(file: IndexedFile, uri: string): Scope {
 	const tokens = tokensFor(uri, file.source, file.sourceFingerprint);
 	const root = createScope(file.ast.range, "root");
-	for (const symbol of file.symbols) {
-		const kind = bindingKind(symbol);
-		if (kind && !symbol.containerName)
-			addBinding(root, {
-				id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
-				name: symbol.name,
-				kind,
-				uri,
-				declarationRange: symbol.range,
-				nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
-				scopeRange: root.range,
-				type: symbol.type,
-				returnType: symbol.returnType,
-			});
-	}
 
-	const visit = (declarations: GDScriptDeclaration[], parent: Scope) => {
-		for (const declaration of declarations) {
-			if (declaration.kind === "class") {
-				const classScope = createScope(declaration.range, "class", parent);
-				for (const symbol of file.symbols) {
-					if (symbol.containerName !== declaration.name) continue;
-					const kind = bindingKind(symbol);
-					if (kind)
-						addBinding(classScope, {
-							id: `${uri}:${symbol.nameOffset ?? symbol.range.start.offset}`,
-							name: symbol.name,
-							kind,
-							uri,
-							declarationRange: symbol.range,
-							nameOffset: symbol.nameOffset ?? symbol.range.start.offset,
-							scopeRange: classScope.range,
-							containerName: declaration.name,
-							type: symbol.type,
-							returnType: symbol.returnType,
-						});
-				}
-				visit(declaration.declarations, classScope);
-				continue;
-			}
-			if (declaration.kind !== "function") continue;
-			const functionScope = createScope(declaration.range, "function", parent);
-			addParameters(functionScope, declaration, uri);
-			addLocalDeclarations(tokens, declaration, functionScope, uri);
-		}
+	/** Adds the bindings of every symbol with a binding kind that `matches`. */
+	const addSymbols = (scope: Scope, matches: (symbol: IndexedSymbol) => boolean, containerName?: string): void => {
+		file.symbols
+			.filter(matches)
+			.map((symbol) => ({ symbol, kind: bindingKind(symbol) }))
+			.filter((entry): entry is { symbol: IndexedSymbol; kind: BindingKind } => entry.kind !== undefined)
+			.map((entry) =>
+				addBinding(scope, symbolBinding(entry.symbol, entry.kind, uri, scope.range, containerName)),
+			);
 	};
+
+	const visitDeclaration = (declaration: GDScriptDeclaration, parent: Scope): void => {
+		if (declaration.kind === "class") {
+			const classScope = createScope(declaration.range, "class", parent);
+			addSymbols(classScope, (symbol) => symbol.containerName === declaration.name, declaration.name);
+			visit(declaration.declarations, classScope);
+			return;
+		}
+		if (declaration.kind !== "function") return;
+		const functionScope = createScope(declaration.range, "function", parent);
+		addParameters(functionScope, declaration, uri);
+		addLocalDeclarations(tokens, declaration, functionScope, uri);
+	};
+	const visit = (declarations: GDScriptDeclaration[], parent: Scope): void => {
+		declarations.map((declaration) => visitDeclaration(declaration, parent));
+	};
+
+	addSymbols(root, (symbol) => !symbol.containerName);
 	visit(file.ast.declarations, root);
 	return root;
 }
 
 function findInnermostScope(scope: Scope, offset: number): Scope {
-	for (const child of scope.children) if (contains(child.range, offset)) return findInnermostScope(child, offset);
-	return scope;
+	const child = scope.children.find((candidate) => contains(candidate.range, offset));
+	return child ? findInnermostScope(child, offset) : scope;
+}
+
+/** Innermost scope at `offset` first, then its ancestors. */
+function scopeChain(root: Scope, offset: number): Scope[] {
+	return ancestors(findInnermostScope(root, offset));
+}
+
+/** `scope` followed by every enclosing scope, innermost first. */
+function ancestors(scope: Scope): Scope[] {
+	return scope.parent ? [scope, ...ancestors(scope.parent)] : [scope];
 }
 
 function findBinding(scope: Scope, name: string, offset: number): Binding | undefined {
@@ -287,18 +300,10 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 		scopes.set(uri, root);
 		const bindings = allBindings(root);
 		byUri.set(uri, bindings);
-		for (const binding of bindings) {
-			const entries = byName.get(binding.name) ?? [];
-			entries.push(binding);
-			byName.set(binding.name, entries);
-		}
+		bindings.map((binding) => addToGroup(byName, binding.name, binding));
 		const references = resolveReferences(tokensFor(uri, file.source, file.sourceFingerprint), uri);
 		referencesByUri.set(uri, references);
-		for (const reference of references) {
-			const entries = referencesByBinding.get(reference.bindingId) ?? [];
-			entries.push(reference);
-			referencesByBinding.set(reference.bindingId, entries);
-		}
+		references.map((reference) => addToGroup(referencesByBinding, reference.bindingId, reference));
 	};
 
 	const getBinding = (uri: string, offset: number, name: string): Binding | undefined => {
@@ -323,14 +328,11 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	): Binding | undefined => {
 		const root = scopes.get(uri);
 		if (!root) return undefined;
-		let scope: Scope | undefined = findInnermostScope(root, offset);
-		while (scope) {
-			if (allowFunctionScopes || scope.kind !== "function") {
-				const binding = findBinding(scope, name, offset);
-				if (binding) return binding;
-			}
-			scope = scope.parent;
-		}
+		const scope = scopeChain(root, offset)
+			.filter((candidate) => allowFunctionScopes || candidate.kind !== "function")
+			.map((candidate) => findBinding(candidate, name, offset))
+			.find((binding) => binding !== undefined);
+		if (scope) return scope;
 		const global = byName.get(name) ?? [];
 		return global.length === 1 ? global[0] : undefined;
 	};
@@ -343,23 +345,17 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	const getVisibleBindings = (uri: string, offset: number): Binding[] => {
 		const root = scopes.get(uri);
 		if (!root) return [];
-		const result: Binding[] = [];
 		const names = new Set<string>();
-		let scope: Scope | undefined = findInnermostScope(root, offset);
-		while (scope) {
-			const visible: Binding[] = [];
-			for (const [name] of scope.bindings) {
-				if (names.has(name)) continue;
-				const binding = findBinding(scope, name, offset);
-				if (!binding) continue;
-				names.add(name);
-				visible.push(binding);
-			}
-			visible.sort((left, right) => left.declarationRange.start.offset - right.declarationRange.start.offset);
-			result.push(...visible);
-			scope = scope.parent;
-		}
-		return result;
+		const visibleIn = (scope: Scope): Binding[] => {
+			const visible = [...scope.bindings.keys()]
+				.filter((name) => !names.has(name))
+				.map((name) => findBinding(scope, name, offset))
+				.filter((binding): binding is Binding => binding !== undefined)
+				.sort((left, right) => left.declarationRange.start.offset - right.declarationRange.start.offset);
+			visible.map((binding) => names.add(binding.name));
+			return scope.parent ? [...visible, ...visibleIn(scope.parent)] : visible;
+		};
+		return visibleIn(findInnermostScope(root, offset));
 	};
 
 	const findReferences = (bindingId: string): BoundReference[] => {
@@ -370,30 +366,18 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 
 	const remove = (uri: string): void => {
 		scopes.delete(uri);
-		const references = referencesByUri.get(uri);
-		if (references) {
-			for (const reference of references) {
-				const entries = referencesByBinding.get(reference.bindingId);
-				if (!entries) continue;
-				const remaining = entries.filter(
-					(entry) => entry.uri !== uri || entry.range.start.offset !== reference.range.start.offset,
-				);
-				if (remaining.length) referencesByBinding.set(reference.bindingId, remaining);
-				else referencesByBinding.delete(reference.bindingId);
-			}
-			referencesByUri.delete(uri);
-		}
-		const own = byUri.get(uri);
-		if (own) {
-			byUri.delete(uri);
-			for (const binding of own) {
-				const entries = byName.get(binding.name);
-				if (!entries) continue;
-				const remaining = entries.filter((entry) => entry.id !== binding.id);
-				if (remaining.length) byName.set(binding.name, remaining);
-				else byName.delete(binding.name);
-			}
-		}
+		const references = referencesByUri.get(uri) ?? [];
+		references.map((reference) =>
+			dropFromGroup(
+				referencesByBinding,
+				reference.bindingId,
+				(entry) => entry.uri === uri && entry.range.start.offset === reference.range.start.offset,
+			),
+		);
+		referencesByUri.delete(uri);
+		const own = byUri.get(uri) ?? [];
+		own.map((binding) => dropFromGroup(byName, binding.name, (entry) => entry.id === binding.id));
+		byUri.delete(uri);
 	};
 
 	const clear = (): void => {
@@ -408,47 +392,61 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 		return [...scope.bindings.values()].flat().concat(...scope.children.map((child) => allBindings(child)));
 	};
 
-	const resolveReferences = (tokens: readonly GDScriptToken[], uri: string): BoundReference[] => {
-		const result: BoundReference[] = [];
-		for (let index = 0; index < tokens.length; index++) {
-			const token = tokens[index];
-			if (token.kind !== "identifier" || nonReferenceIdentifiers.has(token.value)) continue;
-			const previous = tokens[index - 1]?.value;
-			if (previous === ".") {
-				const previousPrevious = tokens[index - 2]?.value;
-				if (previousPrevious === "self") {
-					// `self.member` always addresses a class member, never a local
-					// variable or parameter with the same name. Inside an inner class
-					// the member may be inherited (`self.ping()` → `Base.ping`), which
-					// the plain scope lookup cannot see.
-					const scopeMember = getMemberBinding(uri, token.start, token.value);
-					const chain = scopeMember ? undefined : parseChainEndingAt(tokens, tokens[index - 1].start);
-					const member =
-						scopeMember ?? (chain ? resolveChainMember(uri, token.start, chain, token.value) : undefined);
-					if (!member) continue;
-					result.push({ bindingId: member.id, name: token.value, uri, range: tokenRange(token) });
-					continue;
-				}
-				if (previousPrevious === "super") {
-					const member = resolveSuperMember(uri, token.start, token.value);
-					if (member) result.push({ bindingId: member.id, name: token.value, uri, range: tokenRange(token) });
-					continue;
-				}
-				// `Worker.run()`, `A.Inner.run()`, `Worker.new().run()` and
-				// `make().run()` all bind to the member of the class behind the
-				// receiver expression, so find-references and rename cover nested
-				// classes instead of falling back to a name guess.
-				const chain = parseChainEndingAt(tokens, tokens[index - 1].start);
-				const member = chain ? resolveChainMember(uri, token.start, chain, token.value) : undefined;
-				if (member) result.push({ bindingId: member.id, name: token.value, uri, range: tokenRange(token) });
-				continue;
-			}
-			const binding = getBinding(uri, token.start, token.value);
-			if (!binding) continue;
-			result.push({ bindingId: binding.id, name: token.value, uri, range: tokenRange(token) });
-		}
-		return result;
+	const resolveReferences = (tokens: readonly GDScriptToken[], uri: string): BoundReference[] =>
+		tokens
+			.map((token, index) => ({ token, index }))
+			.filter(({ token }) => token.kind === "identifier" && !nonReferenceIdentifiers.has(token.value))
+			.map(({ token, index }) => referenceFor(tokens, uri, token, index))
+			.filter((reference): reference is BoundReference => reference !== undefined);
+
+	/** Reference for one identifier, or `undefined` when it binds to nothing. */
+	const referenceFor = (
+		tokens: readonly GDScriptToken[],
+		uri: string,
+		token: GDScriptToken,
+		index: number,
+	): BoundReference | undefined => {
+		if (tokens[index - 1]?.value !== ".")
+			return boundReference(getBinding(uri, token.start, token.value), token, uri);
+		return boundReference(memberAfterDot(tokens, uri, token, index), token, uri);
 	};
+
+	const boundReference = (
+		binding: Binding | undefined,
+		token: GDScriptToken,
+		uri: string,
+	): BoundReference | undefined =>
+		binding ? { bindingId: binding.id, name: token.value, uri, range: tokenRange(token) } : undefined;
+
+	/** Member addressed by `receiver.token`, resolved through the receiver chain. */
+	const memberAfterDot = (
+		tokens: readonly GDScriptToken[],
+		uri: string,
+		token: GDScriptToken,
+		index: number,
+	): Binding | undefined => {
+		const previousPrevious = tokens[index - 2]?.value;
+		if (previousPrevious === "self") {
+			// `self.member` always addresses a class member, never a local variable
+			// or parameter with the same name. Inside an inner class the member may
+			// be inherited (`self.ping()` → `Base.ping`), which the plain scope
+			// lookup cannot see.
+			const scopeMember = getMemberBinding(uri, token.start, token.value);
+			return scopeMember ?? chainMember(uri, token, parseChainEndingAt(tokens, tokens[index - 1].start));
+		}
+		if (previousPrevious === "super") return resolveSuperMember(uri, token.start, token.value);
+		// `Worker.run()`, `A.Inner.run()`, `Worker.new().run()` and `make().run()`
+		// all bind to the member of the class behind the receiver expression, so
+		// find-references and rename cover nested classes instead of falling back
+		// to a name guess.
+		return chainMember(uri, token, parseChainEndingAt(tokens, tokens[index - 1].start));
+	};
+
+	const chainMember = (
+		uri: string,
+		token: GDScriptToken,
+		chain: readonly ChainLink[] | undefined,
+	): Binding | undefined => (chain ? resolveChainMember(uri, token.start, chain, token.value) : undefined);
 
 	/**
 	 * The member addressed through `receiver.member`, where the receiver is a
@@ -477,32 +475,38 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	const chainClass = (uri: string, offset: number, chain: readonly ChainLink[]): IndexedSymbol | undefined => {
 		const file = files.get(uri);
 		if (!file || !chain.length) return undefined;
-		let current: IndexedSymbol | undefined;
-		for (let index = 0; index < chain.length; index++) {
-			const link = chain[index];
-			if (index === 0) {
-				current = namedClass(file, link.name, offset);
-				if (!current && !link.call) {
-					const inferred = inferReceiverTypeName(uri, offset, link.name);
-					current = inferred ? namedClass(file, inferred, offset) : undefined;
-				}
-				if (!current && !link.call && link.name === "self") current = containingClass(file, offset);
-				if (!current) return undefined;
-				continue;
-			}
-			// `Type.new(...)` constructs the class the chain already resolved to.
-			if (link.call && link.name === "new") continue;
-			if (!current) return undefined;
-			const member = findClassMember(current.uri, current, link.name, new Set<string>());
-			if (!member) return undefined;
-			const typeName = link.call ? member.returnType : (member.type ?? member.name);
-			if (!typeName) return undefined;
-			const normalized = typeName.replace(/^([A-Za-z_]\w*).*$/, "$1");
-			const next = namedClass(file, normalized, offset) ?? classCandidateOf(current.uri, normalized, offset);
-			if (!next) return undefined;
-			current = next;
-		}
-		return current;
+		return chain.reduce<IndexedSymbol | undefined>(
+			(current, link, index) =>
+				index === 0 ? chainStart(file, uri, offset, link) : chainStep(file, current, link, offset),
+			undefined,
+		);
+	};
+
+	/** First link of a chain: a class name, an inferred variable type, or `self`. */
+	const chainStart = (file: IndexedFile, uri: string, offset: number, link: ChainLink): IndexedSymbol | undefined => {
+		const named = namedClass(file, link.name, offset);
+		if (named || link.call) return named;
+		const inferred = inferReceiverTypeName(uri, offset, link.name);
+		const inferredClass = inferred ? namedClass(file, inferred, offset) : undefined;
+		if (inferredClass) return inferredClass;
+		return link.name === "self" ? containingClass(file, offset) : undefined;
+	};
+
+	/** One link after the first: `Type.new(...)` keeps the type, members move to theirs. */
+	const chainStep = (
+		file: IndexedFile,
+		current: IndexedSymbol | undefined,
+		link: ChainLink,
+		offset: number,
+	): IndexedSymbol | undefined => {
+		if (!current) return undefined;
+		if (link.call && link.name === "new") return current;
+		const member = findClassMember(current.uri, current, link.name, new Set<string>());
+		if (!member) return undefined;
+		const typeName = link.call ? member.returnType : (member.type ?? member.name);
+		if (!typeName) return undefined;
+		const normalized = typeName.replace(/^([A-Za-z_]\w*).*$/, "$1");
+		return namedClass(file, normalized, offset) ?? classCandidateOf(current.uri, normalized, offset);
 	};
 
 	const classCandidateOf = (uri: string, name: string, offset: number): IndexedSymbol | undefined => {
@@ -516,13 +520,12 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 
 	/** Innermost class declaration containing `offset`. */
 
-	const containingClass = (file: IndexedFile, offset: number): IndexedSymbol | undefined => {
-		const classes = file.symbols.filter(
-			(symbol) =>
-				symbol.kind === "class" && symbol.range.start.offset <= offset && offset <= symbol.range.end.offset,
-		);
-		return classes.sort((left, right) => right.range.start.offset - left.range.start.offset)[0];
-	};
+	const containingClass = (file: IndexedFile, offset: number): IndexedSymbol | undefined =>
+		file.symbols.reduce<IndexedSymbol | undefined>((innermost, symbol) => {
+			if (symbol.kind !== "class") return innermost;
+			if (symbol.range.start.offset > offset || symbol.range.end.offset < offset) return innermost;
+			return !innermost || symbol.range.start.offset > innermost.range.start.offset ? symbol : innermost;
+		}, undefined);
 
 	/** A class declaration named `name` visible at `offset`, preferring the innermost. */
 

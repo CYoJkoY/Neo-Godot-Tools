@@ -1,4 +1,5 @@
 import { GDScriptDeclaration } from "../analyzer/index.js";
+import { addToSet, dropFromSet } from "./collections.js";
 import { FileIndex, normalizedFilePath } from "./file_index.js";
 
 export interface DependencyEdge {
@@ -44,21 +45,6 @@ function collectClassNames(declarations: GDScriptDeclaration[]): string[] {
 function baseName(path: string): string {
 	const index = path.lastIndexOf("/");
 	return index >= 0 ? path.slice(index + 1) : path;
-}
-
-/** Adds `value` to the set under `key`, creating the set on first use. */
-function addToSet<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
-	const entries = map.get(key) ?? new Set<V>();
-	entries.add(value);
-	map.set(key, entries);
-}
-
-/** Removes `value` from the set under `key`, dropping the key when it empties. */
-function dropFromSet<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
-	const entries = map.get(key);
-	if (!entries) return;
-	entries.delete(value);
-	if (!entries.size) map.delete(key);
 }
 
 export interface DependencyGraph {

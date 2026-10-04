@@ -399,10 +399,21 @@
 		"counts": {
 			"class": 0,
 			"else": 0,
-			"for": 14,
-			"let": 7,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
-			"while": 2
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/index/collections.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
 		},
 		"perf": 0
 	},

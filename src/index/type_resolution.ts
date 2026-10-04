@@ -4,8 +4,10 @@ import {
 	GDScriptFunction,
 	GDScriptToken,
 	GDScriptVariable,
+	SourceRange,
 } from "../analyzer/index.js";
 import { Binding, BindingIndex } from "./bindings.js";
+import { addToGroup, deleteMatching } from "./collections.js";
 import { collectControlFlowAssignments } from "./control_flow.js";
 import { ChainLink, dotBefore, memberAccessDot, parseChainEndingAt, startsStatement } from "./expression.js";
 import { FileIndex } from "./file_index.js";
@@ -174,16 +176,6 @@ function tokenText(tokens: GDScriptToken[]): string {
 		.join(" ")
 		.trim();
 }
-/** Appends `value` to the list under `key`, creating the list on first use. */
-function appendToGroup<K, V>(map: Map<K, V[]>, key: K, value: V): void {
-	const entries = map.get(key);
-	if (entries) {
-		entries.push(value);
-		return;
-	}
-	map.set(key, [value]);
-}
-
 /** Index of the `=` assigning to the name at `nameIndex`, or `tokens.length`. */
 function equalsIndex(tokens: GDScriptToken[], nameIndex: number): number {
 	if (tokens[nameIndex + 1]?.value !== ":") return nameIndex + 1;
@@ -214,23 +206,23 @@ function parseStatement(tokens: GDScriptToken[]): LocalStatement | undefined {
 		offset: name.start,
 	};
 }
+/** Tokens inside a function body, in source order. */
+function bodyTokens(tokens: readonly GDScriptToken[], bodyRange: SourceRange): GDScriptToken[] {
+	const start = tokens.findIndex((token) => token.start >= bodyRange.start.offset);
+	if (start < 0) return [];
+	const end = tokens.findIndex((token) => token.end > bodyRange.end.offset);
+	return tokens.slice(start, end < 0 ? tokens.length : end);
+}
+
 function collectBodyStatements(
 	tokens: readonly GDScriptToken[],
 	bodyRange: GDScriptFunction["bodyRange"],
 ): LocalStatement[] {
 	if (!bodyRange) return [];
-	// Tokens are ordered, so filtering to the body span is the cursor walk the
-	// old accumulator did, and grouping by line keeps one statement per line.
 	const lines = new Map<number, GDScriptToken[]>();
-	tokens
-		.filter(
-			(token) =>
-				token.kind !== "eof" &&
-				token.kind !== "newline" &&
-				token.start >= bodyRange.start.offset &&
-				token.end <= bodyRange.end.offset,
-		)
-		.map((token) => appendToGroup(lines, token.line, token));
+	bodyTokens(tokens, bodyRange)
+		.filter((token) => token.kind !== "newline" && token.kind !== "eof")
+		.map((token) => addToGroup(lines, token.line, token));
 	return [...lines.values()]
 		.map((lineTokens) => parseStatement(lineTokens))
 		.filter((statement): statement is LocalStatement => statement !== undefined);
@@ -246,11 +238,6 @@ function mergeMembers(own: readonly IndexedSymbol[], inherited: readonly Indexed
 		merged.push(symbol);
 	});
 	return merged;
-}
-
-/** Deletes every entry whose key/value matches; the map is the only state to touch. */
-function deleteMatching<K, V>(map: Map<K, V>, matches: (key: K, value: V) => boolean): void {
-	[...map.entries()].filter(([key, value]) => matches(key, value)).map(([key]) => map.delete(key));
 }
 
 function normalizeScriptReference(value: string): string {
