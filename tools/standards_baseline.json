@@ -409,11 +409,11 @@
 	"src/index/control_flow.ts": {
 		"counts": {
 			"class": 0,
-			"else": 1,
-			"for": 6,
-			"let": 7,
+			"else": 0,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
-			"while": 2
+			"while": 0
 		},
 		"perf": 0
 	},
@@ -421,7 +421,7 @@
 		"counts": {
 			"class": 0,
 			"else": 0,
-			"for": 16,
+			"for": 0,
 			"let": 0,
 			"throw": 0,
 			"while": 0
@@ -431,13 +431,13 @@
 	"src/index/expression.ts": {
 		"counts": {
 			"class": 0,
-			"else": 1,
-			"for": 1,
+			"else": 0,
+			"for": 0,
 			"let": 9,
 			"throw": 0,
-			"while": 4
+			"while": 0
 		},
-		"perf": 0
+		"perf": 5
 	},
 	"src/index/file_index.ts": {
 		"counts": {

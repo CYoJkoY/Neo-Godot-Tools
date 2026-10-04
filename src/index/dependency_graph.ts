@@ -15,10 +15,8 @@ function normalizePath(value: string): string {
 }
 
 function collectPreloads(source: string): string[] {
-	const result: string[] = [];
 	const pattern = /preload\s*\(\s*["']([^"']+)["']\s*\)/g;
-	for (const match of source.matchAll(pattern)) result.push(match[1]);
-	return result;
+	return [...source.matchAll(pattern)].map((match) => match[1]);
 }
 
 function collectExtends(declarations: GDScriptDeclaration[]): string[] {
@@ -46,6 +44,21 @@ function collectClassNames(declarations: GDScriptDeclaration[]): string[] {
 function baseName(path: string): string {
 	const index = path.lastIndexOf("/");
 	return index >= 0 ? path.slice(index + 1) : path;
+}
+
+/** Adds `value` to the set under `key`, creating the set on first use. */
+function addToSet<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
+	const entries = map.get(key) ?? new Set<V>();
+	entries.add(value);
+	map.set(key, entries);
+}
+
+/** Removes `value` from the set under `key`, dropping the key when it empties. */
+function dropFromSet<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
+	const entries = map.get(key);
+	if (!entries) return;
+	entries.delete(value);
+	if (!entries.size) map.delete(key);
 }
 
 export interface DependencyGraph {
@@ -89,15 +102,11 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 		const file = files.get(uri);
 		if (!file) return refreshForTarget(uri, previousClassNames);
 		const targets = new Map<string, DependencyEdge>();
-		for (const value of collectExtends(file.ast.declarations)) addCandidate(uri, value, "extends", targets);
-		for (const value of collectPreloads(file.source)) addCandidate(uri, value, "preload", targets);
+		collectExtends(file.ast.declarations).map((value) => addCandidate(uri, value, "extends", targets));
+		collectPreloads(file.source).map((value) => addCandidate(uri, value, "preload", targets));
 		const edges = [...targets.values()];
 		outgoing.set(uri, edges);
-		for (const edge of edges) {
-			const dependents = incoming.get(edge.to) ?? new Set<string>();
-			dependents.add(uri);
-			incoming.set(edge.to, dependents);
-		}
+		edges.map((edge) => addToSet(incoming, edge.to, uri));
 		return refreshForTarget(uri, previousClassNames);
 	};
 
@@ -131,24 +140,19 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 		ensureClassIndex();
 		const dependents = [...getDependents(uri)];
 		const keys = targetKeys(uri);
-		for (const dependent of dependents) {
+		dependents.map((dependent) => {
 			const edges = outgoing.get(dependent) ?? [];
 			const remaining = edges.filter((edge) => edge.to !== uri);
-			if (remaining.length !== edges.length) {
-				outgoing.set(dependent, remaining);
-				for (const key of keys) {
-					const candidates = unresolved.get(key) ?? new Set<string>();
-					candidates.add(dependent);
-					unresolved.set(key, candidates);
-					const registered = unresolvedByUri.get(dependent) ?? new Set<string>();
-					registered.add(key);
-					unresolvedByUri.set(dependent, registered);
-				}
-			}
-		}
+			if (remaining.length === edges.length) return;
+			outgoing.set(dependent, remaining);
+			keys.map((key) => {
+				addToSet(unresolved, key, dependent);
+				addToSet(unresolvedByUri, dependent, key);
+			});
+		});
 		removeOutgoing(uri);
 		incoming.delete(uri);
-		for (const entries of incoming.values()) entries.delete(uri);
+		[...incoming.values()].map((entries) => entries.delete(uri));
 		classNames.delete(uri);
 		forgetClassNames(uri);
 		forgetPath(uri);
@@ -178,28 +182,24 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 	 */
 	const ensureClassIndex = (): void => {
 		if (indexedUris.size === files.size) return;
-		for (const file of files.values()) {
-			if (indexedUris.has(file.uri)) continue;
-			indexedUris.add(file.uri);
-			if (!pathsByUri.has(file.uri)) rememberPath(file.uri);
-			if (!classNamesByUri.has(file.uri)) rememberClassNames(file.uri);
-		}
+		[...files.values()]
+			.filter((file) => !indexedUris.has(file.uri))
+			.map((file) => {
+				indexedUris.add(file.uri);
+				if (!pathsByUri.has(file.uri)) rememberPath(file.uri);
+				if (!classNamesByUri.has(file.uri)) rememberClassNames(file.uri);
+			});
 	};
 
 	const refreshForTarget = (uri: string, extraKeys: readonly string[] = []): string[] => {
-		const candidates = new Set<string>();
-		for (const key of [...targetKeys(uri), ...extraKeys]) {
-			for (const candidate of unresolved.get(key) ?? []) {
-				if (candidate !== uri) candidates.add(candidate);
-			}
-		}
+		const candidates = new Set(
+			[...targetKeys(uri), ...extraKeys].flatMap((key) => [...(unresolved.get(key) ?? [])]),
+		);
+		candidates.delete(uri);
 		if (!candidates.size) return [];
 		refreshing.add(uri);
 		try {
-			for (const candidate of candidates) {
-				if (refreshing.has(candidate)) continue;
-				update(candidate);
-			}
+			[...candidates].filter((candidate) => !refreshing.has(candidate)).map(update);
 		} finally {
 			refreshing.delete(uri);
 		}
@@ -216,23 +216,14 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 		}
 		classNames.set(uri, names);
 		classNamesByUri.set(uri, names);
-		for (const name of names) {
-			const entries = classNameToUris.get(name) ?? new Set<string>();
-			entries.add(uri);
-			classNameToUris.set(name, entries);
-		}
+		names.map((name) => addToSet(classNameToUris, name, uri));
 	};
 
 	const forgetClassNames = (uri: string): void => {
 		const names = classNamesByUri.get(uri);
 		if (!names) return;
 		classNamesByUri.delete(uri);
-		for (const name of names) {
-			const entries = classNameToUris.get(name);
-			if (!entries) continue;
-			entries.delete(uri);
-			if (!entries.size) classNameToUris.delete(name);
-		}
+		names.map((name) => dropFromSet(classNameToUris, name, uri));
 	};
 
 	const rememberPath = (uri: string): void => {
@@ -240,21 +231,14 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 		if (previous !== undefined) return;
 		const path = normalizePath(normalizedFilePath(uri));
 		pathsByUri.set(uri, path);
-		const key = baseName(path);
-		const entries = pathToUris.get(key) ?? new Set<string>();
-		entries.add(uri);
-		pathToUris.set(key, entries);
+		addToSet(pathToUris, baseName(path), uri);
 	};
 
 	const forgetPath = (uri: string): void => {
 		const path = pathsByUri.get(uri);
 		if (path === undefined) return;
 		pathsByUri.delete(uri);
-		const key = baseName(path);
-		const entries = pathToUris.get(key);
-		if (!entries) return;
-		entries.delete(uri);
-		if (!entries.size) pathToUris.delete(key);
+		dropFromSet(pathToUris, baseName(path), uri);
 	};
 
 	const classNamesOf = (uri: string): string[] => {
@@ -281,12 +265,10 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 			return;
 		}
 		const registered = unresolvedByUri.get(uri) ?? new Set<string>();
-		for (const key of candidateKeys(value)) {
-			const candidates = unresolved.get(key) ?? new Set<string>();
-			candidates.add(uri);
-			unresolved.set(key, candidates);
+		candidateKeys(value).map((key) => {
+			addToSet(unresolved, key, uri);
 			registered.add(key);
-		}
+		});
 		unresolvedByUri.set(uri, registered);
 	};
 
@@ -294,18 +276,13 @@ export function createDependencyGraph(files: FileIndex): DependencyGraph {
 		const registered = unresolvedByUri.get(uri);
 		if (registered) {
 			unresolvedByUri.delete(uri);
-			for (const key of registered) {
-				const candidates = unresolved.get(key);
-				if (!candidates) continue;
-				candidates.delete(uri);
-				if (!candidates.size) unresolved.delete(key);
-			}
+			[...registered].map((key) => dropFromSet(unresolved, key, uri));
 		}
-		for (const edge of outgoing.get(uri) ?? []) {
+		(outgoing.get(uri) ?? []).map((edge) => {
 			const dependents = incoming.get(edge.to);
 			dependents?.delete(uri);
 			if (dependents?.size === 0) incoming.delete(edge.to);
-		}
+		});
 		outgoing.delete(uri);
 	};
 
