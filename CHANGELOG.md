@@ -11,6 +11,15 @@
 
 <!-- generated-release-notes:start -->
 
+### 2.13.0 — 2026-10-04
+
+Changes since [v2.12.5](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.5...v2.13.0).
+
+#### Changed
+
+- Update .github/workflows/changelog.yml, .github/workflows/release.yml ([d4ee651](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/d4ee6513d966af298fb426b608f99b182d2a9db2))
+- Inner-class navigation, Scene Preview node properties, and TypeScript-only tooling ([#103](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/103))
+
 ### 2.12.5 — 2026-10-03
 
 Changes since [v2.12.4](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.12.4...v2.12.5).
