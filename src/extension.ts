@@ -17,10 +17,7 @@ import {
 	GDCompletionItemProvider,
 	GDDefinitionProvider,
 	GDDocumentDropEditProvider,
-	GDDocumentLinkProvider,
 	GDDocumentSymbolProvider,
-	GDDocumentationProvider,
-	GDHoverProvider,
 	GDInlayHintsProvider,
 	GDReferenceProvider,
 	GDRenameProvider,
@@ -28,6 +25,13 @@ import {
 	GDSignatureHelpProvider,
 	GDTaskProvider,
 	GDWorkspaceSymbolProvider,
+} from "./providers";
+import type { GDDocumentLinkProvider, GDDocumentationProvider, GDHoverProvider } from "./providers";
+import {
+	createDocumentLinkProvider,
+	createDocumentationProvider,
+	createHoverProvider,
+	createInlayHintsProvider,
 } from "./providers";
 import { ResourceInspectorProvider } from "./resource_inspector/provider";
 import { ScenePreviewProvider } from "./scene_tools";
@@ -92,12 +96,15 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.lsp.onStatusChanged(() => {
 		void globals.resourceInspector?.refresh();
 	});
-	globals.linkProvider = new GDDocumentLinkProvider(context);
+	globals.linkProvider = createDocumentLinkProvider(context);
 	globals.dropsProvider = new GDDocumentDropEditProvider(context);
-	globals.hoverProvider = new GDHoverProvider(context, globals.languageService, new HoverFallback());
-	globals.inlayProvider = new GDInlayHintsProvider(context);
+	globals.hoverProvider = createHoverProvider(context, {
+		languageService: globals.languageService,
+		fallback: new HoverFallback(),
+	});
+	globals.inlayProvider = createInlayHintsProvider(context, { lsp: () => globals.lsp });
 	globals.formattingProvider = new FormattingProvider(context);
-	globals.docsProvider = new GDDocumentationProvider(context);
+	globals.docsProvider = createDocumentationProvider(context, { lsp: () => globals.lsp?.client });
 	globals.definitionProvider = new GDDefinitionProvider(context, globals.languageService);
 	globals.documentSymbolProvider = new GDDocumentSymbolProvider(context, globals.languageService);
 	globals.referenceProvider = new GDReferenceProvider(context, globals.languageService);
@@ -113,7 +120,7 @@ export function activate(context: vscode.ExtensionContext) {
 		globals.languageService,
 		new SignatureHelpFallback(),
 	);
-	// globals.semanticTokensProvider = new GDSemanticTokensProvider(context);
+	// globals.semanticTokensProvider = createSemanticTokensProvider(context);
 	// globals.tasksProvider = new GDTaskProvider(context);
 
 	if (is_debug_mode()) {

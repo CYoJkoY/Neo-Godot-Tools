@@ -305,6 +305,35 @@ class Disposable {
 	dispose(): void {}
 }
 
+class TextEdit {
+	[key: string]: unknown;
+	static insert(position: Position, newText: string): TextEdit {
+		return new TextEdit(new Range(position, position), newText);
+	}
+
+	constructor(
+		public range: Range,
+		public newText: string,
+	) {}
+}
+
+/** Values mirror VS Code's `InlayHintKind`. */
+const InlayHintKind = { Type: 1, Parameter: 2 };
+
+class InlayHint {
+	[key: string]: unknown;
+	paddingLeft = false;
+	paddingRight = false;
+	textEdits?: TextEdit[];
+	tooltip?: unknown;
+
+	constructor(
+		public position: Position,
+		public label: string | unknown[],
+		public kind?: number,
+	) {}
+}
+
 class WorkspaceEdit {
 	[key: string]: unknown;
 	edits: Array<{ uri: Uri; range?: Range; newText?: string; edits?: unknown }> = [];
@@ -636,6 +665,9 @@ export {
 	EventEmitter,
 	Disposable,
 	WorkspaceEdit,
+	TextEdit,
+	InlayHint,
+	InlayHintKind,
 	RelativePattern,
 	ThemeColor,
 	workspace,
