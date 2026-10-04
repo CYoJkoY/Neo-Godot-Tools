@@ -716,7 +716,7 @@
 	},
 	"src/providers/completions.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -727,21 +727,21 @@
 	},
 	"src/providers/definition.ts": {
 		"counts": {
-			"class": 1,
-			"else": 2,
-			"for": 2,
-			"let": 8,
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
-			"while": 4
+			"while": 0
 		},
 		"perf": 0
 	},
 	"src/providers/document_drops.ts": {
 		"counts": {
-			"class": 1,
-			"else": 1,
-			"for": 2,
-			"let": 3,
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
 			"while": 0
 		},
@@ -760,7 +760,7 @@
 	},
 	"src/providers/document_symbols.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -837,7 +837,7 @@
 	},
 	"src/providers/references.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -848,7 +848,7 @@
 	},
 	"src/providers/rename.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -881,7 +881,18 @@
 	},
 	"src/providers/signature_help.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/providers/symbols.ts": {
+		"counts": {
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -892,7 +903,7 @@
 	},
 	"src/providers/tasks.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -903,7 +914,7 @@
 	},
 	"src/providers/workspace_symbols.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,

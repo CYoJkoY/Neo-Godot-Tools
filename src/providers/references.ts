@@ -1,17 +1,29 @@
 import * as vscode from "vscode";
+import type { ExtensionContext, ReferenceProvider } from "vscode";
 import { LanguageService } from "../language/service";
 
-export class GDReferenceProvider implements vscode.ReferenceProvider {
-	constructor(context: vscode.ExtensionContext, private readonly languageService: LanguageService) {
-		context.subscriptions.push(vscode.languages.registerReferenceProvider({ language: "gdscript", scheme: "file" }, this));
-	}
+export interface ReferenceProviderOptions {
+	languageService: LanguageService;
+}
 
-	provideReferences(
-		document: vscode.TextDocument,
-		position: vscode.Position,
-		context: vscode.ReferenceContext,
-		token: vscode.CancellationToken,
-	): Promise<vscode.Location[] | undefined> {
-		return this.languageService.getReferences(document, position, context.includeDeclaration, token);
-	}
+export type GDReferenceProvider = ReferenceProvider;
+
+export function createReferenceProvider(
+	context: ExtensionContext,
+	options: ReferenceProviderOptions,
+): GDReferenceProvider {
+	const provider: GDReferenceProvider = {
+		provideReferences(document, position, referenceContext, token): Promise<vscode.Location[] | undefined> {
+			return options.languageService.getReferences(
+				document,
+				position,
+				referenceContext.includeDeclaration,
+				token,
+			);
+		},
+	};
+	context.subscriptions.push(
+		vscode.languages.registerReferenceProvider({ language: "gdscript", scheme: "file" }, provider),
+	);
+	return provider;
 }

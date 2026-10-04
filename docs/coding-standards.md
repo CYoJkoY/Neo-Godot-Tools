@@ -83,14 +83,14 @@ outside the ratchet — fixtures legitimately collect into arrays and mutate loc
 
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
-| `class` declarations | 124 | debugger, tools, providers, the parser cursor (§5) |
-| `let` / `var` declarations | 283 | debugger, resource inspector, and the lexer/parser cursors |
-| `for` loops | 197 | debugger, resource inspector |
-| `while` / `do` loops | 38 | protocol loops, the lexer/parser cursors (§5) |
-| `} else` branches | 184 | debugger, resource inspector |
+| `class` declarations | 115 | debugger, tools, the parser cursor (§5) |
+| `let` / `var` declarations | 272 | debugger, resource inspector, and the lexer/parser cursors |
+| `for` loops | 193 | debugger, resource inspector |
+| `while` / `do` loops | 34 | protocol loops, the lexer/parser cursors (§5) |
+| `} else` branches | 181 | debugger, resource inspector |
 | `throw` statements | 40 | parameter validation and protocol errors |
 
-Total tracked constructs: 866 in 123 source files; 32 loops are justified with `// perf:` (§5).
+Total tracked constructs: 835 in 124 source files; 32 loops are justified with `// perf:` (§5).
 
 `as` assertions and `readonly` coverage are not ratcheted — they are reviewed per file during the §6
 migration — and the census strips comments and strings, so prose such as "renders a value as text"
@@ -101,7 +101,7 @@ The 2026-10-04 migration of §6 step 2 took the total from 1091 to 1025: `src/ut
 class-free, and `src/analyzer` lost the `else` chains and mutable declaration locals, with its
 scanning loops recorded under `// perf:`.
 
-Step 3 started from `src/index` (1025 -> 918) and continues in `src/providers` (918 -> 866 so far). The seven index classes
+Step 3 started from `src/index` (1025 -> 918) and finished `src/providers` (918 -> 835). The seven index classes
 (`FileIndex`, `SymbolIndex`, `DependencyGraph`, `TypeResolutionIndex`, `BindingIndex`,
 `ReferenceIndex`, `InheritedMemberResolver`) are now `create*` factories over module-local state,
 so callers depend on an exported interface instead of a class. The query helpers followed:
@@ -122,6 +122,18 @@ through `dropFromGroup`. The five map helpers the three modules had grown (`addT
 `bindings.ts` was differentially verified the same way (180 973 probes over the fixtures plus the
 `update` → `remove` → `re-update` → `clear` lifecycle, zero differences); that harness caught an
 infinite recursion in the first version of the scope chain, which the unit tests then confirmed.
+
+All fourteen provider classes became factories this way. `definition.ts` (17 -> 0) is the largest:
+the documentation index and the language client are injected as `docs`/`lsp` accessors (so it no
+longer reads `globals`), `else` chains became the `receiverClassName`/`hierarchy` helpers, the
+scene scan for the enclosing `type="..."` attribute is an upward `Array.from(...).map(...).find`,
+and the base-class walks (`findMemberOwner`, `firstDeclaringClass`) are recursions that keep the
+previous order and stop at the first declaration. `document_drops.ts` (7 -> 0) followed, including
+the `DataTransferItem.value` boundary: the VS Code API types it as `any`, so the provider reads it
+through `read_string`/`read_boolean` and nothing untyped enters the module. The seven one-class
+adapters (completions, document symbols, references, rename, signature help, tasks, workspace
+symbols) became factories too, and the two symbol providers now share
+`src/providers/symbols.ts` for their byte-identical range/kind/`SymbolInformation` helpers.
 
 The five providers behind `src/providers` that carry behaviour followed the same pattern: a
 `create*Provider(context, options)` factory returns an object typed by the VS Code contract, the

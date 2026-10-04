@@ -1,36 +1,23 @@
 import * as vscode from "vscode";
+import type { ExtensionContext, SymbolInformation, WorkspaceSymbolProvider } from "vscode";
 import { LanguageService } from "../language/service";
-import { IndexedSymbol } from "../index";
+import { toSymbolInformation } from "./symbols";
 
-export class GDWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
-	constructor(context: vscode.ExtensionContext, private readonly service: LanguageService) {
-		context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider(this));
-	}
+export interface WorkspaceSymbolProviderOptions {
+	languageService: LanguageService;
+}
 
-	provideWorkspaceSymbols(query: string): vscode.SymbolInformation[] {
-		return this.service.getWorkspaceSymbols(query).map((symbol) => new vscode.SymbolInformation(
-			symbol.name,
-			this.kind(symbol.kind),
-			this.range(symbol),
-			vscode.Uri.parse(symbol.uri),
-			symbol.containerName,
-		));
-	}
+export type GDWorkspaceSymbolProvider = WorkspaceSymbolProvider;
 
-	private range(symbol: IndexedSymbol): vscode.Range {
-		return new vscode.Range(symbol.range.start.line, symbol.range.start.character, symbol.range.end.line, symbol.range.end.character);
-	}
-
-	private kind(kind: IndexedSymbol["kind"]): vscode.SymbolKind {
-		switch (kind) {
-			case "class":
-			case "class_name": return vscode.SymbolKind.Class;
-			case "function": return vscode.SymbolKind.Function;
-			case "signal": return vscode.SymbolKind.Event;
-			case "enum": return vscode.SymbolKind.Enum;
-			case "constant": return vscode.SymbolKind.Constant;
-			case "variable": return vscode.SymbolKind.Variable;
-			default: return vscode.SymbolKind.Namespace;
-		}
-	}
+export function createWorkspaceSymbolProvider(
+	context: ExtensionContext,
+	options: WorkspaceSymbolProviderOptions,
+): GDWorkspaceSymbolProvider {
+	const provider: GDWorkspaceSymbolProvider = {
+		provideWorkspaceSymbols(query): SymbolInformation[] {
+			return options.languageService.getWorkspaceSymbols(query).map((symbol) => toSymbolInformation(symbol));
+		},
+	};
+	context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider(provider));
+	return provider;
 }

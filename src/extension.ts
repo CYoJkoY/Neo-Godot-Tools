@@ -13,11 +13,14 @@ import { SignatureHelpFallback } from "./fallback/signature_help";
 import { FormattingProvider } from "./formatter";
 import { LanguageService } from "./language/service";
 import { ClientConnectionManager } from "./lsp";
-import {
+import type {
 	GDCompletionItemProvider,
 	GDDefinitionProvider,
 	GDDocumentDropEditProvider,
+	GDDocumentLinkProvider,
 	GDDocumentSymbolProvider,
+	GDDocumentationProvider,
+	GDHoverProvider,
 	GDInlayHintsProvider,
 	GDReferenceProvider,
 	GDRenameProvider,
@@ -26,12 +29,19 @@ import {
 	GDTaskProvider,
 	GDWorkspaceSymbolProvider,
 } from "./providers";
-import type { GDDocumentLinkProvider, GDDocumentationProvider, GDHoverProvider } from "./providers";
 import {
+	createCompletionItemProvider,
+	createDefinitionProvider,
+	createDocumentDropEditProvider,
 	createDocumentLinkProvider,
+	createDocumentSymbolProvider,
 	createDocumentationProvider,
 	createHoverProvider,
 	createInlayHintsProvider,
+	createReferenceProvider,
+	createRenameProvider,
+	createSignatureHelpProvider,
+	createWorkspaceSymbolProvider,
 } from "./providers";
 import { ResourceInspectorProvider } from "./resource_inspector/provider";
 import { ScenePreviewProvider } from "./scene_tools";
@@ -97,7 +107,7 @@ export function activate(context: vscode.ExtensionContext) {
 		void globals.resourceInspector?.refresh();
 	});
 	globals.linkProvider = createDocumentLinkProvider(context);
-	globals.dropsProvider = new GDDocumentDropEditProvider(context);
+	globals.dropsProvider = createDocumentDropEditProvider(context);
 	globals.hoverProvider = createHoverProvider(context, {
 		languageService: globals.languageService,
 		fallback: new HoverFallback(),
@@ -105,23 +115,29 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.inlayProvider = createInlayHintsProvider(context, { lsp: () => globals.lsp });
 	globals.formattingProvider = new FormattingProvider(context);
 	globals.docsProvider = createDocumentationProvider(context, { lsp: () => globals.lsp?.client });
-	globals.definitionProvider = new GDDefinitionProvider(context, globals.languageService);
-	globals.documentSymbolProvider = new GDDocumentSymbolProvider(context, globals.languageService);
-	globals.referenceProvider = new GDReferenceProvider(context, globals.languageService);
-	globals.renameProvider = new GDRenameProvider(context, globals.languageService);
-	globals.workspaceSymbolProvider = new GDWorkspaceSymbolProvider(context, globals.languageService);
-	globals.completionProvider = new GDCompletionItemProvider(
-		context,
-		globals.languageService,
-		new CompletionFallback(),
-	);
-	globals.signatureHelpProvider = new GDSignatureHelpProvider(
-		context,
-		globals.languageService,
-		new SignatureHelpFallback(),
-	);
+	globals.definitionProvider = createDefinitionProvider(context, {
+		languageService: globals.languageService,
+		docs: () => globals.docsProvider,
+		lsp: () => globals.lsp?.client,
+	});
+	globals.documentSymbolProvider = createDocumentSymbolProvider(context, {
+		languageService: globals.languageService,
+	});
+	globals.referenceProvider = createReferenceProvider(context, { languageService: globals.languageService });
+	globals.renameProvider = createRenameProvider(context, { languageService: globals.languageService });
+	globals.workspaceSymbolProvider = createWorkspaceSymbolProvider(context, {
+		languageService: globals.languageService,
+	});
+	globals.completionProvider = createCompletionItemProvider(context, {
+		languageService: globals.languageService,
+		fallback: new CompletionFallback(),
+	});
+	globals.signatureHelpProvider = createSignatureHelpProvider(context, {
+		languageService: globals.languageService,
+		fallback: new SignatureHelpFallback(),
+	});
 	// globals.semanticTokensProvider = createSemanticTokensProvider(context);
-	// globals.tasksProvider = new GDTaskProvider(context);
+	// globals.tasksProvider = createTaskProvider(context);
 
 	if (is_debug_mode()) {
 		const devServer = new DebugServer();
