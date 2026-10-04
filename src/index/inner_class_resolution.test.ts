@@ -1,28 +1,33 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { parseGDScript } from "../analyzer/index.js";
-import { BindingIndex } from "./bindings.js";
-import { FileIndex } from "./file_index.js";
-import { SymbolIndex } from "./symbol_index.js";
-import { TypeResolutionIndex } from "./type_resolution.js";
 import { SemanticQueryEngine } from "../language/semantic/query_engine.js";
+import { createBindingIndex } from "./bindings.js";
+import { createFileIndex } from "./file_index.js";
+import { createSymbolIndex } from "./symbol_index.js";
+import { createTypeResolutionIndex } from "./type_resolution.js";
 
 const URI = "file:///workspace/inner.gd";
 
 function index(source: string, extra: Record<string, string> = {}) {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
 	for (const [uri, text] of Object.entries({ [URI]: source, ...extra })) {
 		files.update(uri, text, 1);
 		symbols.update(uri);
 		bindings.update(uri);
 	}
-	const types = new TypeResolutionIndex(files, symbols, bindings);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
 	return { files, symbols, bindings, types, semantic: new SemanticQueryEngine(files, symbols, bindings, types) };
 }
 
-function definitionAt(source: string, marker: string, offsetInMarker = marker.length - 1, extra: Record<string, string> = {}) {
+function definitionAt(
+	source: string,
+	marker: string,
+	offsetInMarker = marker.length - 1,
+	extra: Record<string, string> = {},
+) {
 	const { semantic } = index(source, extra);
 	const start = source.indexOf(marker);
 	assert.ok(start >= 0, `marker ${marker} not found`);
@@ -42,21 +47,29 @@ describe("inner class parsing", () => {
 		const inner = result.ast.declarations.find((declaration) => declaration.kind === "class");
 		assert.ok(inner && inner.kind === "class");
 		assert.equal(inner.extendsName, "Base", "the declaration colon must not be part of the base name");
-		assert.deepEqual(inner.declarations.map((declaration) => declaration.name), ["run"]);
+		assert.deepEqual(
+			inner.declarations.map((declaration) => declaration.name),
+			["run"],
+		);
 	});
 
 	it("does not leak function locals into the class member list", () => {
-		const source = "class_name C\nvar speed := 1\nfunc run():\n\tvar local_speed := speed\n\tvar helper := Worker.new()\n\treturn local_speed\nclass Worker:\n\tfunc go():\n\t\tvar inner_local := 1\n";
+		const source =
+			"class_name C\nvar speed := 1\nfunc run():\n\tvar local_speed := speed\n\tvar helper := Worker.new()\n\treturn local_speed\nclass Worker:\n\tfunc go():\n\t\tvar inner_local := 1\n";
 		const { files, types } = index(source);
 		const names = files.get(URI)!.symbols.map((symbol) => symbol.name);
 		assert.equal(names.includes("local_speed"), false, "a local variable is not a script member");
 		assert.equal(names.includes("helper"), false, "a local variable is not a script member");
 		assert.equal(names.includes("inner_local"), false, "a local variable is not a class member");
-		assert.deepEqual(types.getMembers(types.resolveName("Worker")!).map((symbol) => symbol.name), ["go"]);
+		assert.deepEqual(
+			types.getMembers(types.resolveName("Worker")!).map((symbol) => symbol.name),
+			["go"],
+		);
 	});
 
 	it("records the owning class of every nested declaration", () => {
-		const source = "class_name C\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nclass Outer:\n\tclass Inner:\n\t\tfunc deep():\n\t\t\tpass\n";
+		const source =
+			"class_name C\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nclass Outer:\n\tclass Inner:\n\t\tfunc deep():\n\t\t\tpass\n";
 		const { files } = index(source);
 		const symbols = files.get(URI)!.symbols;
 		const worker = symbols.find((symbol) => symbol.name === "Worker")!;
@@ -90,7 +103,10 @@ func use_worker():
 		const { types } = index(INNER_SOURCE);
 		const worker = types.resolveName("Worker")!;
 		assert.deepEqual(
-			types.getMembers(worker).map((symbol) => symbol.name).sort(),
+			types
+				.getMembers(worker)
+				.map((symbol) => symbol.name)
+				.sort(),
 			["helper", "run", "speed"],
 		);
 	});
@@ -188,10 +204,16 @@ class Worker:
 
 describe("inner class completions", () => {
 	it("completes class members after a class name and after self", () => {
-		const qualified = completionsAt("class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.\n", "Worker.");
+		const qualified = completionsAt(
+			"class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.\n",
+			"Worker.",
+		);
 		assert.deepEqual(qualified.value?.map((item) => item.name).sort(), ["run", "speed"]);
 
-		const self = completionsAt("class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tself.\n", "self.");
+		const self = completionsAt(
+			"class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tself.\n",
+			"self.",
+		);
 		assert.deepEqual(self.value?.map((item) => item.name).sort(), ["run", "speed"]);
 	});
 });
@@ -324,15 +346,15 @@ class Inner extends Base:
 			"file:///workspace/base.gd": "class_name Base\nfunc base_fn() -> int:\n\treturn 1\n",
 			"file:///workspace/outer.gd": "class_name Outer\nclass Inner extends Base:\n\tfunc inner_fn():\n\t\tpass\n",
 		};
-		const files = new FileIndex();
-		const symbols = new SymbolIndex(files);
-		const bindings = new BindingIndex(files);
+		const files = createFileIndex();
+		const symbols = createSymbolIndex(files);
+		const bindings = createBindingIndex(files);
 		for (const [uri, text] of Object.entries({ [URI]: userSource, ...extra })) {
 			files.update(uri, text, 1);
 			symbols.update(uri);
 			bindings.update(uri);
 		}
-		const types = new TypeResolutionIndex(files, symbols, bindings);
+		const types = createTypeResolutionIndex(files, symbols, bindings);
 		const semantic = new SemanticQueryEngine(files, symbols, bindings, types);
 		const offset = userSource.indexOf("Outer.Inner.new().base_fn") + "Outer.Inner.new().base_fn".length - 1;
 		const result = semantic.getDefinition(URI, { offset });
@@ -354,7 +376,10 @@ class Worker extends Base:
 		const baseDeclaration = bindings.getBinding(URI, source.indexOf("func ping"), "ping");
 		assert.ok(baseDeclaration);
 		assert.deepEqual(
-			bindings.findReferences(baseDeclaration.id).map((reference) => reference.range.start.line).sort((a, b) => a - b),
+			bindings
+				.findReferences(baseDeclaration.id)
+				.map((reference) => reference.range.start.line)
+				.sort((a, b) => a - b),
 			[2, 6],
 			"the base declaration and the super call must share one binding",
 		);
@@ -455,13 +480,18 @@ class Worker extends Base:
 		const override = bindings.getBinding(URI, source.lastIndexOf("func ping"), "ping");
 		assert.ok(base && override);
 		assert.notEqual(base.id, override.id, "an override declares its own member");
-		const lines = (binding: { id: string }) => bindings.findReferences(binding.id).map((reference) => reference.range.start.line + 1).sort((a, b) => a - b);
+		const lines = (binding: { id: string }) =>
+			bindings
+				.findReferences(binding.id)
+				.map((reference) => reference.range.start.line + 1)
+				.sort((a, b) => a - b);
 		assert.deepEqual(lines(base), [3, 9], "the base and its super call share one binding");
 		assert.deepEqual(lines(override), [7, 8], "self.ping reaches the override, not the base");
 	});
 
 	it("completes members after a chained construction", () => {
-		const source = "class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
+		const source =
+			"class_name Child\nclass Worker:\n\tvar speed := 1\n\tfunc run():\n\t\tpass\nfunc use():\n\tWorker.new().\n";
 		const result = completionsAt(source, "Worker.new().", "Worker.new().".length);
 		assert.equal(result.confidence, "exact");
 		assert.deepEqual(result.value?.map((item) => item.name).sort(), ["run", "speed"]);

@@ -83,14 +83,14 @@ outside the ratchet — fixtures legitimately collect into arrays and mutate loc
 
 | Construct | Count | Where the load sits |
 | --- | --- | --- |
-| `class` declarations | 134 | debugger, index, tools, providers, the parser cursor (§5) |
-| `let` / `var` declarations | 338 | debugger, resource inspector, index, and the lexer/parser cursors |
-| `for` loops | 276 | index, resource inspector, debugger |
-| `while` / `do` loops | 48 | protocol and settle-wait loops |
+| `class` declarations | 127 | debugger, tools, providers, the parser cursor (§5) |
+| `let` / `var` declarations | 337 | debugger, resource inspector, index, and the lexer/parser cursors |
+| `for` loops | 271 | debugger, resource inspector, index |
+| `while` / `do` loops | 47 | protocol and settle-wait loops |
 | `} else` branches | 189 | debugger, resource inspector |
 | `throw` statements | 40 | parameter validation and protocol errors |
 
-Total tracked constructs: 1025 in 121 source files; 25 loops are justified with `// perf:` (§5).
+Total tracked constructs: 1011 in 121 source files; 26 loops are justified with `// perf:` (§5).
 
 `as` assertions and `readonly` coverage are not ratcheted — they are reviewed per file during the §6
 migration — and the census strips comments and strings, so prose such as "renders a value as text"
@@ -100,6 +100,13 @@ The 2026-10-04 migration of §6 step 2 took the total from 1091 to 1025: `src/ut
 `src/performance` (logger, profiler, LRU cache, scheduling, subspawn) are factory-based and
 class-free, and `src/analyzer` lost the `else` chains and mutable declaration locals, with its
 scanning loops recorded under `// perf:`.
+
+Step 3 started from `src/index` and took the total to 1011: the seven index classes
+(`FileIndex`, `SymbolIndex`, `DependencyGraph`, `TypeResolutionIndex`, `BindingIndex`,
+`ReferenceIndex`, `InheritedMemberResolver`) are now `create*` factories over module-local state,
+so callers depend on an exported interface instead of a class. The remaining `let`/`for` load in
+this area sits in the resolution passes (`type_resolution.ts` 31, `bindings.ts` 21), which are
+rewritten pass by pass.
 
 ## 5. Exceptions (deliberate, with reasons)
 
@@ -138,7 +145,9 @@ scanning loops recorded under `// perf:`.
    runs in CI. `--update` refreshes the baseline after a deliberate reduction, so progress is visible
    in the diff. New code must be clean regardless of its file's history.
 2. **Small, hot, already-typed modules** (`src/utils`, `src/performance`, `src/analyzer`).
-3. **Index and query layers** (`src/index`), then providers and the resource inspector.
+3. **Index and query layers** (`src/index`), then providers and the resource inspector. The
+   index classes are converted (see §4); the resolution passes are next, then `src/providers` and
+   `src/resource_inspector`.
 4. **Debugger protocol modules** — functional cores, classes only for the sockets/sessions.
 5. **`noUncheckedIndexedAccess`** enabled last, when it reports zero errors.
 6. **Keep the tool scripts inside the checked surface** (done 2026-10-04): `npm run lint` lints `src`

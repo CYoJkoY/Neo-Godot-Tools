@@ -397,7 +397,7 @@
 	},
 	"src/index/bindings.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 14,
 			"let": 7,
@@ -419,14 +419,14 @@
 	},
 	"src/index/dependency_graph.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 16,
 			"let": 0,
 			"throw": 0,
-			"while": 1
+			"while": 0
 		},
-		"perf": 0
+		"perf": 1
 	},
 	"src/index/expression.ts": {
 		"counts": {
@@ -441,10 +441,10 @@
 	},
 	"src/index/file_index.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
-			"for": 1,
-			"let": 2,
+			"for": 0,
+			"let": 1,
 			"throw": 0,
 			"while": 0
 		},
@@ -463,7 +463,7 @@
 	},
 	"src/index/inherited_member_resolution.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 0,
 			"let": 0,
@@ -474,7 +474,7 @@
 	},
 	"src/index/references.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 2,
 			"let": 0,
@@ -507,9 +507,9 @@
 	},
 	"src/index/symbol_index.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
-			"for": 4,
+			"for": 0,
 			"let": 0,
 			"throw": 0,
 			"while": 0
@@ -540,7 +540,7 @@
 	},
 	"src/index/type_resolution.ts": {
 		"counts": {
-			"class": 1,
+			"class": 0,
 			"else": 0,
 			"for": 18,
 			"let": 12,

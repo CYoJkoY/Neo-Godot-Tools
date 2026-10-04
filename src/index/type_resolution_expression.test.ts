@@ -1,12 +1,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { BindingIndex, FileIndex, SymbolIndex, TypeResolutionIndex } from "./index.js";
+import { createBindingIndex, createFileIndex, createSymbolIndex, createTypeResolutionIndex } from "./index.js";
 
 test("resolves inferred declarations and typed member access through local semantics", () => {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
-	const types = new TypeResolutionIndex(files, symbols, bindings);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
 
 	const playerUri = "file:///workspace/player.gd";
 	const mainUri = "file:///workspace/main.gd";
@@ -30,10 +30,10 @@ test("resolves inferred declarations and typed member access through local seman
 });
 
 test("keeps ambiguous chained member expressions unresolved", () => {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
-	const types = new TypeResolutionIndex(files, symbols, bindings);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
 
 	const source = `class_name Holder\nvar child: MissingType\nfunc test():\n\tvar holder: Holder\n\tvar value := holder.child.name\n`;
 	const uri = "file:///workspace/holder.gd";

@@ -1,5 +1,10 @@
 import { performance } from "node:perf_hooks";
-import { BindingIndex, FileIndex, SymbolIndex, TypeResolutionIndex } from "../src/index/index.js";
+import {
+	createBindingIndex,
+	createFileIndex,
+	createSymbolIndex,
+	createTypeResolutionIndex,
+} from "../src/index/index.js";
 import { SemanticQueryEngine } from "../src/language/semantic/query_engine.js";
 
 const SCALES = [100, 500, 1_000, 5_000];
@@ -27,10 +32,10 @@ function report(values: number[]): { p50: number; p95: number; p99: number } {
 }
 
 for (const count of SCALES) {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
-	const types = new TypeResolutionIndex(files, symbols, bindings);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
 	const semantic = new SemanticQueryEngine(files, symbols, bindings, types);
 
 	const coldStart = performance.now();
@@ -85,15 +90,17 @@ for (const count of SCALES) {
 		querySamples.completion.push(performance.now() - start);
 	}
 
-	console.log(JSON.stringify({
-		files: count,
-		coldIndexMs: Number(cold.toFixed(2)),
-		singleEditMs: report(editSamples),
-		semanticMs: {
-			type: report(querySamples.type),
-			definition: report(querySamples.definition),
-			hover: report(querySamples.hover),
-			completion: report(querySamples.completion),
-		},
-	}));
+	console.log(
+		JSON.stringify({
+			files: count,
+			coldIndexMs: Number(cold.toFixed(2)),
+			singleEditMs: report(editSamples),
+			semanticMs: {
+				type: report(querySamples.type),
+				definition: report(querySamples.definition),
+				hover: report(querySamples.hover),
+				completion: report(querySamples.completion),
+			},
+		}),
+	);
 }

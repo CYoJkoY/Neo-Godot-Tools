@@ -42,11 +42,11 @@ test("PerformanceProfiler bounds retained latency samples", () => {
 });
 
 test("FileIndex profiling is observable through the shared profiler", async () => {
-	const { FileIndex } = await import("../index/file_index.js");
+	const { createFileIndex } = await import("../index/file_index.js");
 	const { languageProfiler } = await import("./profiler.js");
 	languageProfiler.reset();
 
-	new FileIndex().update("file:///profile.gd", "class_name Profile\nfunc run() -> void:\n\tpass\n");
+	createFileIndex().update("file:///profile.gd", "class_name Profile\nfunc run() -> void:\n\tpass\n");
 	const snapshot = languageProfiler.getSnapshot();
 
 	assert.ok(sampleFor(snapshot, "parse").count >= 1);

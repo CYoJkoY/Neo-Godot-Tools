@@ -1,6 +1,6 @@
-import { lexGDScript, GDScriptToken } from "../analyzer/index.js";
-import { FileIndex } from "./file_index";
-import { IndexedSymbol } from "./symbol";
+import { GDScriptToken, lexGDScript } from "../analyzer/index.js";
+import { FileIndex } from "./file_index.js";
+import { IndexedSymbol } from "./symbol.js";
 
 export interface IndexedReference {
 	name: string;
@@ -12,10 +12,41 @@ export interface IndexedReference {
 }
 
 const keywords = new Set([
-	"and", "as", "await", "breakpoint", "break", "class_name", "class", "const", "continue",
-	"elif", "else", "enum", "extends", "false", "for", "func", "if", "in", "is", "match",
-	"not", "null", "or", "pass", "preload", "return", "self", "signal", "static", "super",
-	"true", "var", "while", "when", "void",
+	"and",
+	"as",
+	"await",
+	"breakpoint",
+	"break",
+	"class_name",
+	"class",
+	"const",
+	"continue",
+	"elif",
+	"else",
+	"enum",
+	"extends",
+	"false",
+	"for",
+	"func",
+	"if",
+	"in",
+	"is",
+	"match",
+	"not",
+	"null",
+	"or",
+	"pass",
+	"preload",
+	"return",
+	"self",
+	"signal",
+	"static",
+	"super",
+	"true",
+	"var",
+	"while",
+	"when",
+	"void",
 ]);
 
 function toReference(token: GDScriptToken, uri: string): IndexedReference {
@@ -30,9 +61,11 @@ function toReference(token: GDScriptToken, uri: string): IndexedReference {
 }
 
 function isDeclaration(reference: IndexedReference, symbol: IndexedSymbol): boolean {
-	return reference.uri === symbol.uri
-		&& reference.range.start.offset === symbol.range.start.offset
-		&& reference.range.end.offset === symbol.range.end.offset;
+	return (
+		reference.uri === symbol.uri &&
+		reference.range.start.offset === symbol.range.start.offset &&
+		reference.range.end.offset === symbol.range.end.offset
+	);
 }
 
 export function collectReferences(source: string, uri: string): IndexedReference[] {
@@ -41,50 +74,67 @@ export function collectReferences(source: string, uri: string): IndexedReference
 		.map((token) => toReference(token, uri));
 }
 
-export class ReferenceIndex {
-	private readonly byName = new Map<string, IndexedReference[]>();
-	private readonly byUri = new Map<string, IndexedReference[]>();
+export interface ReferenceIndex {
+	update(uri: string): void;
+	find(name: string): IndexedReference[];
+	findForSymbol(symbol: IndexedSymbol, includeDeclaration: boolean): IndexedReference[];
+	remove(uri: string): void;
+	clear(): void;
+}
 
-	constructor(private readonly files: FileIndex) {}
+export function createReferenceIndex(files: FileIndex): ReferenceIndex {
+	const byName = new Map<string, IndexedReference[]>();
 
-	update(uri: string): void {
-		this.remove(uri);
-		const file = this.files.get(uri);
+	const byUri = new Map<string, IndexedReference[]>();
+
+	const update = (uri: string): void => {
+		remove(uri);
+		const file = files.get(uri);
 		if (!file) return;
 		const references = collectReferences(file.source, uri);
-		this.byUri.set(uri, references);
+		byUri.set(uri, references);
 		for (const reference of references) {
 			const key = reference.name.toLowerCase();
-			const entries = this.byName.get(key) ?? [];
+			const entries = byName.get(key) ?? [];
 			entries.push(reference);
-			this.byName.set(key, entries);
+			byName.set(key, entries);
 		}
-	}
+	};
 
-	find(name: string): IndexedReference[] {
-		return [...(this.byName.get(name.toLowerCase()) ?? [])];
-	}
+	const find = (name: string): IndexedReference[] => {
+		return [...(byName.get(name.toLowerCase()) ?? [])];
+	};
 
-	findForSymbol(symbol: IndexedSymbol, includeDeclaration: boolean): IndexedReference[] {
-		return this.find(symbol.name).filter((reference) => includeDeclaration || !isDeclaration(reference, symbol));
-	}
+	const findForSymbol = (symbol: IndexedSymbol, includeDeclaration: boolean): IndexedReference[] => {
+		return find(symbol.name).filter((reference) => includeDeclaration || !isDeclaration(reference, symbol));
+	};
 
-	remove(uri: string): void {
-		const references = this.byUri.get(uri);
+	const remove = (uri: string): void => {
+		const references = byUri.get(uri);
 		if (!references) return;
 		for (const reference of references) {
 			const key = reference.name.toLowerCase();
-			const entries = this.byName.get(key);
+			const entries = byName.get(key);
 			if (!entries) continue;
-			const remaining = entries.filter((entry) => entry.uri !== uri || entry.range.start.offset !== reference.range.start.offset);
-			if (remaining.length) this.byName.set(key, remaining);
-			else this.byName.delete(key);
+			const remaining = entries.filter(
+				(entry) => entry.uri !== uri || entry.range.start.offset !== reference.range.start.offset,
+			);
+			if (remaining.length) byName.set(key, remaining);
+			else byName.delete(key);
 		}
-		this.byUri.delete(uri);
-	}
+		byUri.delete(uri);
+	};
 
-	clear(): void {
-		this.byName.clear();
-		this.byUri.clear();
-	}
+	const clear = (): void => {
+		byName.clear();
+		byUri.clear();
+	};
+
+	return {
+		update,
+		find,
+		findForSymbol,
+		remove,
+		clear,
+	};
 }

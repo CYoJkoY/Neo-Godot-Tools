@@ -4,15 +4,15 @@ import { ReferencesFallback } from "../fallback/references";
 import { RenameFallback } from "../fallback/rename";
 import {
 	Binding,
-	BindingIndex,
-	DependencyGraph,
-	FileIndex,
 	IndexedParameter,
 	IndexedSymbol,
-	ReferenceIndex,
-	SymbolIndex,
-	TypeResolutionIndex,
 	classifySemanticChange,
+	createBindingIndex,
+	createDependencyGraph,
+	createFileIndex,
+	createReferenceIndex,
+	createSymbolIndex,
+	createTypeResolutionIndex,
 } from "../index";
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
@@ -76,12 +76,12 @@ function parameterLabel(parameter: IndexedParameter): string {
 }
 
 export class LanguageService implements vscode.Disposable {
-	readonly files = new FileIndex();
-	readonly symbols = new SymbolIndex(this.files);
-	readonly references = new ReferenceIndex(this.files);
-	readonly bindings = new BindingIndex(this.files);
-	readonly types = new TypeResolutionIndex(this.files, this.symbols, this.bindings);
-	readonly dependencies = new DependencyGraph(this.files);
+	readonly files = createFileIndex();
+	readonly symbols = createSymbolIndex(this.files);
+	readonly references = createReferenceIndex(this.files);
+	readonly bindings = createBindingIndex(this.files);
+	readonly types = createTypeResolutionIndex(this.files, this.symbols, this.bindings);
+	readonly dependencies = createDependencyGraph(this.files);
 	readonly semantic = new SemanticQueryEngine(this.files, this.symbols, this.bindings, this.types);
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly updateScheduler: UpdateScheduler;

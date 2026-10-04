@@ -8,7 +8,7 @@ import {
 	SymbolIndex,
 	TypeResolutionIndex,
 } from "../../index/index.js";
-import { InheritedMemberResolver } from "../../index/inherited_member_resolution.js";
+import { InheritedMemberResolver, createInheritedMemberResolver } from "../../index/inherited_member_resolution.js";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./builtin_symbols.js";
 
 export type ResolutionConfidence = "exact" | "inferred" | "partial" | "unknown";
@@ -117,7 +117,7 @@ export class SemanticQueryEngine {
 		private readonly bindings: BindingIndex,
 		private readonly types: TypeResolutionIndex,
 	) {
-		this.inheritedMembers = new InheritedMemberResolver(files, symbols);
+		this.inheritedMembers = createInheritedMemberResolver(files, symbols);
 	}
 
 	getSymbol(uri: string, position: SemanticPosition): ResolutionResult<IndexedSymbol> {

@@ -1,9 +1,9 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { BindingIndex } from "../../index/bindings.js";
-import { FileIndex } from "../../index/file_index.js";
-import { SymbolIndex } from "../../index/symbol_index.js";
-import { TypeResolutionIndex } from "../../index/type_resolution.js";
+import { createBindingIndex } from "../../index/bindings.js";
+import { createFileIndex } from "../../index/file_index.js";
+import { createSymbolIndex } from "../../index/symbol_index.js";
+import { createTypeResolutionIndex } from "../../index/type_resolution.js";
 import { SemanticQueryEngine } from "./query_engine.js";
 
 /**
@@ -18,15 +18,15 @@ import { SemanticQueryEngine } from "./query_engine.js";
 const URI = "file:///workspace/player.gd";
 
 function createEngine(source: string, extra: Record<string, string> = {}) {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
 	for (const [uri, text] of Object.entries({ [URI]: source, ...extra })) {
 		files.update(uri, text, 1);
 		symbols.update(uri);
 		bindings.update(uri);
 	}
-	const types = new TypeResolutionIndex(files, symbols, bindings);
+	const types = createTypeResolutionIndex(files, symbols, bindings);
 	return { engine: new SemanticQueryEngine(files, symbols, bindings, types), files, symbols, bindings, types };
 }
 

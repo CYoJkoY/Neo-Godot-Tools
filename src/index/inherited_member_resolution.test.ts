@@ -1,36 +1,36 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { BindingIndex } from "./bindings.js";
-import { FileIndex } from "./file_index.js";
-import { InheritedMemberResolver } from "./inherited_member_resolution.js";
-import { SymbolIndex } from "./symbol_index.js";
-import { TypeResolutionIndex } from "./type_resolution.js";
 import { SemanticQueryEngine } from "../language/semantic/query_engine.js";
+import { createBindingIndex } from "./bindings.js";
+import { createFileIndex } from "./file_index.js";
+import { InheritedMemberResolver, createInheritedMemberResolver } from "./inherited_member_resolution.js";
+import { createSymbolIndex } from "./symbol_index.js";
+import { createTypeResolutionIndex } from "./type_resolution.js";
 
 const BASE_URI = "file:///workspace/base.gd";
 const MIDDLE_URI = "file:///workspace/middle.gd";
 const CHILD_URI = "file:///workspace/child.gd";
 
 function createResolver(sources: Record<string, string>): InheritedMemberResolver {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
 	for (const [uri, source] of Object.entries(sources)) {
 		files.update(uri, source);
 		symbols.update(uri);
 	}
-	return new InheritedMemberResolver(files, symbols);
+	return createInheritedMemberResolver(files, symbols);
 }
 
 function createSemantic(sources: Record<string, string>): SemanticQueryEngine {
-	const files = new FileIndex();
-	const symbols = new SymbolIndex(files);
-	const bindings = new BindingIndex(files);
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const bindings = createBindingIndex(files);
 	for (const [uri, source] of Object.entries(sources)) {
 		files.update(uri, source);
 		symbols.update(uri);
 		bindings.update(uri);
 	}
-	return new SemanticQueryEngine(files, symbols, bindings, new TypeResolutionIndex(files, symbols, bindings));
+	return new SemanticQueryEngine(files, symbols, bindings, createTypeResolutionIndex(files, symbols, bindings));
 }
 
 describe("InheritedMemberResolver", () => {
@@ -77,7 +77,8 @@ describe("SemanticQueryEngine inherited definitions", () => {
 	const sources = {
 		[BASE_URI]: "class_name Base\nfunc testAA():\n\tpass\n",
 		[MIDDLE_URI]: "class_name Middle\nextends Base\n",
-		[CHILD_URI]: "class_name Child\nextends Middle\nfunc child_method():\n\t.testAA()\n\tself.testAA()\n\tvar object: Child\n\tobject.testAA()\n",
+		[CHILD_URI]:
+			"class_name Child\nextends Middle\nfunc child_method():\n\t.testAA()\n\tself.testAA()\n\tvar object: Child\n\tobject.testAA()\n",
 	};
 
 	it("resolves shorthand .foo() calls to the inherited declaration", () => {
@@ -114,7 +115,8 @@ describe("SemanticQueryEngine inherited definitions", () => {
 
 	it("resolves Ctrl+Click on a method of a GDScript inner class", () => {
 		const innerSources = {
-			[CHILD_URI]: "class_name Child\nclass Worker:\n\tfunc run():\n\t\tpass\nfunc use_worker():\n\tWorker.run()\n",
+			[CHILD_URI]:
+				"class_name Child\nclass Worker:\n\tfunc run():\n\t\tpass\nfunc use_worker():\n\tWorker.run()\n",
 		};
 		const semantic = createSemantic(innerSources);
 		const source = innerSources[CHILD_URI];
