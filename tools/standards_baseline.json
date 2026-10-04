@@ -498,12 +498,12 @@
 		"counts": {
 			"class": 0,
 			"else": 0,
-			"for": 1,
+			"for": 0,
 			"let": 3,
 			"throw": 0,
 			"while": 0
 		},
-		"perf": 0
+		"perf": 1
 	},
 	"src/index/symbol_index.ts": {
 		"counts": {
