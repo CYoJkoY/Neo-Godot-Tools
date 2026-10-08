@@ -71,7 +71,7 @@ jobs:
           npx @vscode/vsce@latest ls --tree
 
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: neo-godot-tools-${{ github.ref_name }}
           path: ${{ steps.release.outputs.asset }}
