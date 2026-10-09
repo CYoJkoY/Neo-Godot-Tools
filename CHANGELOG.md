@@ -1,17 +1,25 @@
 # Changelog
 
-## Unreleased
-
-- Continue external-resource IDs after the largest existing numeric prefix, including Godot 3 IDs; preserve reference syntax and update `load_steps` when adding/removing resources.
-- Replace overlapping resource fields with a single selector, compatible Script/Shader choices and responsive controls for narrow inspector panels. Keep keyboard focus/selection across model updates and only offer New for known concrete resource classes.
-- Add synchronized range sliders and numeric inputs with bounds, steps, `or_greater`/`or_less`, exponential ranges, suffixes and multi-select flags. Fix vector component editing for constructor digits and scientific notation.
-- Preview image references and image-path strings with thumbnails, hover/keyboard previews, dimensions and an Open action; report missing/unsupported images without exposing files outside the project/workspace.
-- Compare actual literal defaults rather than file values or type placeholders; retain script/built-in defaults with LSP connected, and remove overrides when the real default is unknown.
-- Backfill tag-based release history and automate changelog synchronization through a reviewable PR after tag creation/deletion, with full-range release notes included in GitHub releases and VSIX packages.
-
 <!-- generated-release-notes:start -->
 
-### 2.13.1 — 2026-10-04 (pending)
+### 2.13.2 — 2026-10-09 (pending)
+
+Changes since [v2.13.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.1...v2.13.2).
+
+#### Added
+
+- **syntaxes:** update Godot TextMate grammars ([5bfd07b](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/5bfd07b2a6de77543679d1cb2f64c94facca02d4))
+
+#### Documentation
+
+- **roadmap:** Remove obsolete 2026-09-12 roadmap documents. ([b078d69](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/b078d69d82fc9f24f90fb3d4de19a5be12f27061))
+
+#### Maintenance
+
+- **deps:** bump actions/upload-artifact from 4 to 6 ([#105](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/105))
+- **deps:** bump actions/setup-node from 5 to 6 ([#106](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/106))
+
+### 2.13.1 — 2026-10-04
 
 Changes since [v2.13.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.0...v2.13.1).
 
