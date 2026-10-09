@@ -11,7 +11,24 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.13.1 — 2026-10-04 (pending)
+### 2.13.2 — 2026-10-09 (pending)
+
+Changes since [v2.13.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.1...v2.13.2).
+
+#### Added
+
+- **syntaxes:** update Godot TextMate grammars ([5bfd07b](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/5bfd07b2a6de77543679d1cb2f64c94facca02d4))
+
+#### Documentation
+
+- **roadmap:** Remove obsolete 2026-09-12 roadmap documents. ([b078d69](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/b078d69d82fc9f24f90fb3d4de19a5be12f27061))
+
+#### Maintenance
+
+- **deps:** bump actions/upload-artifact from 4 to 6 ([#105](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/105))
+- **deps:** bump actions/setup-node from 5 to 6 ([#106](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/106))
+
+### 2.13.1 — 2026-10-04
 
 Changes since [v2.13.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.0...v2.13.1).
 
