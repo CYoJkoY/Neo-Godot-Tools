@@ -1,14 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Continue external-resource IDs after the largest existing numeric prefix, including Godot 3 IDs; preserve reference syntax and update `load_steps` when adding/removing resources.
-- Replace overlapping resource fields with a single selector, compatible Script/Shader choices and responsive controls for narrow inspector panels. Keep keyboard focus/selection across model updates and only offer New for known concrete resource classes.
-- Add synchronized range sliders and numeric inputs with bounds, steps, `or_greater`/`or_less`, exponential ranges, suffixes and multi-select flags. Fix vector component editing for constructor digits and scientific notation.
-- Preview image references and image-path strings with thumbnails, hover/keyboard previews, dimensions and an Open action; report missing/unsupported images without exposing files outside the project/workspace.
-- Compare actual literal defaults rather than file values or type placeholders; retain script/built-in defaults with LSP connected, and remove overrides when the real default is unknown.
-- Backfill tag-based release history and automate changelog synchronization through a reviewable PR after tag creation/deletion, with full-range release notes included in GitHub releases and VSIX packages.
-
 <!-- generated-release-notes:start -->
 
 ### 2.13.2 — 2026-10-09 (pending)
