@@ -2,12 +2,14 @@
 	"name": "GDShader",
 	"scopeName": "source.gdshader",
 	"uuid": "3a95d25d-688b-481f-a581-eee47f00e5ca",
-	"fileTypes": [ "gdshader" ],
+	"fileTypes": [ "gdshader", "gdshaderinc" ],
 	"patterns": [ { "include": "#any" } ],
 	"repository": {
 		"any": {
 			"patterns": [
 				{ "include": "#comment" },
+				{ "include": "#preprocessor" },
+				{ "include": "#string" },
 				{ "include": "#enclosed" },
 				{ "include": "#classifier" },
 				{ "include": "#definition" },
@@ -32,6 +34,30 @@
 			"name": "comment.block.gdshader",
 			"begin": "/\\*",
 			"end": "\\*/"
+		},
+		"preprocessor": {
+			"name": "meta.preprocessor.gdshader",
+			"begin": "^\\s*(#)\\s*(include|define|undef|if|ifdef|ifndef|elif|else|endif|pragma)\\b",
+			"beginCaptures": {
+				"1": { "name": "punctuation.definition.preprocessor.gdshader" },
+				"2": { "name": "keyword.control.directive.gdshader" }
+			},
+			"end": "$",
+			"patterns": [
+				{ "include": "#comment" },
+				{ "include": "#string" }
+			]
+		},
+		"string": {
+			"name": "string.quoted.double.gdshader",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.gdshader",
+					"match": "\\\\."
+				}
+			]
 		},
 		"enclosed": {
 			"name": "meta.parenthesis.gdshader",
@@ -150,7 +176,7 @@
 		},
 		"modifierKeyword": {
 			"name": "storage.modifier.gdshader",
-			"match": "\\b(?:const|global|instance|uniform|varying|in|out|inout|flat|smooth)\\b"
+			"match": "\\b(?:const|global|instance|uniform|group_uniforms|subgroup_uniforms|varying|in|out|inout|flat|smooth|noperspective)\\b"
 		},
 		"precisionKeyword": {
 			"name": "storage.type.built-in.primitive.precision.gdshader",
@@ -158,11 +184,11 @@
 		},
 		"typeKeyword": {
 			"name": "support.type.gdshader",
-			"match": "\\b(?:void|bool|[biu]?vec[234]|u?int|float|mat[234]|[iu]?sampler(?:3D|2D(?:Array)?)|samplerCube)\\b"
+			"match": "\\b(?:void|bool|[biu]?vec[234]|u?int|float|mat[234]|[iu]?sampler(?:3D|2D(?:Array)?|Cube(?:Array)?))\\b"
 		},
 		"hintKeyword": {
 			"name": "support.type.annotation.gdshader",
-			"match": "\\b(?:source_color|hint_(?:color|range|(?:black_)?albedo|normal|(?:default_)?(?:white|black)|aniso|anisotropy|roughness_(?:[rgba]|normal|gray))|filter_(?:nearest|linear)(?:_mipmap(?:_anisotropic)?)?|repeat_(?:en|dis)able)\\b"
+			"match": "\\b(?:source_color|hint_(?:color|range|(?:black_)?albedo|normal|(?:default_)?(?:white|black|transparent)|aniso|anisotropy|roughness_(?:[rgba]|normal|gray)|(?:screen|depth|normal_roughness)_texture)|filter_(?:nearest|linear)(?:_mipmap(?:_anisotropic)?)?|repeat_(?:en|dis)able)\\b"
 		},
 		"element": {
 			"patterns": [
@@ -172,6 +198,7 @@
 				{ "include": "#identifierType" },
 				{ "include": "#constructor" },
 				{ "include": "#processorFunction" },
+				{ "include": "#builtinFunction" },
 				{ "include": "#identifierFunction" },
 				{ "include": "#swizzling" },
 				{ "include": "#identifierField" },
@@ -202,7 +229,11 @@
 		},
 		"processorFunction": {
 			"name": "support.function.gdshader",
-			"match": "\\b(?:vertex|fragment|light|start|process|sky|fog)(?=(?:\\s|/\\*(?:\\*(?!/)|[^*])*\\*/)*[(])"
+			"match": "\\b(?:vertex|fragment|light|start|process|collide|sky|fog)(?=(?:\\s|/\\*(?:\\*(?!/)|[^*])*\\*/)*[(])"
+		},
+		"builtinFunction": {
+			"name": "support.function.builtin.gdshader",
+			"match": "\\b(?:texture(?:Lod|Proj|ProjLod|Grad|Size|QueryLod|QueryLevels|Gather)?|texelFetch|radians|degrees|sin|cos|tan|asin|acos|atan|sinh|cosh|tanh|asinh|acosh|atanh|pow|exp|exp2|log|log2|sqrt|inversesqrt|abs|sign|floor|trunc|round|roundEven|ceil|fract|mod|modf|min|max|clamp|mix|step|smoothstep|isnan|isinf|floatBitsToInt|floatBitsToUint|intBitsToFloat|uintBitsToFloat|length|distance|dot|cross|normalize|faceforward|reflect|refract|matrixCompMult|outerProduct|transpose|determinant|inverse|pack(?:Half2x16|Unorm2x16|Snorm2x16|Unorm4x8|Snorm4x8)|unpack(?:Half2x16|Unorm2x16|Snorm2x16|Unorm4x8|Snorm4x8)|bitfield(?:Extract|Insert|Reverse)|bitCount|find(?:LSB|MSB)|imulExtended|uaddCarry|usubBorrow)(?=(?:\\s|/\\*(?:\\*(?!/)|[^*])*\\*/)*[(])"
 		},
 		"identifierFunction": {
 			"name": "entity.name.function.gdshader",

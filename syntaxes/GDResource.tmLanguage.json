@@ -17,14 +17,14 @@
 		"embedded_shader": {
 			"name": "meta.embedded.block.gdshader",
 			"begin": "(code) = \"",
-			"end": "\"",
+			"end": "(?<!\\\\)\"",
 			"beginCaptures": { "1": { "name": "variable.other.property.gdresource" } },
 			"patterns": [ { "include": "source.gdshader" } ]
 		},
 		"embedded_gdscript": {
 			"comment": "meta.embedded.block.gdscript",
 			"begin": "(script/source) = \"",
-			"end": "\"",
+			"end": "(?<!\\\\)\"",
 			"beginCaptures": { "1": { "name": "variable.other.property.gdresource" } },
 			"patterns": [ { "include": "source.gdscript" } ]
 		},
@@ -49,7 +49,7 @@
 						"1": { "name": "variable.other.property.gdresource" },
 						"2": { "name": "punctuation.definition.keyValue.gdresource" }
 					},
-					"end": "($|(?==)|\\,?|\\s*(?=\\}))",
+					"end": "($|(?==)|\\,|\\s*(?=\\}))",
 					"patterns": [ { "include": "#data" } ]
 				}
 			]
@@ -107,7 +107,7 @@
 					]
 				},
 				{
-					"name": "support.function.any-method.gdresource",
+					"name": "string.quoted.double.resource.gdresource",
 					"match": "\"res:\\/\\/[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\""
 				},
 				{
@@ -115,7 +115,7 @@
 					"match": "(?<=type=)\"[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\""
 				},
 				{
-					"name": "constant.character.escape.gdresource",
+					"name": "entity.name.tag.gdresource",
 					"match": "(?<=NodePath\\(|parent=|name=)\"[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\""
 				},
 				{
@@ -170,7 +170,7 @@
 					"name": "constant.numeric.bin.gdresource"
 				},
 				{
-					"begin": "(?<!\\w)(Vector2|Vector2i|Vector3|Vector3i|Color|Rect2|Rect2i|Array|Basis|Dictionary|Plane|Quat|RID|Rect3|Transform|Transform2D|Transform3D|AABB|String|Color|NodePath|Object|PoolByteArray|PoolIntArray|PoolRealArray|PoolStringArray|PoolVector2Array|PoolVector3Array|PoolColorArray|bool|int|float|StringName|Quaternion|PackedByteArray|PackedInt32Array|PackedInt64Array|PackedFloat32Array|PackedFloat64Array|PackedStringArray|PackedVector2Array|PackedVector2iArray|PackedVector3Array|PackedVector3iArray|PackedColorArray)(\\()\\s?",
+					"begin": "(?<!\\w)(Vector2|Vector2i|Vector3|Vector3i|Vector4|Vector4i|Color|Rect2|Rect2i|Array|Basis|Dictionary|Plane|Quaternion|Quat|RID|Transform2D|Transform3D|Transform|AABB|String|StringName|NodePath|Object|Projection|bool|int|float|PoolByteArray|PoolIntArray|PoolRealArray|PoolStringArray|PoolVector2Array|PoolVector3Array|PoolColorArray|PackedByteArray|PackedInt32Array|PackedInt64Array|PackedFloat32Array|PackedFloat64Array|PackedStringArray|PackedVector2Array|PackedVector2iArray|PackedVector3Array|PackedVector3iArray|PackedVector4Array|PackedColorArray)(\\()\\s?",
 					"beginCaptures": { "1": { "name": "support.class.library.gdresource" } },
 					"end": "\\s?(\\))",
 					"patterns": [
