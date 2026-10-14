@@ -519,7 +519,7 @@ function wrap_long_boolean_expression(
 
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
-		: wrappedLines.join("\\n");
+		: wrappedLines.join("\n");
 }
 
 
