@@ -1414,6 +1414,6 @@ function wrap_long_method_chain(
 
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
-		: wrappedLines.join("\\n");
+		: wrappedLines.join("\n");
 }
 
