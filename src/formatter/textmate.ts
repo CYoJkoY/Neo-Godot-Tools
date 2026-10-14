@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import * as vscode from "vscode";
 import { TextEdit } from "vscode";
 import type { TextDocument, TextLine } from "vscode";
 import * as oniguruma from "vscode-oniguruma";
@@ -57,16 +58,30 @@ export interface FormatterOptions {
 	maxEmptyLines: number;
 	denseFunctionParameters: boolean;
 	spacesBeforeEndOfLineComment: 1 | 2;
+	maxLineLength?: number;
+	continuationIndentLevel?: number;
 }
 
 function get_formatter_options() {
 	const rawMaxEmptyLines = get_configuration("formatter.maxEmptyLines");
 	const maxEmptyLines = typeof rawMaxEmptyLines === "number" ? Math.max(0, Math.round(rawMaxEmptyLines)) : 2;
+	const rawMaxLineLength = get_configuration("formatter.maxLineLength");
+	const maxLineLength =
+		typeof rawMaxLineLength === "number" && Number.isFinite(rawMaxLineLength)
+			? Math.max(40, Math.min(240, Math.round(rawMaxLineLength)))
+			: 100;
+	const rawContinuationIndentLevel = get_configuration("formatter.continuationIndentLevel");
+	const continuationIndentLevel =
+		typeof rawContinuationIndentLevel === "number" && Number.isFinite(rawContinuationIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(rawContinuationIndentLevel)))
+			: 2;
 
 	const options: FormatterOptions = {
 		maxEmptyLines: maxEmptyLines,
 		denseFunctionParameters: get_configuration("formatter.denseFunctionParameters", false),
 		spacesBeforeEndOfLineComment: get_configuration("formatter.spacesBeforeEndOfLineComment") === "1" ? 1 : 2,
+		maxLineLength,
+		continuationIndentLevel,
 	};
 
 	return options;
@@ -274,6 +289,110 @@ function is_merge_conflict_marker(line: TextLine): boolean {
 	return trimmed.startsWith("<<<<<<<") || trimmed.startsWith("=======") || trimmed.startsWith(">>>>>>>");
 }
 
+function wrap_long_boolean_condition(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const configuredLength = options.maxLineLength;
+	const maxLineLength =
+		typeof configuredLength === "number" && Number.isFinite(configuredLength)
+			? Math.max(40, Math.min(240, Math.round(configuredLength)))
+			: 100;
+	if (currentLine.length <= maxLineLength) return undefined;
+
+	const controlKeyword = tokens[0]?.value;
+	if (!["if", "elif", "while"].includes(controlKeyword ?? "")) return undefined;
+
+	const endIndex = tokens.length - 1;
+	if (endIndex < 3 || tokens[endIndex]?.value !== ":" || tokens[endIndex]?.string) return undefined;
+	if (
+		tokens.some(
+			(token, index) =>
+				token.type === "comment" ||
+				(token.value.length === 1 && token.value.charCodeAt(0) === 92) ||
+				token.value === ";" ||
+				(index > 0 && token.value === "else" && !token.string),
+		)
+	) {
+		return undefined;
+	}
+
+	const scan = tokens.slice(1, endIndex).reduce(
+		(state, token, offset) => {
+			if (token.string) return state;
+
+			const index = offset + 1;
+			const atTopLevel = state.parentheses === 0 && state.brackets === 0 && state.braces === 0;
+			if (atTopLevel && (token.value === "and" || token.value === "or")) {
+				state.splitIndexes.push(index);
+			}
+
+			if (token.value === "(") state.parentheses += 1;
+			if (token.value === ")") {
+				state.parentheses -= 1;
+				if (state.parentheses < 0) state.valid = false;
+			}
+			if (token.value === "[") state.brackets += 1;
+			if (token.value === "]") {
+				state.brackets -= 1;
+				if (state.brackets < 0) state.valid = false;
+			}
+			if (token.value === "{") state.braces += 1;
+			if (token.value === "}") {
+				state.braces -= 1;
+				if (state.braces < 0) state.valid = false;
+			}
+			return state;
+		},
+		{ valid: true, parentheses: 0, brackets: 0, braces: 0, splitIndexes: [] as number[] },
+	);
+
+	if (
+		!scan.valid ||
+		scan.parentheses !== 0 ||
+		scan.brackets !== 0 ||
+		scan.braces !== 0 ||
+		scan.splitIndexes.length === 0
+	) {
+		return undefined;
+	}
+
+	const boundaries = [...scan.splitIndexes, endIndex];
+	const terms = boundaries.map((end, index) => {
+		const start = index === 0 ? 1 : boundaries[index - 1];
+		return renderedTokens.slice(start, end).join("").trim();
+	});
+	if (terms.some((term) => term.length === 0)) return undefined;
+
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const editorConfiguration = vscode.workspace.getConfiguration("editor", document.uri);
+	const configuredTabSize = editorConfiguration.get<number>("tabSize", 4);
+	const tabSize =
+		typeof configuredTabSize === "number" && Number.isFinite(configuredTabSize)
+			? Math.max(1, Math.min(8, Math.round(configuredTabSize)))
+			: 4;
+	const configuredInsertSpaces = editorConfiguration.get<boolean>("insertSpaces", false);
+	const indentationSample =
+		leadingWhitespace.length > 0 ? leadingWhitespace : (document.getText().match(/^[ \t]+(?=\S)/m)?.[0] ?? "");
+	const hasSpaceIndent = indentationSample.includes(" ");
+	const hasTabIndent = indentationSample.includes("\t");
+	const insertSpaces = hasSpaceIndent !== hasTabIndent ? hasSpaceIndent : configuredInsertSpaces;
+	const indentationUnit = insertSpaces ? " ".repeat(tabSize) : "\t";
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+
+	return `${leadingWhitespace}${renderedTokens[0].trim()} (\n${terms
+		.map((term) => `${continuationIndent}${term}`)
+		.join("\n")}\n${leadingWhitespace}):`;
+}
+
 export async function format_document_async(document: TextDocument, options?: FormatterOptions): Promise<TextEdit[]> {
 	await ensureGrammar();
 	return format_document(document, options);
@@ -341,11 +460,8 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			continue;
 		}
 
-		let nextLine = "";
-
 		// TODO: detect whitespace type and automatically convert
 		const leadingWhitespace = line.text.slice(0, line.firstNonWhitespaceCharacterIndex);
-		nextLine += leadingWhitespace;
 		let firstToken = 0;
 		const first = lineTokens.tokens[0];
 		if (first && line.text.slice(first.startIndex, first.endIndex).trim() === "") firstToken = 1;
@@ -391,25 +507,29 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 				tokens[i].inLambdaBody = true;
 			}
 		}
+		const renderedTokens: string[] = [];
 		for (let i = 0; i < tokens.length; i++) {
 			if (debug) log.debug(i, tokens[i].value, tokens[i]);
 
 			if (i === 0 && tokens[i].string) {
 				// leading whitespace is already accounted for
-				nextLine += tokens[i].original.trimStart();
+				renderedTokens.push(tokens[i].original.trimStart());
 			} else if (i > 0 && tokens[i - 1].string && tokens[i].string) {
-				nextLine += tokens[i].original;
+				renderedTokens.push(tokens[i].original);
 			} else {
-				nextLine += between(tokens, i, options) + tokens[i].value.trim();
+				renderedTokens.push(between(tokens, i, options) + tokens[i].value.trim());
 			}
 			if (tokens[i].type !== "comment") {
 				lastToken = tokens[i].value;
 			}
 		}
 
+		const nextLine = leadingWhitespace + renderedTokens.join("");
+		const formattedLine = wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ?? nextLine;
+
 		// Returning edits for unchanged lines costs allocations and slows VS Code's
 		// edit application on large scripts. Keep only actual replacements.
-		if (nextLine !== line.text) edits.push(TextEdit.replace(line.range, nextLine));
+		if (formattedLine !== line.text) edits.push(TextEdit.replace(line.range, formattedLine));
 	}
 
 	return edits;
