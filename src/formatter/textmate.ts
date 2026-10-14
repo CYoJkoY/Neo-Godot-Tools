@@ -393,6 +393,159 @@ function wrap_long_boolean_condition(
 		.join("\n")}\n${leadingWhitespace}):`;
 }
 
+/**
+ * Wrap a long single-line function call when top-level argument commas provide
+ * safe split points. Unsupported shapes remain untouched.
+ */
+function wrap_long_function_call(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const configuredLength = options.maxLineLength;
+	const maxLineLength =
+		typeof configuredLength === "number" && Number.isFinite(configuredLength)
+			? Math.max(40, Math.min(240, Math.round(configuredLength)))
+			: 100;
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["if", "elif", "while", "for", "match", "signal", "enum"].includes(firstValue)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const matchingClosers = new Map<number, number>();
+	const openParentheses: number[] = [];
+	for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
+		if (tokens[tokenIndex].string) continue;
+		if (tokens[tokenIndex].value === "(") {
+			openParentheses.push(tokenIndex);
+		} else if (tokens[tokenIndex].value === ")") {
+			const openIndex = openParentheses.pop();
+			if (openIndex !== undefined) matchingClosers.set(openIndex, tokenIndex);
+		}
+	}
+
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const editorConfiguration = vscode.workspace.getConfiguration("editor", document.uri);
+	const configuredTabSize = editorConfiguration.get<number>("tabSize", 4);
+	const tabSize =
+		typeof configuredTabSize === "number" && Number.isFinite(configuredTabSize)
+			? Math.max(1, Math.min(8, Math.round(configuredTabSize)))
+			: 4;
+	const configuredInsertSpaces = editorConfiguration.get<boolean>("insertSpaces", false);
+	const indentationSample =
+		leadingWhitespace.length > 0 ? leadingWhitespace : (document.getText().match(/^[ \\t]+(?=\\S)/m)?.[0] ?? "");
+	const hasSpaceIndent = indentationSample.includes(" ");
+	const hasTabIndent = indentationSample.includes("\t");
+	const insertSpaces = hasSpaceIndent !== hasTabIndent ? hasSpaceIndent : configuredInsertSpaces;
+	const indentationUnit = insertSpaces ? " ".repeat(tabSize) : "\t";
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+
+	for (const [openIndex, closeIndex] of matchingClosers) {
+		const callableToken = tokens[openIndex - 1];
+		const isCallable =
+			callableToken !== undefined &&
+			!callableToken.string &&
+			(callableToken.identifier === true || [")", "]"].includes(callableToken.value));
+		if (!isCallable) continue;
+
+		const commaIndexes: number[] = [];
+		let nestedParentheses = 0;
+		let nestedBrackets = 0;
+		let nestedBraces = 0;
+		let valid = true;
+		for (let tokenIndex = openIndex + 1; tokenIndex < closeIndex; tokenIndex++) {
+			const argumentToken = tokens[tokenIndex];
+			if (argumentToken.string) continue;
+
+			if (argumentToken.value === "(") nestedParentheses++;
+			if (argumentToken.value === ")") nestedParentheses--;
+			if (argumentToken.value === "[") nestedBrackets++;
+			if (argumentToken.value === "]") nestedBrackets--;
+			if (argumentToken.value === "{") nestedBraces++;
+			if (argumentToken.value === "}") nestedBraces--;
+			if (nestedParentheses < 0 || nestedBrackets < 0 || nestedBraces < 0) {
+				valid = false;
+				break;
+			}
+			if (
+				argumentToken.value === "," &&
+				nestedParentheses === 0 &&
+				nestedBrackets === 0 &&
+				nestedBraces === 0
+			) {
+				commaIndexes.push(tokenIndex);
+			}
+		}
+		if (
+			!valid ||
+			nestedParentheses !== 0 ||
+			nestedBrackets !== 0 ||
+			nestedBraces !== 0 ||
+			commaIndexes.length === 0
+		) {
+			continue;
+		}
+
+		const argumentSegments: string[] = [];
+		let segmentStart = openIndex + 1;
+		for (const commaIndex of commaIndexes) {
+			const argumentText = renderedTokens.slice(segmentStart, commaIndex).join("").trim();
+			if (!argumentText) {
+				valid = false;
+				break;
+			}
+			argumentSegments.push(argumentText);
+			segmentStart = commaIndex + 1;
+		}
+		if (!valid) continue;
+		const finalArgument = renderedTokens.slice(segmentStart, closeIndex).join("").trim();
+		if (!finalArgument) continue;
+		argumentSegments.push(finalArgument);
+
+		const prefix = renderedTokens.slice(0, openIndex + 1).join("");
+		const suffix = renderedTokens.slice(closeIndex + 1).join("");
+		const firstLine = leadingWhitespace + prefix;
+		const wrappedLines = [
+			firstLine,
+			...argumentSegments.map((argumentText, argumentIndex) => {
+				const isLastArgument = argumentIndex === argumentSegments.length - 1;
+				return `${continuationIndent}${argumentText}${isLastArgument ? `)${suffix}` : ","}`;
+			}),
+		];
+
+		// Keep the transform idempotent: if any generated line is still too long,
+		// leave this call unchanged rather than requiring another formatting pass.
+		if (wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) continue;
+		return wrappedLines.join("\n");
+	}
+
+	return undefined;
+}
+
 export async function format_document_async(document: TextDocument, options?: FormatterOptions): Promise<TextEdit[]> {
 	await ensureGrammar();
 	return format_document(document, options);
@@ -525,7 +678,10 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		}
 
 		const nextLine = leadingWhitespace + renderedTokens.join("");
-		const formattedLine = wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ?? nextLine;
+		const formattedLine =
+			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			nextLine;
 
 		// Returning edits for unchanged lines costs allocations and slows VS Code's
 		// edit application on large scripts. Keep only actual replacements.
