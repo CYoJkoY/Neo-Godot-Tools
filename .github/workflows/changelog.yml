@@ -25,7 +25,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          token: ${{ secrets.ACTIONS_BOT_TOKEN || github.token }}
 
       - name: Check whether package version changed
         id: version
@@ -50,6 +50,10 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Skip changelog synchronization when the package version is unchanged
+        if: steps.version.outputs.changed != 'true'
+        run: echo "Package version is unchanged; skipping changelog synchronization."
 
       - name: Synchronize live tags
         if: steps.version.outputs.changed == 'true'
