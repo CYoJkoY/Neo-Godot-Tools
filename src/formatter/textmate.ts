@@ -507,33 +507,40 @@ function scan_token_boundaries(
 	startIndex = 0,
 	endIndex = tokens.length,
 ): TokenBoundaryScan {
-	const stack: { index: number; value: string }[] = [];
-	const topLevelIndexes: number[] = [];
-	const matchingClosers = new Map<number, number>();
-	let valid = true;
+	const scan = tokens.slice(startIndex, endIndex).reduce(
+		(state, currentToken, offset) => {
+			if (currentToken.string || currentToken.type === "comment" || !state.valid) return state;
 
-	for (let tokenIndex = startIndex; tokenIndex < endIndex; tokenIndex++) {
-		const currentToken = tokens[tokenIndex];
-		if (currentToken.string || currentToken.type === "comment") continue;
+			const tokenIndex = startIndex + offset;
+			if (state.stack.length === 0) state.topLevelIndexes.push(tokenIndex);
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push({ index: tokenIndex, value: currentToken.value });
+				return state;
+			}
 
-		if (stack.length === 0) topLevelIndexes.push(tokenIndex);
-		if (openingDelimiters.has(currentToken.value)) {
-			stack.push({ index: tokenIndex, value: currentToken.value });
-			continue;
-		}
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (expectedOpening === undefined) return state;
 
-		const expectedOpening = closingDelimiters.get(currentToken.value);
-		if (expectedOpening === undefined) continue;
-
-		const openingToken = stack.pop();
-		if (!openingToken || openingToken.value !== expectedOpening) {
-			valid = false;
-			continue;
-		}
-		matchingClosers.set(openingToken.index, tokenIndex);
-	}
-
-	return { valid: valid && stack.length === 0, topLevelIndexes, matchingClosers };
+			const openingToken = state.stack.pop();
+			if (!openingToken || openingToken.value !== expectedOpening) {
+				state.valid = false;
+				return state;
+			}
+			state.matchingClosers.set(openingToken.index, tokenIndex);
+			return state;
+		},
+		{
+			valid: true,
+			stack: [] as { index: number; value: string }[],
+			topLevelIndexes: [] as number[],
+			matchingClosers: new Map<number, number>(),
+		},
+	);
+	return {
+		valid: scan.valid && scan.stack.length === 0,
+		topLevelIndexes: scan.topLevelIndexes,
+		matchingClosers: scan.matchingClosers,
+	};
 }
 
 
