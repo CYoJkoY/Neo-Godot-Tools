@@ -1348,7 +1348,7 @@ function wrap_long_additive_expression(
 			const previousCanEndExpression =
 				previousToken !== undefined &&
 				(previousToken.string === true ||
-					previousToken.identifier === true ||
+					(previousToken.identifier === true && previousToken.type !== "keyword") ||
 					["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
 					[")", "]", "}"].includes(previousToken.value));
 
