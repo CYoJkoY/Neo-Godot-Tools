@@ -857,7 +857,7 @@ function wrap_long_ternary_expression(
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
 		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
-	const firstLine = leadingWhitespace + expressionPrefix + "(";
+	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
 	const wrappedLines = [
 		firstLine,
 		...segments.map((segment) => `${continuationIndent}${segment}`),
