@@ -997,6 +997,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 
 		const nextLine = leadingWhitespace + renderedTokens.join("");
 		const formattedLine =
+			wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
@@ -1127,6 +1128,145 @@ function wrap_long_boolean_expression(
 		firstLine,
 		...segments.map((segment) => `${continuationIndent}${segment}`),
 		`${leadingWhitespace})`,
+	];
+
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\n");
+}
+
+
+/**
+ * Wrap eligible long, single-line GDScript function declarations.
+ * Only top-level parameter commas are split; unsupported signatures stay unchanged.
+ */
+function wrap_long_function_declaration(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const functionIndex = tokens[0]?.value === "static" ? 1 : 0;
+	if (tokens[functionIndex]?.value !== "func") return undefined;
+	if (tokens[functionIndex + 2]?.value !== "(") return undefined;
+	if (tokens[tokens.length - 1]?.value !== ":") return undefined;
+
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const openIndex = functionIndex + 2;
+	const delimiterState = tokens.slice(openIndex).reduce(
+		(state, currentToken, tokenOffset) => {
+			if (!state.valid || state.done || currentToken.string) return state;
+			const tokenIndex = openIndex + tokenOffset;
+
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push({ index: tokenIndex, value: currentToken.value });
+				return state;
+			}
+
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (!expectedOpening) return state;
+			const openingToken = state.stack.pop();
+			if (!openingToken || openingToken.value !== expectedOpening) {
+				state.valid = false;
+				return state;
+			}
+			if (openingToken.index === openIndex) {
+				state.closeIndex = tokenIndex;
+				state.done = true;
+			}
+			return state;
+		},
+		{
+			valid: true,
+			done: false,
+			closeIndex: -1,
+			stack: [] as { index: number; value: string }[],
+		},
+	);
+	const closeIndex = delimiterState.closeIndex;
+	if (!delimiterState.valid || closeIndex <= openIndex || delimiterState.stack.length !== 0) {
+		return undefined;
+	}
+
+	const parameterState = tokens.slice(openIndex + 1, closeIndex).reduce(
+		(state, currentToken, tokenOffset) => {
+			if (!state.valid || currentToken.string) return state;
+
+			if (currentToken.value === "," && state.stack.length === 1) {
+				state.commaIndexes.push(openIndex + 1 + tokenOffset);
+				return state;
+			}
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push(currentToken.value);
+				return state;
+			}
+
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (expectedOpening && state.stack.pop() !== expectedOpening) state.valid = false;
+			return state;
+		},
+		{ valid: true, stack: ["("] as string[], commaIndexes: [] as number[] },
+	);
+	if (
+		!parameterState.valid ||
+		parameterState.stack.length !== 1 ||
+		parameterState.stack[0] !== "(" ||
+		parameterState.commaIndexes.length === 0
+	) {
+		return undefined;
+	}
+
+	const parameterCollection = parameterState.commaIndexes.reduce(
+		(state, commaIndex) => {
+			const parameterText = renderedTokens.slice(state.nextStart, commaIndex).join("").trim();
+			if (!parameterText) {
+				state.valid = false;
+				return state;
+			}
+			state.parameterTexts.push(parameterText);
+			state.nextStart = commaIndex + 1;
+			return state;
+		},
+		{ valid: true, parameterTexts: [] as string[], nextStart: openIndex + 1 },
+	);
+	if (!parameterCollection.valid) return undefined;
+
+	const finalParameter = renderedTokens.slice(parameterCollection.nextStart, closeIndex).join("").trim();
+	// Do not guess how a trailing comma should be presented in a wrapped signature.
+	if (!finalParameter) return undefined;
+	const parameterTexts = [...parameterCollection.parameterTexts, finalParameter];
+
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const firstLine = leadingWhitespace + renderedTokens.slice(0, openIndex + 1).join("");
+	const declarationSuffix = `)${renderedTokens.slice(closeIndex + 1).join("")}`;
+	const wrappedLines = [
+		firstLine,
+		...parameterTexts.map((parameterText, parameterIndex) => {
+			const isLastParameter = parameterIndex === parameterTexts.length - 1;
+			return `${continuationIndent}${parameterText}${isLastParameter ? declarationSuffix : ","}`;
+		}),
 	];
 
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
