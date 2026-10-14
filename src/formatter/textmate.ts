@@ -1153,7 +1153,6 @@ function wrap_long_function_declaration(
 
 	const functionIndex = tokens[0]?.value === "static" ? 1 : 0;
 	if (tokens[functionIndex]?.value !== "func") return undefined;
-	if (functionIndex === 1 && tokens[0]?.value !== "static") return undefined;
 	if (tokens[functionIndex + 2]?.value !== "(") return undefined;
 	if (tokens[tokens.length - 1]?.value !== ":") return undefined;
 
@@ -1170,66 +1169,88 @@ function wrap_long_function_declaration(
 	}
 
 	const openIndex = functionIndex + 2;
-	const delimiterStack: { index: number; value: string }[] = [];
-	let closeIndex = -1;
-	for (let tokenIndex = openIndex; tokenIndex < tokens.length; tokenIndex++) {
-		const currentToken = tokens[tokenIndex];
-		if (currentToken.string) continue;
+	const delimiterState = tokens.slice(openIndex).reduce(
+		(state, currentToken, tokenOffset) => {
+			if (!state.valid || state.done || currentToken.string) return state;
+			const tokenIndex = openIndex + tokenOffset;
 
-		if (openingDelimiters.has(currentToken.value)) {
-			delimiterStack.push({ index: tokenIndex, value: currentToken.value });
-			continue;
-		}
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push({ index: tokenIndex, value: currentToken.value });
+				return state;
+			}
 
-		const expectedOpening = closingDelimiters.get(currentToken.value);
-		if (!expectedOpening) continue;
-
-		const openingToken = delimiterStack.pop();
-		if (!openingToken || openingToken.value !== expectedOpening) return undefined;
-		if (openingToken.index === openIndex) {
-			closeIndex = tokenIndex;
-			break;
-		}
-	}
-	if (closeIndex <= openIndex || delimiterStack.length !== 0) return undefined;
-
-	const parameterCommaIndexes: number[] = [];
-	const parameterDelimiterStack: string[] = ["("];
-	for (let tokenIndex = openIndex + 1; tokenIndex < closeIndex; tokenIndex++) {
-		const currentToken = tokens[tokenIndex];
-		if (currentToken.string) continue;
-
-		if (currentToken.value === "," && parameterDelimiterStack.length === 1) {
-			parameterCommaIndexes.push(tokenIndex);
-			continue;
-		}
-
-		if (openingDelimiters.has(currentToken.value)) {
-			parameterDelimiterStack.push(currentToken.value);
-			continue;
-		}
-
-		const expectedOpening = closingDelimiters.get(currentToken.value);
-		if (expectedOpening) {
-			const openingValue = parameterDelimiterStack.pop();
-			if (openingValue !== expectedOpening) return undefined;
-		}
-	}
-	if (parameterDelimiterStack.length !== 1 || parameterCommaIndexes.length === 0) return undefined;
-
-	const parameterTexts: string[] = [];
-	let segmentStart = openIndex + 1;
-	for (const commaIndex of parameterCommaIndexes) {
-		const parameterText = renderedTokens.slice(segmentStart, commaIndex).join("").trim();
-		if (!parameterText) return undefined;
-		parameterTexts.push(parameterText);
-		segmentStart = commaIndex + 1;
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (!expectedOpening) return state;
+			const openingToken = state.stack.pop();
+			if (!openingToken || openingToken.value !== expectedOpening) {
+				state.valid = false;
+				return state;
+			}
+			if (openingToken.index === openIndex) {
+				state.closeIndex = tokenIndex;
+				state.done = true;
+			}
+			return state;
+		},
+		{
+			valid: true,
+			done: false,
+			closeIndex: -1,
+			stack: [] as { index: number; value: string }[],
+		},
+	);
+	const closeIndex = delimiterState.closeIndex;
+	if (!delimiterState.valid || closeIndex <= openIndex || delimiterState.stack.length !== 0) {
+		return undefined;
 	}
 
-	const finalParameter = renderedTokens.slice(segmentStart, closeIndex).join("").trim();
+	const parameterState = tokens.slice(openIndex + 1, closeIndex).reduce(
+		(state, currentToken, tokenOffset) => {
+			if (!state.valid || currentToken.string) return state;
+
+			if (currentToken.value === "," && state.stack.length === 1) {
+				state.commaIndexes.push(openIndex + 1 + tokenOffset);
+				return state;
+			}
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push(currentToken.value);
+				return state;
+			}
+
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (expectedOpening && state.stack.pop() !== expectedOpening) state.valid = false;
+			return state;
+		},
+		{ valid: true, stack: ["("] as string[], commaIndexes: [] as number[] },
+	);
+	if (
+		!parameterState.valid ||
+		parameterState.stack.length !== 1 ||
+		parameterState.stack[0] !== "(" ||
+		parameterState.commaIndexes.length === 0
+	) {
+		return undefined;
+	}
+
+	const parameterCollection = parameterState.commaIndexes.reduce(
+		(state, commaIndex) => {
+			const parameterText = renderedTokens.slice(state.nextStart, commaIndex).join("").trim();
+			if (!parameterText) {
+				state.valid = false;
+				return state;
+			}
+			state.parameterTexts.push(parameterText);
+			state.nextStart = commaIndex + 1;
+			return state;
+		},
+		{ valid: true, parameterTexts: [] as string[], nextStart: openIndex + 1 },
+	);
+	if (!parameterCollection.valid) return undefined;
+
+	const finalParameter = renderedTokens.slice(parameterCollection.nextStart, closeIndex).join("").trim();
 	// Do not guess how a trailing comma should be presented in a wrapped signature.
 	if (!finalParameter) return undefined;
-	parameterTexts.push(finalParameter);
+	const parameterTexts = [...parameterCollection.parameterTexts, finalParameter];
 
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
