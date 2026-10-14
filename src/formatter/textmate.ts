@@ -540,11 +540,6 @@ function wrap_long_function_call(
 }
 
 
-/**
- * Wrap long inline arrays and dictionary literals at top-level commas.
- * Collections use one continuation indent level per the GDScript style guide.
- */
-
 const arrayLiteralPrefixes = new Set([
 	"=",
 	":=",
@@ -665,7 +660,7 @@ function wrap_collection_candidate(
 	const closingLine = leadingWhitespace + tokens[closeIndex].value + suffix;
 	const wrappedLines = [
 		firstLine,
-		...segments.map((segment) => collectionIndent + segment + ","),
+		...segments.map((segment) => `${collectionIndent}${segment},`),
 		closingLine,
 	];
 
