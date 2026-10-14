@@ -401,129 +401,6 @@ function wrap_long_boolean_condition(
 }
 
 /**
- * Wrap long boolean expressions in assignments and return statements.
- * Preserve nested expressions and leave top-level ternaries to their dedicated formatter.
- */
-function wrap_long_boolean_expression(
-	tokens: Token[],
-	renderedTokens: string[],
-	leadingWhitespace: string,
-	currentLine: string,
-	document: TextDocument,
-	options: FormatterOptions,
-): string | undefined {
-	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
-
-	const firstValue = tokens[0]?.value ?? "";
-	if (
-		firstValue.startsWith("@") ||
-		["class", "enum", "func", "if", "elif", "while", "for", "match", "signal"].includes(firstValue)
-	) {
-		return undefined;
-	}
-	if (
-		tokens.some(
-			(token) =>
-				token.type === "comment" ||
-				(!token.string &&
-					(token.value === "func" ||
-						token.value === ";" ||
-						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
-		)
-	) {
-		return undefined;
-	}
-
-	const scan = tokens.reduce(
-		(state, token, tokenIndex) => {
-			if (!state.valid || token.string) return state;
-
-			const atTopLevel = state.parentheses === 0 && state.brackets === 0 && state.braces === 0;
-			if (atTopLevel) {
-				if (token.value === "if" || token.value === "else") state.hasTernaryMarker = true;
-				if (token.value === "and" || token.value === "or") state.splitIndexes.push(tokenIndex);
-				if (token.value === "=" || token.value === ":=") state.assignmentIndexes.push(tokenIndex);
-			}
-
-			if (token.value === "(") state.parentheses += 1;
-			if (token.value === ")") {
-				state.parentheses -= 1;
-				if (state.parentheses < 0) state.valid = false;
-			}
-			if (token.value === "[") state.brackets += 1;
-			if (token.value === "]") {
-				state.brackets -= 1;
-				if (state.brackets < 0) state.valid = false;
-			}
-			if (token.value === "{") state.braces += 1;
-			if (token.value === "}") {
-				state.braces -= 1;
-				if (state.braces < 0) state.valid = false;
-			}
-			return state;
-		},
-		{
-			valid: true,
-			parentheses: 0,
-			brackets: 0,
-			braces: 0,
-			hasTernaryMarker: false,
-			splitIndexes: [] as number[],
-			assignmentIndexes: [] as number[],
-		},
-	);
-
-	if (
-		!scan.valid ||
-		scan.parentheses !== 0 ||
-		scan.brackets !== 0 ||
-		scan.braces !== 0 ||
-		scan.hasTernaryMarker ||
-		scan.splitIndexes.length === 0
-	) {
-		return undefined;
-	}
-
-	const firstSplitIndex = scan.splitIndexes[0];
-	const assignmentIndex = scan.assignmentIndexes.reduce(
-		(matchedIndex, currentIndex) =>
-			currentIndex < firstSplitIndex && currentIndex > matchedIndex ? currentIndex : matchedIndex,
-		-1,
-	);
-	const expressionStart = firstValue === "return" ? 1 : assignmentIndex + 1;
-	if (expressionStart <= 0 && firstValue !== "return") return undefined;
-	if (expressionStart >= firstSplitIndex) return undefined;
-
-	const segments = [...scan.splitIndexes, tokens.length].map((endIndex, segmentIndex) => {
-		const segmentStart = segmentIndex === 0 ? expressionStart : scan.splitIndexes[segmentIndex - 1];
-		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
-	});
-	if (segments.some((segment) => segment.length === 0)) return undefined;
-
-	const configuredIndentLevel = options.continuationIndentLevel;
-	const continuationIndentLevel =
-		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
-			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
-	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
-	const expressionPrefix =
-		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
-	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
-	const wrappedLines = [
-		firstLine,
-		...segments.map((segment) => `${continuationIndent}${segment}`),
-		`${leadingWhitespace})`,
-	];
-
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
-		? undefined
-		: wrappedLines.join("\n");
-}
-
-
-/**
  * Wrap a long single-line function call when top-level argument commas provide
  * safe split points. Unsupported shapes remain untouched.
  */
@@ -1133,4 +1010,126 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	}
 
 	return edits;
+}
+
+/**
+ * Wrap long boolean expressions in assignments and return statements.
+ * Preserve nested expressions and leave top-level ternaries to their dedicated formatter.
+ */
+function wrap_long_boolean_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["class", "enum", "func", "if", "elif", "while", "for", "match", "signal"].includes(firstValue)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const scan = tokens.reduce(
+		(state, token, tokenIndex) => {
+			if (!state.valid || token.string) return state;
+
+			const atTopLevel = state.parentheses === 0 && state.brackets === 0 && state.braces === 0;
+			if (atTopLevel) {
+				if (token.value === "if" || token.value === "else") state.hasTernaryMarker = true;
+				if (token.value === "and" || token.value === "or") state.splitIndexes.push(tokenIndex);
+				if (token.value === "=" || token.value === ":=") state.assignmentIndexes.push(tokenIndex);
+			}
+
+			if (token.value === "(") state.parentheses += 1;
+			if (token.value === ")") {
+				state.parentheses -= 1;
+				if (state.parentheses < 0) state.valid = false;
+			}
+			if (token.value === "[") state.brackets += 1;
+			if (token.value === "]") {
+				state.brackets -= 1;
+				if (state.brackets < 0) state.valid = false;
+			}
+			if (token.value === "{") state.braces += 1;
+			if (token.value === "}") {
+				state.braces -= 1;
+				if (state.braces < 0) state.valid = false;
+			}
+			return state;
+		},
+		{
+			valid: true,
+			parentheses: 0,
+			brackets: 0,
+			braces: 0,
+			hasTernaryMarker: false,
+			splitIndexes: [] as number[],
+			assignmentIndexes: [] as number[],
+		},
+	);
+
+	if (
+		!scan.valid ||
+		scan.parentheses !== 0 ||
+		scan.brackets !== 0 ||
+		scan.braces !== 0 ||
+		scan.hasTernaryMarker ||
+		scan.splitIndexes.length === 0
+	) {
+		return undefined;
+	}
+
+	const firstSplitIndex = scan.splitIndexes[0];
+	const assignmentIndex = scan.assignmentIndexes.reduce(
+		(matchedIndex, currentIndex) =>
+			currentIndex < firstSplitIndex && currentIndex > matchedIndex ? currentIndex : matchedIndex,
+		-1,
+	);
+	const expressionStart = firstValue === "return" ? 1 : assignmentIndex + 1;
+	if (expressionStart <= 0 && firstValue !== "return") return undefined;
+	if (expressionStart >= firstSplitIndex) return undefined;
+
+	const segments = [...scan.splitIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : scan.splitIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const expressionPrefix =
+		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
+	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		`${leadingWhitespace})`,
+	];
+
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\n");
 }
