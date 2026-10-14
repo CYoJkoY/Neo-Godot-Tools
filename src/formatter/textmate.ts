@@ -755,6 +755,120 @@ export async function format_document_async(document: TextDocument, options?: Fo
 	return format_document(document, options);
 }
 
+
+/**
+ * Wrap eligible long ternary expressions in assignments and return statements.
+ * Only clear top-level if/else sequences are transformed; unsupported shapes stay unchanged.
+ */
+function wrap_long_ternary_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["class", "enum", "func", "if", "elif", "while", "for", "match", "signal"].includes(firstValue)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const scan = tokens.reduce(
+		(state, currentToken, tokenIndex) => {
+			if (!state.valid || currentToken.string) return state;
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push({ index: tokenIndex, value: currentToken.value });
+				return state;
+			}
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (expectedOpening) {
+				const openingToken = state.stack.pop();
+				if (!openingToken || openingToken.value !== expectedOpening) state.valid = false;
+				return state;
+			}
+			if (state.stack.length === 0) {
+				if (currentToken.value === "if" || currentToken.value === "else") {
+					state.markers.push({ index: tokenIndex, value: currentToken.value });
+				}
+				if (currentToken.value === "=" || currentToken.value === ":=") {
+					state.assignmentIndexes.push(tokenIndex);
+				}
+			}
+			return state;
+		},
+		{
+			valid: true,
+			stack: [] as { index: number; value: string }[],
+			markers: [] as { index: number; value: string }[],
+			assignmentIndexes: [] as number[],
+		},
+	);
+	const markerSequenceIsValid =
+		scan.valid &&
+		scan.stack.length === 0 &&
+		scan.markers.length >= 2 &&
+		scan.markers.length % 2 === 0 &&
+		scan.markers.every((marker, index) => marker.value === (index % 2 === 0 ? "if" : "else"));
+	if (!markerSequenceIsValid) return undefined;
+
+	const firstIfIndex = scan.markers[0].index;
+	const assignmentIndex = scan.assignmentIndexes.reduce(
+		(matchedIndex, currentIndex) =>
+			currentIndex < firstIfIndex && currentIndex > matchedIndex ? currentIndex : matchedIndex,
+		-1,
+	);
+	const expressionStart = firstValue === "return" ? 1 : assignmentIndex + 1;
+	if (expressionStart <= 0 && firstValue !== "return") return undefined;
+	if (expressionStart >= firstIfIndex) return undefined;
+
+	const elseIndexes = scan.markers
+		.filter((marker) => marker.value === "else")
+		.map((marker) => marker.index);
+	const segments = [...elseIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : elseIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const expressionPrefix =
+		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
+	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		`${leadingWhitespace})`,
+	];
+
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\n");
+}
+
 /** Synchronous entry point retained for callers that have already loaded the grammar. */
 export function format_document(document: TextDocument, _options?: FormatterOptions): TextEdit[] {
 	const activeGrammar = grammar;
@@ -884,6 +998,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		const nextLine = leadingWhitespace + renderedTokens.join("");
 		const formattedLine =
 			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			nextLine;
