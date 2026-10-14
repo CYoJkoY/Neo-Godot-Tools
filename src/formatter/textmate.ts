@@ -1299,7 +1299,6 @@ function wrap_long_method_chain(
 			"break",
 			"class",
 			"class_name",
-			"const",
 			"continue",
 			"elif",
 			"enum",
@@ -1310,8 +1309,6 @@ function wrap_long_method_chain(
 			"match",
 			"pass",
 			"signal",
-			"static",
-			"var",
 			"while",
 		].includes(firstValue)
 	) {
@@ -1381,6 +1378,7 @@ function wrap_long_method_chain(
 		(currentLast, assignmentIndex) => Math.max(currentLast, assignmentIndex),
 		-1,
 	);
+	if (["const", "static", "var"].includes(firstValue) && lastAssignmentIndex < 0) return undefined;
 	const expressionStart =
 		firstValue === "return" ? 1 : lastAssignmentIndex >= 0 ? lastAssignmentIndex + 1 : 0;
 	const dotIndexes = scan.dotIndexes.filter((dotIndex) => dotIndex >= expressionStart);
