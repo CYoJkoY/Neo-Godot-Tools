@@ -866,7 +866,7 @@ function wrap_long_ternary_expression(
 
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
-		: wrappedLines.join("\\n");
+		: wrappedLines.join("\n");
 }
 
 /** Synchronous entry point retained for callers that have already loaded the grammar. */
