@@ -1003,6 +1003,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			nextLine;
 
 		// Returning edits for unchanged lines costs allocations and slows VS Code's
@@ -1273,3 +1274,146 @@ function wrap_long_function_declaration(
 		? undefined
 		: wrappedLines.join("\n");
 }
+
+
+/**
+ * Wrap an overlong property/method chain inside a parenthesized expression.
+ * Safe argument and collection wrapping takes precedence; unsupported forms stay unchanged.
+ */
+function wrap_long_method_chain(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		[
+			"assert",
+			"break",
+			"class",
+			"class_name",
+			"const",
+			"continue",
+			"elif",
+			"enum",
+			"extends",
+			"for",
+			"func",
+			"if",
+			"match",
+			"pass",
+			"signal",
+			"static",
+			"var",
+			"while",
+		].includes(firstValue)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92) ||
+						token.value === "func")),
+		)
+	) {
+		return undefined;
+	}
+
+	const assignmentOperators = new Set([
+		"=",
+		":=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"**=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+	]);
+	const scan = tokens.reduce(
+		(state, currentToken, tokenIndex) => {
+			if (!state.valid || currentToken.string) return state;
+
+			const atTopLevel = state.stack.length === 0;
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			const openingMismatch =
+				expectedOpening !== undefined &&
+				state.stack[state.stack.length - 1] !== expectedOpening;
+			const nextStack = openingDelimiters.has(currentToken.value)
+				? [...state.stack, currentToken.value]
+				: expectedOpening
+					? state.stack.slice(0, -1)
+					: state.stack;
+
+			return {
+				valid: state.valid && !openingMismatch,
+				stack: nextStack,
+				dotIndexes:
+					atTopLevel && currentToken.value === "."
+						? [...state.dotIndexes, tokenIndex]
+						: state.dotIndexes,
+				assignmentIndexes:
+					atTopLevel && assignmentOperators.has(currentToken.value)
+						? [...state.assignmentIndexes, tokenIndex]
+						: state.assignmentIndexes,
+			};
+		},
+		{ valid: true, stack: [] as string[], dotIndexes: [] as number[], assignmentIndexes: [] as number[] },
+	);
+	if (!scan.valid || scan.stack.length > 0) return undefined;
+
+	const lastAssignmentIndex = scan.assignmentIndexes.reduce(
+		(currentLast, assignmentIndex) => Math.max(currentLast, assignmentIndex),
+		-1,
+	);
+	const expressionStart =
+		firstValue === "return" ? 1 : lastAssignmentIndex >= 0 ? lastAssignmentIndex + 1 : 0;
+	const dotIndexes = scan.dotIndexes.filter((dotIndex) => dotIndex >= expressionStart);
+	if (
+		dotIndexes.length === 0 ||
+		dotIndexes.some((dotIndex) => !tokens[dotIndex - 1] || !tokens[dotIndex + 1])
+	) {
+		return undefined;
+	}
+
+	const segments = [...dotIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : dotIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.length < 2 || segments.some((segment) => segment.length === 0)) return undefined;
+
+	const expressionPrefix = renderedTokens.slice(0, expressionStart).join("").trimEnd();
+	const firstLine = expressionPrefix ? `${leadingWhitespace}${expressionPrefix} (` : `${leadingWhitespace}(`;
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		`${leadingWhitespace})`,
+	];
+
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\\n");
+}
+
