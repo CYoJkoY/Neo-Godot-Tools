@@ -289,6 +289,31 @@ function is_merge_conflict_marker(line: TextLine): boolean {
 	return trimmed.startsWith("<<<<<<<") || trimmed.startsWith("=======") || trimmed.startsWith(">>>>>>>");
 }
 
+
+function get_max_line_length(options: FormatterOptions): number {
+	const configuredLength = options.maxLineLength;
+	return typeof configuredLength === "number" && Number.isFinite(configuredLength)
+		? Math.max(40, Math.min(240, Math.round(configuredLength)))
+		: 100;
+}
+
+
+function get_indentation_unit(document: TextDocument, leadingWhitespace: string): string {
+	const editorConfiguration = vscode.workspace.getConfiguration("editor", document.uri);
+	const configuredTabSize = editorConfiguration.get<number>("tabSize", 4);
+	const tabSize =
+		typeof configuredTabSize === "number" && Number.isFinite(configuredTabSize)
+			? Math.max(1, Math.min(8, Math.round(configuredTabSize)))
+			: 4;
+	const configuredInsertSpaces = editorConfiguration.get<boolean>("insertSpaces", false);
+	const indentationSample =
+		leadingWhitespace.length > 0 ? leadingWhitespace : (document.getText().match(/^[ \t]+(?=\S)/m)?.[0] ?? "");
+	const hasSpaceIndent = indentationSample.includes(" ");
+	const hasTabIndent = indentationSample.includes("\t");
+	const insertSpaces = hasSpaceIndent !== hasTabIndent ? hasSpaceIndent : configuredInsertSpaces;
+	return insertSpaces ? " ".repeat(tabSize) : "\t";
+}
+
 function wrap_long_boolean_condition(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -297,11 +322,7 @@ function wrap_long_boolean_condition(
 	document: TextDocument,
 	options: FormatterOptions,
 ): string | undefined {
-	const configuredLength = options.maxLineLength;
-	const maxLineLength =
-		typeof configuredLength === "number" && Number.isFinite(configuredLength)
-			? Math.max(40, Math.min(240, Math.round(configuredLength)))
-			: 100;
+	const maxLineLength = get_max_line_length(options);
 	if (currentLine.length <= maxLineLength) return undefined;
 
 	const controlKeyword = tokens[0]?.value;
@@ -373,19 +394,7 @@ function wrap_long_boolean_condition(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 2;
-	const editorConfiguration = vscode.workspace.getConfiguration("editor", document.uri);
-	const configuredTabSize = editorConfiguration.get<number>("tabSize", 4);
-	const tabSize =
-		typeof configuredTabSize === "number" && Number.isFinite(configuredTabSize)
-			? Math.max(1, Math.min(8, Math.round(configuredTabSize)))
-			: 4;
-	const configuredInsertSpaces = editorConfiguration.get<boolean>("insertSpaces", false);
-	const indentationSample =
-		leadingWhitespace.length > 0 ? leadingWhitespace : (document.getText().match(/^[ \t]+(?=\S)/m)?.[0] ?? "");
-	const hasSpaceIndent = indentationSample.includes(" ");
-	const hasTabIndent = indentationSample.includes("\t");
-	const insertSpaces = hasSpaceIndent !== hasTabIndent ? hasSpaceIndent : configuredInsertSpaces;
-	const indentationUnit = insertSpaces ? " ".repeat(tabSize) : "\t";
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 
 	return `${leadingWhitespace}${renderedTokens[0].trim()} (\n${terms
@@ -405,11 +414,7 @@ function wrap_long_function_call(
 	document: TextDocument,
 	options: FormatterOptions,
 ): string | undefined {
-	const configuredLength = options.maxLineLength;
-	const maxLineLength =
-		typeof configuredLength === "number" && Number.isFinite(configuredLength)
-			? Math.max(40, Math.min(240, Math.round(configuredLength)))
-			: 100;
+	const maxLineLength = get_max_line_length(options);
 	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
@@ -449,19 +454,7 @@ function wrap_long_function_call(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 2;
-	const editorConfiguration = vscode.workspace.getConfiguration("editor", document.uri);
-	const configuredTabSize = editorConfiguration.get<number>("tabSize", 4);
-	const tabSize =
-		typeof configuredTabSize === "number" && Number.isFinite(configuredTabSize)
-			? Math.max(1, Math.min(8, Math.round(configuredTabSize)))
-			: 4;
-	const configuredInsertSpaces = editorConfiguration.get<boolean>("insertSpaces", false);
-	const indentationSample =
-		leadingWhitespace.length > 0 ? leadingWhitespace : (document.getText().match(/^[ \\t]+(?=\\S)/m)?.[0] ?? "");
-	const hasSpaceIndent = indentationSample.includes(" ");
-	const hasTabIndent = indentationSample.includes("\t");
-	const insertSpaces = hasSpaceIndent !== hasTabIndent ? hasSpaceIndent : configuredInsertSpaces;
-	const indentationUnit = insertSpaces ? " ".repeat(tabSize) : "\t";
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 
 	for (const [openIndex, closeIndex] of [...matchingClosers.entries()].sort((leftPair, rightPair) => leftPair[0] - rightPair[0])) {
@@ -541,6 +534,178 @@ function wrap_long_function_call(
 
 		// Keep the transform idempotent: if any generated line is still too long,
 		// leave this call unchanged rather than requiring another formatting pass.
+		if (wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) continue;
+		return wrappedLines.join("\n");
+	}
+
+	return undefined;
+}
+
+
+/**
+ * Wrap long inline arrays and dictionary literals at top-level commas.
+ * Collections use one continuation indent level per the GDScript style guide.
+ */
+function wrap_long_collection_literal(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["class", "enum", "func", "if", "elif", "while", "for", "match", "signal"].includes(firstValue)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const delimiterPairs = new Map<number, number>();
+	const delimiterStack: { index: number; value: string }[] = [];
+	const openingDelimiters = new Set(["(", "[", "{"]);
+	const closingDelimiters = new Map([
+		[")", "("],
+		["]", "["],
+		["}", "{"],
+	]);
+	for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
+		const currentToken = tokens[tokenIndex];
+		if (currentToken.string) continue;
+		if (openingDelimiters.has(currentToken.value)) {
+			delimiterStack.push({ index: tokenIndex, value: currentToken.value });
+			continue;
+		}
+		const expectedOpening = closingDelimiters.get(currentToken.value);
+		if (!expectedOpening) continue;
+		const openingToken = delimiterStack.pop();
+		if (!openingToken || openingToken.value !== expectedOpening) return undefined;
+		delimiterPairs.set(openingToken.index, tokenIndex);
+	}
+	if (delimiterStack.length > 0) return undefined;
+
+	const collectionOpenings = [...delimiterPairs.entries()]
+		.filter(([openIndex]) => ["[", "{"].includes(tokens[openIndex].value))
+		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0]);
+	const collectionIndent = leadingWhitespace + get_indentation_unit(document, leadingWhitespace);
+
+	for (const [openIndex, closeIndex] of collectionOpenings) {
+		const openingValue = tokens[openIndex].value;
+		if (openingValue === "[") {
+			const previousToken = tokens[openIndex - 1];
+			const previousValue = previousToken?.value;
+			const allowedArrayPrefixes = new Set([
+				"=",
+				":=",
+				"(",
+				",",
+				":",
+				"[",
+				"{",
+				"return",
+				"in",
+				"else",
+				"not",
+				"await",
+				"yield",
+			]);
+			const isArrayLiteral =
+				previousToken === undefined ||
+				allowedArrayPrefixes.has(previousValue ?? "") ||
+				previousToken.type === "symbol";
+			if (!isArrayLiteral) continue;
+		}
+
+		const commaIndexes: number[] = [];
+		let nestedParentheses = 0;
+		let nestedBrackets = 0;
+		let nestedBraces = 0;
+		let valid = true;
+		for (let tokenIndex = openIndex + 1; tokenIndex < closeIndex; tokenIndex++) {
+			const elementToken = tokens[tokenIndex];
+			if (elementToken.string) continue;
+
+			if (elementToken.value === "(") nestedParentheses++;
+			if (elementToken.value === ")") nestedParentheses--;
+			if (elementToken.value === "[") nestedBrackets++;
+			if (elementToken.value === "]") nestedBrackets--;
+			if (elementToken.value === "{") nestedBraces++;
+			if (elementToken.value === "}") nestedBraces--;
+			if (nestedParentheses < 0 || nestedBrackets < 0 || nestedBraces < 0) {
+				valid = false;
+				break;
+			}
+			if (
+				elementToken.value === "," &&
+				nestedParentheses === 0 &&
+				nestedBrackets === 0 &&
+				nestedBraces === 0
+			) {
+				commaIndexes.push(tokenIndex);
+			}
+		}
+		if (
+			!valid ||
+			nestedParentheses !== 0 ||
+			nestedBrackets !== 0 ||
+			nestedBraces !== 0 ||
+			commaIndexes.length === 0
+		) {
+			continue;
+		}
+
+		const hasTrailingComma = commaIndexes[commaIndexes.length - 1] === closeIndex - 1;
+		const contentEnd = hasTrailingComma ? closeIndex - 1 : closeIndex;
+		const segments: string[] = [];
+		let segmentStart = openIndex + 1;
+		for (const commaIndex of commaIndexes) {
+			if (commaIndex >= contentEnd) break;
+			const elementText = renderedTokens.slice(segmentStart, commaIndex).join("").trim();
+			if (!elementText) {
+				valid = false;
+				break;
+			}
+			segments.push(elementText);
+			segmentStart = commaIndex + 1;
+		}
+		if (!valid) continue;
+
+		const finalElement = renderedTokens.slice(segmentStart, contentEnd).join("").trim();
+		if (finalElement) {
+			segments.push(finalElement);
+		} else if (!hasTrailingComma) {
+			continue;
+		}
+		if (segments.length < 2) continue;
+
+		const prefix = renderedTokens.slice(0, openIndex + 1).join("");
+		const suffix = renderedTokens.slice(closeIndex + 1).join("");
+		const firstLine = leadingWhitespace + prefix;
+		const closingLine = leadingWhitespace + tokens[closeIndex].value + suffix;
+		const wrappedLines = [
+			firstLine,
+			...segments.map((segment) => collectionIndent + segment + ","),
+			closingLine,
+		];
+
+		// Do not produce unstable output when a single element or the surrounding
+		// expression cannot fit within the configured line length.
 		if (wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) continue;
 		return wrappedLines.join("\n");
 	}
@@ -683,6 +848,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		const formattedLine =
 			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			nextLine;
 
 		// Returning edits for unchanged lines costs allocations and slows VS Code's
