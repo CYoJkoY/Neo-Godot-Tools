@@ -1003,6 +1003,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_additive_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			nextLine;
 
@@ -1275,6 +1276,155 @@ function wrap_long_function_declaration(
 		: wrappedLines.join("\n");
 }
 
+
+/**
+ * Wrap long additive expressions in assignments and return statements.
+ * Preserve unary signs and leave ambiguous mixed expressions to specialized rules.
+ */
+function wrap_long_additive_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["class", "class_name", "elif", "enum", "extends", "for", "func", "if", "match", "signal", "while"].includes(
+			firstValue,
+		)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92) ||
+						token.value === "func")),
+		)
+	) {
+		return undefined;
+	}
+
+	const assignmentOperators = new Set(["=", ":="]);
+	const unsupportedTopLevelOperators = new Set([
+		"and",
+		"as",
+		"else",
+		"if",
+		"in",
+		"is",
+		"not",
+		"or",
+		"!=",
+		"<",
+		"<=",
+		"==",
+		">",
+		">=",
+	]);
+	const scan = tokens.reduce(
+		(state, token, tokenIndex) => {
+			if (!state.valid || token.string) return state;
+
+			const atTopLevel = state.stack.length === 0;
+			const expectedOpening = closingDelimiters.get(token.value);
+			const openingMismatch =
+				expectedOpening !== undefined && state.stack[state.stack.length - 1] !== expectedOpening;
+			const nextStack = openingDelimiters.has(token.value)
+				? [...state.stack, token.value]
+				: expectedOpening
+					? state.stack.slice(0, -1)
+					: state.stack;
+			const previousToken = tokens[tokenIndex - 1];
+			const previousCanEndExpression =
+				previousToken !== undefined &&
+				(previousToken.string === true ||
+					previousToken.identifier === true ||
+					["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
+					[")", "]", "}"].includes(previousToken.value));
+
+			return {
+				valid: state.valid && !openingMismatch,
+				stack: nextStack,
+				assignmentIndexes:
+					atTopLevel && assignmentOperators.has(token.value)
+						? [...state.assignmentIndexes, tokenIndex]
+						: state.assignmentIndexes,
+				splitIndexes:
+					atTopLevel &&
+					(token.value === "+" || token.value === "-") &&
+					previousCanEndExpression
+						? [...state.splitIndexes, tokenIndex]
+						: state.splitIndexes,
+				hasUnsupportedTopLevelOperator:
+					state.hasUnsupportedTopLevelOperator ||
+					(atTopLevel && unsupportedTopLevelOperators.has(token.value)),
+			};
+		},
+		{
+			valid: true,
+			stack: [] as string[],
+			assignmentIndexes: [] as number[],
+			splitIndexes: [] as number[],
+			hasUnsupportedTopLevelOperator: false,
+		},
+	);
+	if (
+		!scan.valid ||
+		scan.stack.length > 0 ||
+		scan.hasUnsupportedTopLevelOperator
+	) {
+		return undefined;
+	}
+
+	let expressionStart: number;
+	if (firstValue === "return") {
+		if (scan.assignmentIndexes.length > 0) return undefined;
+		expressionStart = 1;
+	} else {
+		if (scan.assignmentIndexes.length !== 1) return undefined;
+		expressionStart = scan.assignmentIndexes[0] + 1;
+	}
+	const splitIndexes = scan.splitIndexes.filter((splitIndex) => splitIndex >= expressionStart);
+	if (expressionStart <= 0 || splitIndexes.length === 0 || expressionStart >= splitIndexes[0]) {
+		return undefined;
+	}
+
+	const segments = [...splitIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : splitIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const expressionPrefix =
+		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
+	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		`${leadingWhitespace})`,
+	];
+
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\\n");
+}
 
 /**
  * Wrap an overlong property/method chain inside a parenthesized expression.
