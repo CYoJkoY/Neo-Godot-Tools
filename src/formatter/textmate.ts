@@ -1386,14 +1386,9 @@ function wrap_long_additive_expression(
 		return undefined;
 	}
 
-	let expressionStart: number;
-	if (firstValue === "return") {
-		if (scan.assignmentIndexes.length > 0) return undefined;
-		expressionStart = 1;
-	} else {
-		if (scan.assignmentIndexes.length !== 1) return undefined;
-		expressionStart = scan.assignmentIndexes[0] + 1;
-	}
+	if (firstValue === "return" && scan.assignmentIndexes.length > 0) return undefined;
+	if (firstValue !== "return" && scan.assignmentIndexes.length !== 1) return undefined;
+	const expressionStart = firstValue === "return" ? 1 : scan.assignmentIndexes[0] + 1;
 	const splitIndexes = scan.splitIndexes.filter((splitIndex) => splitIndex >= expressionStart);
 	if (expressionStart <= 0 || splitIndexes.length === 0 || expressionStart >= splitIndexes[0]) {
 		return undefined;
