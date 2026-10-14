@@ -296,6 +296,10 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
 		const line = document.lineAt(lineNum);
 
+		// Advance lexical state before any skip path. Lines that look like comments,
+		// blank lines, or conflict markers can still occur inside multiline strings.
+		lineTokens = activeGrammar.tokenizeLine(line.text, lineTokens?.ruleStack ?? vsctm.INITIAL);
+
 		// skip empty lines
 		if (line.isEmptyOrWhitespace) {
 			// delete empty lines at the beginning of the file
@@ -338,7 +342,6 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		}
 
 		let nextLine = "";
-		lineTokens = activeGrammar.tokenizeLine(line.text, lineTokens?.ruleStack ?? vsctm.INITIAL);
 
 		// TODO: detect whitespace type and automatically convert
 		const leadingWhitespace = line.text.slice(0, line.firstNonWhitespaceCharacterIndex);
