@@ -1136,7 +1136,7 @@ function wrap_long_additive_expression(
 	const assignmentIndexes = topLevelIndexes.filter((tokenIndex) =>
 		assignmentOperators.has(tokens[tokenIndex].value),
 	);
-	const splitIndexes = topLevelIndexes.filter((tokenIndex) => {
+	const additiveOperatorIndexes = topLevelIndexes.filter((tokenIndex) => {
 		const currentToken = tokens[tokenIndex];
 		if (currentToken.value !== "+" && currentToken.value !== "-") return false;
 
@@ -1157,7 +1157,7 @@ function wrap_long_additive_expression(
 	if (firstValue === "return" && assignmentIndexes.length > 0) return undefined;
 	if (firstValue !== "return" && assignmentIndexes.length !== 1) return undefined;
 	const expressionStart = firstValue === "return" ? 1 : assignmentIndexes[0] + 1;
-	const splitIndexes = splitIndexes.filter((splitIndex) => splitIndex >= expressionStart);
+	const splitIndexes = additiveOperatorIndexes.filter((splitIndex) => splitIndex >= expressionStart);
 	if (expressionStart <= 0 || splitIndexes.length === 0 || expressionStart >= splitIndexes[0]) {
 		return undefined;
 	}
