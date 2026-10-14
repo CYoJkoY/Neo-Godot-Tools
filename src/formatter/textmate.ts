@@ -464,12 +464,14 @@ function wrap_long_function_call(
 	const indentationUnit = insertSpaces ? " ".repeat(tabSize) : "\t";
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 
-	for (const [openIndex, closeIndex] of matchingClosers) {
+	for (const [openIndex, closeIndex] of [...matchingClosers.entries()].sort((leftPair, rightPair) => leftPair[0] - rightPair[0])) {
 		const callableToken = tokens[openIndex - 1];
 		const isCallable =
 			callableToken !== undefined &&
 			!callableToken.string &&
-			(callableToken.identifier === true || [")", "]"].includes(callableToken.value));
+			((callableToken.identifier === true &&
+				(callableToken.type !== "keyword" || ["assert", "yield"].includes(callableToken.value))) ||
+				[")", "]"].includes(callableToken.value));
 		if (!isCallable) continue;
 
 		const commaIndexes: number[] = [];
