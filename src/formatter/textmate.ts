@@ -432,19 +432,19 @@ function wrap_long_function_call(
 		);
 		if (!argumentScan.valid || commaIndexes.length === 0) continue;
 
-
 		const argumentSegments: string[] = [];
 		let segmentStart = openIndex + 1;
+		let segmentsValid = true;
 		for (const commaIndex of commaIndexes) {
 			const argumentText = renderedTokens.slice(segmentStart, commaIndex).join("").trim();
 			if (!argumentText) {
-				valid = false;
+				segmentsValid = false;
 				break;
 			}
 			argumentSegments.push(argumentText);
 			segmentStart = commaIndex + 1;
 		}
-		if (!valid) continue;
+		if (!segmentsValid) continue;
 		const finalArgument = renderedTokens.slice(segmentStart, closeIndex).join("").trim();
 		if (!finalArgument) continue;
 		argumentSegments.push(finalArgument);
