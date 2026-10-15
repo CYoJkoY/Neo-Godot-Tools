@@ -2452,7 +2452,6 @@ function wrap_long_ternary_expression(
 		: wrappedLines.join("\n");
 }
 
-/** Synchronous entry point retained for callers that have already loaded the grammar. */
 /**
  * Collapse an already-wrapped simple call whose only argument is a string literal.
  * This narrow normalization handles calls such as preload("res://scene.tscn")
@@ -2482,6 +2481,7 @@ function collapse_multiline_single_string_call(
 	return { endLine: closingLineNumber, text: collapsedText };
 }
 
+/** Synchronous entry point retained for callers that have already loaded the grammar. */
 export function format_document(document: TextDocument, _options?: FormatterOptions): TextEdit[] {
 	const activeGrammar = grammar;
 	if (!activeGrammar) return [];
