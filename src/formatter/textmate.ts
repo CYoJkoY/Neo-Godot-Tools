@@ -473,9 +473,9 @@ function wrap_long_boolean_condition(
 	if (!wrappedTermGroups) return undefined;
 
 	const wrappedLines = [
-		leadingWhitespace + renderedTokens[0].trim() + " (",
+		`${leadingWhitespace}${renderedTokens[0].trim()} (`,
 		...wrappedTermGroups.flat(),
-		leadingWhitespace + "):",
+		`${leadingWhitespace}):`,
 	];
 	return wrappedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)
 		? wrappedLines.join("\n")
