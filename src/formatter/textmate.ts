@@ -563,6 +563,63 @@ function wrap_function_call_candidate(
 }
 
 
+/**
+ * Wrap a dictionary entry when its value contains a long, safely splittable function call.
+ * The entry prefix is retained on the call's first line; ambiguous key/value shapes are skipped.
+ */
+function wrap_long_dictionary_entry_value(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!entryScan.valid) return undefined;
+	const separators = entryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ":",
+	);
+	if (separators.length !== 1 || separators[0] <= rangeStart || separators[0] >= rangeEnd - 1) {
+		return undefined;
+	}
+
+	const valueStart = separators[0] + 1;
+	const valueScan = scan_token_boundaries(tokens, valueStart, rangeEnd);
+	if (!valueScan.valid) return undefined;
+
+	return [...valueScan.matchingClosers.entries()]
+		.filter(
+			([openIndex, closeIndex]) =>
+				openIndex >= valueStart &&
+				closeIndex < rangeEnd &&
+				tokens[openIndex]?.value === "(",
+		)
+		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0])
+		.reduce<string[] | undefined>(
+			(wrappedLines, [openIndex, closeIndex]) =>
+				wrappedLines ??
+				wrap_function_call_candidate(
+					tokens,
+					renderedTokens,
+					rangeStart,
+					rangeEnd,
+					openIndex,
+					closeIndex,
+					leadingWhitespace,
+					trailingSuffix,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				),
+			undefined,
+		);
+}
+
+
 const arrayLiteralPrefixes = new Set([
 	"=",
 	":=",
@@ -716,6 +773,7 @@ function wrap_collection_candidate(
 	trailingSuffix: string,
 	maxLineLength: number,
 	indentationUnit: string,
+	continuationIndentLevel: number,
 	openIndex: number,
 	closeIndex: number,
 ): string[] | undefined {
@@ -778,12 +836,28 @@ function wrap_collection_candidate(
 				",",
 				maxLineLength,
 				indentationUnit,
+				continuationIndentLevel,
 			);
-			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			const wrappedEntryLines =
+				nestedLines ??
+				(openingValue === "{"
+					? wrap_long_dictionary_entry_value(
+						tokens,
+						renderedTokens,
+						memberRange.startIndex,
+						memberRange.endIndex,
+						collectionIndent,
+						",",
+						maxLineLength,
+						indentationUnit,
+						continuationIndentLevel,
+					)
+					: undefined);
+			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
 			}
-			state.lines.push(...nestedLines);
+			state.lines.push(...wrappedEntryLines);
 			return state;
 		},
 		{ valid: true, lines: [] as string[] },
@@ -807,6 +881,7 @@ function wrap_collection_range(
 	trailingSuffix: string,
 	maxLineLength: number,
 	indentationUnit: string,
+	continuationIndentLevel: number,
 ): string[] | undefined {
 	const delimiterScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!delimiterScan.valid) return undefined;
@@ -831,6 +906,7 @@ function wrap_collection_range(
 					trailingSuffix,
 					maxLineLength,
 					indentationUnit,
+					continuationIndentLevel,
 					openIndex,
 					closeIndex,
 				),
@@ -874,6 +950,11 @@ function wrap_long_collection_literal(
 	}
 
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
 	return wrap_collection_range(
 		tokens,
 		renderedTokens,
@@ -883,6 +964,7 @@ function wrap_long_collection_literal(
 		"",
 		maxLineLength,
 		indentationUnit,
+		continuationIndentLevel,
 	)?.join("\n");
 }
 
