@@ -716,6 +716,72 @@ function wrap_long_dictionary_entry_arithmetic_value(
 }
 
 
+function wrap_long_dictionary_entry_boolean_value(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!entryScan.valid) return undefined;
+	const separators = entryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ":",
+	);
+	if (separators.length !== 1 || separators[0] <= rangeStart || separators[0] >= rangeEnd - 1) {
+		return undefined;
+	}
+
+	const valueStart = separators[0] + 1;
+	const valueScan = scan_token_boundaries(tokens, valueStart, rangeEnd);
+	if (!valueScan.valid) return undefined;
+	if (
+		tokens.slice(valueStart, rangeEnd).some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string && (token.value === ";" || (token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	if (
+		valueScan.topLevelIndexes.some((tokenIndex) => ["if", "else"].includes(tokens[tokenIndex].value)) ||
+		tokens.slice(valueStart, rangeEnd).some((token) => !token.string && token.value === "func")
+	) {
+		return undefined;
+	}
+
+	const splitIndexes = valueScan.topLevelIndexes.filter((tokenIndex) =>
+		["and", "or"].includes(tokens[tokenIndex].value),
+	);
+	if (splitIndexes.length === 0 || splitIndexes[0] <= valueStart) return undefined;
+	const segments = [...splitIndexes, rangeEnd].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? valueStart : splitIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("");
+	const valueSpacing = renderedTokens[valueStart].match(/^\s*/)?.[0] ?? "";
+	const firstLine = `${leadingWhitespace + expressionPrefix}${valueSpacing}(`;
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		closingLine,
+	];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines;
+}
+
+
 const arrayLiteralPrefixes = new Set([
 	"=",
 	":=",
@@ -949,6 +1015,17 @@ function wrap_collection_candidate(
 						continuationIndentLevel,
 					) ??
 						wrap_long_dictionary_entry_arithmetic_value(
+							tokens,
+							renderedTokens,
+							memberRange.startIndex,
+							memberRange.endIndex,
+							collectionIndent,
+							",",
+							maxLineLength,
+							indentationUnit,
+							continuationIndentLevel,
+						) ??
+						wrap_long_dictionary_entry_boolean_value(
 							tokens,
 							renderedTokens,
 							memberRange.startIndex,
