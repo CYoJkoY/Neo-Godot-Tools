@@ -2501,12 +2501,6 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	const inlineIndentContexts: InlineIndentContext[] = [];
 	for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
 		const line = document.lineAt(lineNum);
-		const collapsedCall = collapse_multiline_single_string_call(document, lineNum, line.text.slice(0, line.firstNonWhitespaceCharacterIndex));
-		if (collapsedCall) {
-			edits.push(TextEdit.replace(new vscode.Range(lineNum, 0, collapsedCall.endLine, document.lineAt(collapsedCall.endLine).text.length), collapsedCall.text));
-			lineNum = collapsedCall.endLine;
-			continue;
-		}
 
 		// Advance lexical state before any skip path. Lines that look like comments,
 		// blank lines, or conflict markers can still occur inside multiline strings.
@@ -2516,6 +2510,12 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		multilineStringState.delimiter = advance_multiline_string_delimiter(line, lineTokens, multilineStringState.delimiter);
 		if (lineStartedInsideMultilineString) {
 			// Whitespace and indentation in multiline string continuations are literal data.
+			continue;
+		}
+		const collapsedCall = collapse_multiline_single_string_call(document, lineNum, line.text.slice(0, line.firstNonWhitespaceCharacterIndex));
+		if (collapsedCall) {
+			edits.push(TextEdit.replace(new vscode.Range(lineNum, 0, collapsedCall.endLine, document.lineAt(collapsedCall.endLine).text.length), collapsedCall.text));
+			lineNum = collapsedCall.endLine;
 			continue;
 		}
 
