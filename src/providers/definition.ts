@@ -30,7 +30,20 @@ interface NativeSymbolInfo {
 }
 
 /** A replaced client naturally gets a fresh cache after reconnect. */
+const MAX_NATIVE_SYMBOL_CACHE_ENTRIES = 4096;
 const nativeSymbolCache = new WeakMap<DefinitionLspClient, Map<string, NativeSymbolInfo | null>>();
+
+function rememberNativeSymbol(
+	cache: Map<string, NativeSymbolInfo | null>,
+	key: string,
+	value: NativeSymbolInfo | null,
+): void {
+	cache.delete(key);
+	cache.set(key, value);
+	if (cache.size <= MAX_NATIVE_SYMBOL_CACHE_ENTRIES) return;
+	const oldestKey = cache.keys().next().value;
+	if (oldestKey !== undefined) cache.delete(oldestKey);
+}
 
 /** The language-client surface definition lookups use. */
 export interface DefinitionLspClient {
@@ -151,7 +164,11 @@ async function nativeSymbolInfo(
 	const cache = nativeSymbolCache.get(lsp) ?? new Map<string, NativeSymbolInfo | null>();
 	nativeSymbolCache.set(lsp, cache);
 	const cacheKey = JSON.stringify([className, symbolName]);
-	if (cache.has(cacheKey)) return cache.get(cacheKey) ?? undefined;
+	if (cache.has(cacheKey)) {
+		const cached = cache.get(cacheKey) ?? null;
+		rememberNativeSymbol(cache, cacheKey, cached);
+		return cached ?? undefined;
+	}
 
 	const params: NativeSymbolInspectParams = { native_class: className, symbol_name: symbolName };
 	try {
@@ -160,13 +177,13 @@ async function nativeSymbolInfo(
 		if (token.isCancellationRequested || response === undefined) return undefined;
 		if (response === null) {
 			// A protocol-level miss is stable for this native class/member pair.
-			cache.set(cacheKey, null);
+			rememberNativeSymbol(cache, cacheKey, null);
 			return undefined;
 		}
 		if (typeof response !== "object") return undefined;
 
 		const info = response as NativeSymbolInfo;
-		cache.set(cacheKey, info);
+		rememberNativeSymbol(cache, cacheKey, info);
 		return info;
 	} catch {
 		// Transport failures are transient and must remain retryable.
