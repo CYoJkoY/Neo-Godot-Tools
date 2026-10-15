@@ -312,6 +312,36 @@ function get_indentation_unit(document: TextDocument, leadingWhitespace: string)
 	return insertSpaces ? " ".repeat(tabSize) : "\t";
 }
 
+interface InlineIndentContext {
+	baseIndentation: string;
+	extraLevels: number;
+	indentationUnit: string;
+}
+
+/** Apply the indentation offset introduced when inline block suites expand. */
+function apply_inline_indent_contexts(
+	sourceLeadingWhitespace: string,
+	contexts: InlineIndentContext[],
+): string {
+	const innermostContextIndex = contexts.reduce(
+		(index, context, contextIndex) =>
+			sourceLeadingWhitespace.length > context.baseIndentation.length &&
+			sourceLeadingWhitespace.startsWith(context.baseIndentation)
+				? contextIndex
+				: index,
+		-1,
+	);
+	contexts.splice(innermostContextIndex + 1);
+	return (
+		sourceLeadingWhitespace +
+		contexts.reduce(
+			(indentation, context) =>
+				indentation + context.indentationUnit.repeat(context.extraLevels),
+			"",
+		)
+	);
+}
+
 function wrap_long_boolean_condition(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -1871,11 +1901,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	let emptyLineCount = 0;
 	let inLambdaBody = false;
 	const matchContexts: { indentation: string; caseIndentation?: string }[] = [];
-	const inlineIndentContexts: {
-		baseIndentation: string;
-		extraLevels: number;
-		indentationUnit: string;
-	}[] = [];
+	const inlineIndentContexts: InlineIndentContext[] = [];
 	for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
 		const line = document.lineAt(lineNum);
 
@@ -1916,6 +1942,25 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 
 		// skip comments
 		if (is_comment(line)) {
+			const commentOffset = line.firstNonWhitespaceCharacterIndex;
+			const commentToken = lineTokens.tokens.find(
+				(token) => token.startIndex <= commentOffset && token.endIndex > commentOffset,
+			);
+			if (commentToken?.scopes.includes("comment.line.number-sign.gdscript")) {
+				const sourceLeadingWhitespace = line.text.slice(0, commentOffset);
+				const leadingWhitespace = apply_inline_indent_contexts(
+					sourceLeadingWhitespace,
+					inlineIndentContexts,
+				);
+				if (leadingWhitespace !== sourceLeadingWhitespace) {
+					edits.push(
+						TextEdit.replace(
+							new vscode.Range(line.lineNumber, 0, line.lineNumber, sourceLeadingWhitespace.length),
+							leadingWhitespace,
+						),
+					);
+				}
+			}
 			continue;
 		}
 
@@ -1926,22 +1971,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 
 		// TODO: detect whitespace type and automatically convert
 		const sourceLeadingWhitespace = line.text.slice(0, line.firstNonWhitespaceCharacterIndex);
-		const innermostInlineIndentContextIndex = inlineIndentContexts.reduce(
-			(index, context, contextIndex) =>
-				sourceLeadingWhitespace.length > context.baseIndentation.length &&
-				sourceLeadingWhitespace.startsWith(context.baseIndentation)
-					? contextIndex
-					: index,
-			-1,
-		);
-		inlineIndentContexts.splice(innermostInlineIndentContextIndex + 1);
-		const leadingWhitespace =
-			sourceLeadingWhitespace +
-			inlineIndentContexts.reduce(
-				(indentation, context) =>
-					indentation + context.indentationUnit.repeat(context.extraLevels),
-				"",
-			);
+		const leadingWhitespace = apply_inline_indent_contexts(sourceLeadingWhitespace, inlineIndentContexts);
 		const innermostMatchContextIndex = matchContexts.reduce(
 			(index, matchContext, contextIndex) =>
 				leadingWhitespace.length > matchContext.indentation.length &&
