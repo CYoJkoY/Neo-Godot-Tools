@@ -540,7 +540,6 @@ function wrap_long_boolean_condition(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -654,7 +653,6 @@ function wrap_long_function_call(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -1837,7 +1835,6 @@ function wrap_long_collection_literal(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -2077,15 +2074,15 @@ function format_token_line(
 
 	return (
 		format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize) ??
-		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
-		wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		currentLine
 	);
 }
@@ -2104,7 +2101,6 @@ function wrap_long_ternary_expression(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -2425,7 +2421,6 @@ function wrap_long_boolean_expression(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -2512,7 +2507,6 @@ function wrap_long_function_declaration(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -2601,7 +2595,6 @@ function wrap_long_binary_operator_expression(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -2730,7 +2723,6 @@ function wrap_long_comparison_expression(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
@@ -2840,7 +2832,6 @@ function wrap_long_method_chain(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
 	tabSize: number,
