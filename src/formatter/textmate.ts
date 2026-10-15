@@ -2655,7 +2655,8 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			tabSize,
 			isMatchCaseLine,
 		);
-		const safeFormattedLine = preserves_source_characters(line.text, formattedLine) ? formattedLine : line.text;
+		const safeFormattedLine =
+			formattedLine === line.text || preserves_source_characters(line.text, formattedLine) ? formattedLine : line.text;
 
 		const inlineBlockChain = get_inline_block_chain(tokens, isMatchCaseLine);
 		if (inlineBlockChain.endsWithOpenSuite && inlineBlockChain.headerCount > 1) {
