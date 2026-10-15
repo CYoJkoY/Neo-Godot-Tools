@@ -2,7 +2,19 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.14.2 — 2026-10-15 (pending)
+### 2.14.3 — 2026-10-15 (pending)
+
+Changes since [v2.14.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.2...v2.14.3).
+
+#### Fixed
+
+- **formatter:** preserve short calls in long assignments ([#189](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/189))
+
+#### Maintenance
+
+- **release:** Update version to 2.14.3 ([48ae808](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/48ae808a980e12deb8a40b2a38276f539fddc609))
+
+### 2.14.2 — 2026-10-15
 
 Changes since [v2.14.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.1...v2.14.2).
 
@@ -28,6 +40,7 @@ Changes since [v2.14.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14
 #### Documentation
 
 - clarify compatibility and CI coverage ([#171](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/171))
+- **changelog:** update changelog ([b57f1dc](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/b57f1dcec864892fe26d725050f9d6e0a1d4db04))
 
 #### Maintenance
 
