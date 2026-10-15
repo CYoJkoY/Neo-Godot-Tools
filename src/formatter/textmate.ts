@@ -774,6 +774,12 @@ function wrap_long_assignment_call_expression(
 	}
 
 	const expression = renderedTokens.slice(expressionStart).join("").trim();
+	// If the complete RHS call fits on its own, do not split it just because
+	// a long identifier or type annotation makes the assignment line exceed the limit.
+	if (get_line_width(expression, tabSize) <= maxLineLength) {
+		return leadingWhitespace + renderedTokens.join("");
+	}
+
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
@@ -2341,11 +2347,13 @@ function format_token_line(
 	return (
 		format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize) ??
 		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		// Prefer preserving a compact assigned call before general expression wrappers
+		// can split the call's own argument list.
+		wrap_long_assignment_call_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
-		wrap_long_assignment_call_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
