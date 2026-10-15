@@ -1881,7 +1881,21 @@ function wrap_long_binary_operator_expression(
 		return undefined;
 	}
 
-	const assignmentOperators = new Set(["=", ":="]);
+	const assignmentOperators = new Set([
+		"=",
+		":=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"**=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+	]);
 	const unsupportedTopLevelOperators = new Set([
 		"and",
 		"as",
