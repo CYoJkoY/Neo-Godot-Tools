@@ -716,6 +716,10 @@ function wrap_long_dictionary_entry_arithmetic_value(
 }
 
 
+/**
+ * Wrap top-level boolean operators in a dictionary value without changing its key or colon.
+ * Nested operators and ternary expressions are left unchanged.
+ */
 function wrap_long_dictionary_entry_boolean_value(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -764,7 +768,17 @@ function wrap_long_dictionary_entry_boolean_value(
 		const segmentStart = segmentIndex === 0 ? valueStart : splitIndexes[segmentIndex - 1];
 		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
 	});
-	if (segments.some((segment) => segment.length === 0)) return undefined;
+	const segmentsAreValid = segments.every((segment, segmentIndex) => {
+		const segmentText = segment.trim();
+		if (!segmentText || (segmentIndex === 0 && segmentText === "not")) return false;
+		if (segmentIndex === 0) return true;
+
+		const leadingOperator = /^(and|or)\b/.exec(segmentText);
+		if (!leadingOperator) return false;
+		const expressionText = segmentText.slice(leadingOperator[0].length).trim();
+		return expressionText.length > 0 && expressionText !== "not";
+	});
+	if (!segmentsAreValid) return undefined;
 
 	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("");
 	const valueSpacing = renderedTokens[valueStart].match(/^\s*/)?.[0] ?? "";
