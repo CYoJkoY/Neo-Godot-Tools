@@ -800,17 +800,29 @@ function wrap_function_call_candidate(
 				return state;
 			}
 
-			const nestedLines = wrap_function_call_range(
-				tokens,
-				renderedTokens,
-				argumentRange.startIndex,
-				argumentRange.endIndex,
-				continuationIndent,
-				separator,
-				maxLineLength,
-				indentationUnit,
-				continuationIndentLevel,
-			);
+			const nestedLines =
+				wrap_function_call_range(
+					tokens,
+					renderedTokens,
+					argumentRange.startIndex,
+					argumentRange.endIndex,
+					continuationIndent,
+					separator,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				) ??
+				wrap_collection_range(
+					tokens,
+					renderedTokens,
+					argumentRange.startIndex,
+					argumentRange.endIndex,
+					continuationIndent,
+					separator,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				);
 			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
