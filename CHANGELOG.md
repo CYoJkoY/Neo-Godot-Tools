@@ -2,7 +2,18 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.14.0 — 2026-10-15 (pending)
+### 2.14.1 — 2026-10-15 (pending)
+
+Changes since [v2.14.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.0...v2.14.1).
+
+#### Fixed
+
+- **formatter:** avoid splitting short method chains into excessive lines ([#162](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/162))
+- **formatter:** preserve whitespace inside multiline strings ([#163](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/163))
+- **formatter:** enforce line limits for wrapped boolean conditions ([#164](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/164))
+- **formatter:** preserve trailing commas when wrapping calls ([#165](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/165))
+
+### 2.14.0 — 2026-10-15
 
 Changes since [v2.13.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.2...v2.14.0).
 
@@ -38,6 +49,10 @@ Changes since [v2.13.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13
 - **formatter:** emit real newlines for arithmetic expression wrapping ([#144](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/144))
 - **formatter:** enforce multiline block suites ([#160](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/160))
 - **formatter:** preserve comment indentation after inline suite expansion ([#161](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/161))
+
+#### Documentation
+
+- **changelog:** update changelog ([6c6aa8a](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/6c6aa8acec3f869e9e6e31908b87bf2b818a04c0))
 
 #### Maintenance
 
