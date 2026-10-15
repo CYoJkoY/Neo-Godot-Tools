@@ -667,7 +667,7 @@ function format_inline_enum_declaration(
 		enumName !== undefined &&
 		!enumName.string &&
 		enumName.type !== "keyword" &&
-		/^[A-Za-z_]\\w*$/.test(enumName.value);
+		/^[A-Za-z_]\w*$/.test(enumName.value);
 	const openIndex = tokens[1]?.value === "{" ? 1 : isNamedEnum ? 2 : -1;
 	if (openIndex < 0) return undefined;
 	const closeIndex = delimiterScan.matchingClosers.get(openIndex) ?? -1;
