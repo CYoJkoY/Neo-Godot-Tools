@@ -716,11 +716,88 @@ function wrap_long_dictionary_entry_arithmetic_value(
 }
 
 
+const dictionaryBooleanOperatorValues = new Set(["and", "or"]);
+const dictionaryComparisonOperatorValues = new Set(["==", "!=", "<", "<=", ">", ">="]);
+const comparisonOperandPrefixValues = new Set(["+", "-", "!", "~", "not", "await"]);
+const comparisonIncompleteExpressionValues = new Set([
+	"!=",
+	"<",
+	"<=",
+	"==",
+	">",
+	">=",
+	"!=",
+	"and",
+	"as",
+	"else",
+	"if",
+	"in",
+	"is",
+	"not",
+	"or",
+	"=",
+	":=",
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"<<",
+	">>",
+	"&",
+	"|",
+	"^",
+	"&&",
+	"||",
+	".",
+	",",
+	":",
+]);
+
 /**
- * Wrap top-level boolean operators in a dictionary value without changing its key or colon.
- * Nested operators and ternary expressions are left unchanged.
+ * Verify comparison operands are present before introducing line breaks at symbolic comparisons.
  */
-function wrap_long_dictionary_entry_boolean_value(
+function has_valid_dictionary_comparison_operands(
+	tokens: Token[],
+	splitIndexes: number[],
+	rangeEnd: number,
+): boolean {
+	return splitIndexes.every((operatorIndex, operatorPosition) => {
+		const leftOperandEnd = tokens[operatorIndex - 1];
+		const rightSegmentEnd = splitIndexes[operatorPosition + 1] ?? rangeEnd;
+		const rightOperandEnd = tokens[rightSegmentEnd - 1];
+		if (
+			!leftOperandEnd ||
+			!rightOperandEnd ||
+			comparisonIncompleteExpressionValues.has(leftOperandEnd.value) ||
+			comparisonIncompleteExpressionValues.has(rightOperandEnd.value)
+		) {
+			return false;
+		}
+
+		let rightOperandStart = operatorIndex + 1;
+		while (
+			rightOperandStart < rightSegmentEnd &&
+			comparisonOperandPrefixValues.has(tokens[rightOperandStart].value)
+		) {
+			rightOperandStart++;
+		}
+		if (rightOperandStart >= rightSegmentEnd) return false;
+
+		const firstOperandToken = tokens[rightOperandStart];
+		return (
+			!dictionaryComparisonOperatorValues.has(firstOperandToken.value) &&
+			!["and", "or", "if", "else", "=", ":=", ".", ",", ":"].includes(firstOperandToken.value)
+		);
+	});
+}
+
+/**
+ * Wrap top-level operators in a dictionary value without changing its key or colon.
+ * Strings, nested delimiters, ternaries, and unsupported expression forms remain unchanged.
+ */
+function wrap_long_dictionary_entry_operator_value(
 	tokens: Token[],
 	renderedTokens: string[],
 	rangeStart: number,
@@ -730,6 +807,8 @@ function wrap_long_dictionary_entry_boolean_value(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	splitOperatorValues: ReadonlySet<string>,
+	operatorKind: "boolean" | "comparison",
 ): string[] | undefined {
 	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!entryScan.valid) return undefined;
@@ -753,35 +832,54 @@ function wrap_long_dictionary_entry_boolean_value(
 		return undefined;
 	}
 
+	const topLevelValues = valueScan.topLevelIndexes.map((tokenIndex) => tokens[tokenIndex].value);
 	if (
-		valueScan.topLevelIndexes.some((tokenIndex) => ["if", "else"].includes(tokens[tokenIndex].value)) ||
+		topLevelValues.some((value) => ["if", "else"].includes(value)) ||
 		tokens.slice(valueStart, rangeEnd).some((token) => !token.string && token.value === "func")
+	) {
+		return undefined;
+	}
+	if (
+		operatorKind === "comparison" &&
+		topLevelValues.some((value) => ["and", "or", "&&", "||", "as", "in", "is", "not"].includes(value))
 	) {
 		return undefined;
 	}
 
 	const splitIndexes = valueScan.topLevelIndexes.filter((tokenIndex) =>
-		["and", "or"].includes(tokens[tokenIndex].value),
+		splitOperatorValues.has(tokens[tokenIndex].value),
 	);
 	if (splitIndexes.length === 0 || splitIndexes[0] <= valueStart) return undefined;
+	if (
+		operatorKind === "comparison" &&
+		!has_valid_dictionary_comparison_operands(tokens, splitIndexes, rangeEnd)
+	) {
+		return undefined;
+	}
+
 	const segments = [...splitIndexes, rangeEnd].map((endIndex, segmentIndex) => {
 		const segmentStart = segmentIndex === 0 ? valueStart : splitIndexes[segmentIndex - 1];
 		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
 	});
 	const segmentsAreValid = segments.every((segment, segmentIndex) => {
 		const segmentText = segment.trim();
-		if (!segmentText || (segmentIndex === 0 && segmentText === "not")) return false;
+		if (!segmentText || (segmentIndex === 0 && operatorKind === "boolean" && segmentText === "not")) {
+			return false;
+		}
 		if (segmentIndex === 0) return true;
 
-		const leadingOperator = /^(and|or)\b/.exec(segmentText);
+		const leadingOperator = operatorKind === "boolean"
+			? /^(and|or)\\b/.exec(segmentText)
+			: /^(==|!=|<=|>=|<|>)\\b?/.exec(segmentText);
 		if (!leadingOperator) return false;
 		const expressionText = segmentText.slice(leadingOperator[0].length).trim();
-		return expressionText.length > 0 && expressionText !== "not";
+		if (operatorKind === "boolean") return expressionText.length > 0 && expressionText !== "not";
+		return expressionText.length > 0;
 	});
 	if (!segmentsAreValid) return undefined;
 
 	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("");
-	const valueSpacing = renderedTokens[valueStart].match(/^\s*/)?.[0] ?? "";
+	const valueSpacing = renderedTokens[valueStart].match(/^\\s*/)?.[0] ?? "";
 	const firstLine = `${leadingWhitespace + expressionPrefix}${valueSpacing}(`;
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
@@ -793,6 +891,60 @@ function wrap_long_dictionary_entry_boolean_value(
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
 		: wrappedLines;
+}
+
+/** Wrap top-level `and` / `or` operators in a dictionary value. */
+function wrap_long_dictionary_entry_boolean_value(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	return wrap_long_dictionary_entry_operator_value(
+		tokens,
+		renderedTokens,
+		rangeStart,
+		rangeEnd,
+		leadingWhitespace,
+		trailingSuffix,
+		maxLineLength,
+		indentationUnit,
+		continuationIndentLevel,
+		dictionaryBooleanOperatorValues,
+		"boolean",
+	);
+}
+
+/** Wrap top-level symbolic comparison operators in a dictionary value. */
+function wrap_long_dictionary_entry_comparison_value(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	return wrap_long_dictionary_entry_operator_value(
+		tokens,
+		renderedTokens,
+		rangeStart,
+		rangeEnd,
+		leadingWhitespace,
+		trailingSuffix,
+		maxLineLength,
+		indentationUnit,
+		continuationIndentLevel,
+		dictionaryComparisonOperatorValues,
+		"comparison",
+	);
 }
 
 
@@ -1040,6 +1192,17 @@ function wrap_collection_candidate(
 							continuationIndentLevel,
 						) ??
 						wrap_long_dictionary_entry_boolean_value(
+							tokens,
+							renderedTokens,
+							memberRange.startIndex,
+							memberRange.endIndex,
+							collectionIndent,
+							",",
+							maxLineLength,
+							indentationUnit,
+							continuationIndentLevel,
+						) ??
+						wrap_long_dictionary_entry_comparison_value(
 							tokens,
 							renderedTokens,
 							memberRange.startIndex,
