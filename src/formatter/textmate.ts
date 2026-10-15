@@ -2474,7 +2474,7 @@ function collapse_multiline_single_string_call(
 	const argumentLine = document.lineAt(argumentLineNumber).text;
 	const closingLine = document.lineAt(closingLineNumber).text;
 	const argumentMatch = argumentLine.match(/^[ \t]*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')[ \t]*,?[ \t]*$/);
-	if (!argumentMatch || !/^[ \t]*\)[ \t]*,?[ \t]*$/.test(closingLine)) return undefined;
+	if (!argumentMatch || !/^[ \t]*\)[ \t]*$/.test(closingLine)) return undefined;
 	if (argumentLine.trimEnd().endsWith(",")) return undefined;
 
 	const indentation = openingMatch[1];
