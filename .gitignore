@@ -1,5 +1,6 @@
 out
 out-test
+out-test-host
 node_modules
 *.vsix
 .vscode-test

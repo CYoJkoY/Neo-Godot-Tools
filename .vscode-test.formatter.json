@@ -1,0 +1,12 @@
+{
+  "label": "formatterSnapshots",
+  "files": "out-test-host/formatter/formatter.test.js",
+  "launchArgs": [
+    "--disable-extensions",
+    "--ozone-platform=x11"
+  ],
+  "mocha": {
+    "ui": "tdd",
+    "timeout": 60000
+  }
+}

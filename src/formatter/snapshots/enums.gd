@@ -7,7 +7,11 @@ enum State2 {
 	C
 }
 # --- OUT ---
-enum State {A, B, C}
+enum State {
+	A,
+	B,
+	C,
+}
 
 enum State2 {
 	A,

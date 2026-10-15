@@ -94,11 +94,12 @@ function parse_test_file(content: string): Test[] {
 	let mode = "";
 	let test = new TestLines();
 
-	for (const _line of content.split("\n")) {
-		const line = _line.trim();
+	for (const rawLine of content.split("\n")) {
+		const markerLine = rawLine.trim();
+		const contentLine = rawLine.trimEnd();
 
-		if (MODES.includes(line)) {
-			if (line === CONFIG || line === IN) {
+		if (MODES.includes(markerLine)) {
+			if (markerLine === CONFIG || markerLine === IN) {
 				if (test.in.length !== 0) {
 					tests.push(test.parse(defaultConfig));
 					test = new TestLines();
@@ -109,14 +110,14 @@ function parse_test_file(content: string): Test[] {
 				defaultConfig = build_config(defaultConfigString);
 				defaultConfigString = [];
 			}
-			mode = line;
+			mode = markerLine;
 			continue;
 		}
 
-		if (mode === CONFIG_ALL) defaultConfigString.push(line);
-		if (mode === CONFIG) test.config.push(line);
-		if (mode === IN) test.in.push(line);
-		if (mode === OUT) test.out.push(line);
+		if (mode === CONFIG_ALL) defaultConfigString.push(contentLine);
+		if (mode === CONFIG) test.config.push(contentLine);
+		if (mode === IN) test.in.push(contentLine);
+		if (mode === OUT) test.out.push(contentLine);
 	}
 
 	if (test.in.length !== 0) {
