@@ -2601,9 +2601,23 @@ function wrap_long_method_chain(
 			: 2;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const packedSegments: string[] = [];
+	for (const segment of segments) {
+		const previousSegmentIndex = packedSegments.length - 1;
+		const previousSegment = packedSegments[previousSegmentIndex];
+		if (
+			previousSegment !== undefined &&
+			`${continuationIndent}${previousSegment}${segment}`.length <= maxLineLength
+		) {
+			packedSegments[previousSegmentIndex] = `${previousSegment}${segment}`;
+			continue;
+		}
+		packedSegments.push(segment);
+	}
+
 	const wrappedLines = [
 		firstLine,
-		...segments.map((segment) => `${continuationIndent}${segment}`),
+		...packedSegments.map((segment) => `${continuationIndent}${segment}`),
 		`${leadingWhitespace})`,
 	];
 
