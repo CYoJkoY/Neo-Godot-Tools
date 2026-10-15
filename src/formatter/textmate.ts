@@ -388,6 +388,139 @@ function apply_inline_indent_contexts(
 	);
 }
 
+/**
+ * Wrap a long boolean operand around safe top-level arithmetic or comparison operators.
+ * The source operator tokens stay attached to their right-hand segments, preserving order.
+ */
+function wrap_long_boolean_term_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	termRange: { startIndex: number; endIndex: number },
+	continuationIndent: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const logicalOperator = ["and", "or"].includes(tokens[termRange.startIndex]?.value ?? "")
+		? tokens[termRange.startIndex].value
+		: undefined;
+	const expressionStart = termRange.startIndex + (logicalOperator ? 1 : 0);
+	const expressionScan = scan_token_boundaries(tokens, expressionStart, termRange.endIndex);
+	if (!expressionScan.valid) return undefined;
+
+	const unsupportedOperators = new Set([
+		"and",
+		"as",
+		"else",
+		"if",
+		"in",
+		"is",
+		"not",
+		"or",
+		"=",
+		":=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"**=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+		"&&",
+		"||",
+		";",
+		"\\",
+	]);
+	if (
+		expressionScan.topLevelIndexes.some((tokenIndex) =>
+			unsupportedOperators.has(tokens[tokenIndex].value),
+		)
+	) {
+		return undefined;
+	}
+
+	const comparisonIndexes = expressionScan.topLevelIndexes.filter((tokenIndex) =>
+		comparisonOperatorValues.has(tokens[tokenIndex].value),
+	);
+	if (
+		comparisonIndexes.length > 0 &&
+		!has_valid_comparison_operands(tokens, comparisonIndexes, termRange.endIndex)
+	) {
+		return undefined;
+	}
+
+	const binaryOperatorValues = new Set(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>"]);
+	const binaryIndexes = expressionScan.topLevelIndexes.filter((tokenIndex) => {
+		const currentToken = tokens[tokenIndex];
+		if (!binaryOperatorValues.has(currentToken.value)) return false;
+
+		const previousToken = tokens[tokenIndex - 1];
+		return (
+			previousToken !== undefined &&
+			(previousToken.string === true ||
+				(previousToken.identifier === true && previousToken.type !== "keyword") ||
+				["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
+				[")", "]", "}"].includes(previousToken.value))
+		);
+	});
+	const splitIndexes = [...comparisonIndexes, ...binaryIndexes].sort((left, right) => left - right);
+	if (splitIndexes.length === 0) return undefined;
+
+	const segmentRanges = [...splitIndexes, termRange.endIndex].map((endIndex, segmentIndex) => ({
+		startIndex: segmentIndex === 0 ? expressionStart : splitIndexes[segmentIndex - 1],
+		endIndex,
+	}));
+	if (
+		segmentRanges.some(
+			({ startIndex, endIndex }) =>
+				renderedTokens.slice(startIndex, endIndex).join("").trim().length === 0,
+		)
+	) {
+		return undefined;
+	}
+
+	const logicalPrefix = logicalOperator ? `${logicalOperator} ` : "";
+	const firstLine = `${continuationIndent}${logicalPrefix}(`;
+	const nestedIndent = continuationIndent + indentationUnit.repeat(continuationIndentLevel);
+	const wrappedSegments = segmentRanges.reduce<string[][] | undefined>((groups, segmentRange) => {
+		if (!groups) return undefined;
+
+		const segment = renderedTokens.slice(segmentRange.startIndex, segmentRange.endIndex).join("").trim();
+		const singleLine = `${nestedIndent}${segment}`;
+		if (singleLine.length <= maxLineLength) {
+			groups.push([singleLine]);
+			return groups;
+		}
+
+		const nestedLines = wrap_function_call_range(
+			tokens,
+			renderedTokens,
+			segmentRange.startIndex,
+			segmentRange.endIndex,
+			nestedIndent,
+			"",
+			maxLineLength,
+			indentationUnit,
+			continuationIndentLevel,
+		);
+		if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			return undefined;
+		}
+		groups.push(nestedLines);
+		return groups;
+	}, []);
+	if (!wrappedSegments) return undefined;
+
+	const wrappedLines = [firstLine, ...wrappedSegments.flat(), `${continuationIndent})`];
+	return wrappedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)
+		? wrappedLines
+		: undefined;
+}
+
 function wrap_long_boolean_condition(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -422,12 +555,18 @@ function wrap_long_boolean_condition(
 	);
 	if (!scan.valid || splitIndexes.length === 0) return undefined;
 
-	const boundaries = [...splitIndexes, endIndex];
-	const terms = boundaries.map((end, index) => {
-		const start = index === 0 ? 1 : boundaries[index - 1];
-		return renderedTokens.slice(start, end).join("").trim();
-	});
-	if (terms.some((term) => term.length === 0)) return undefined;
+	const termRanges = [...splitIndexes, endIndex].map((endIndex, termIndex) => ({
+		startIndex: termIndex === 0 ? 1 : splitIndexes[termIndex - 1],
+		endIndex,
+	}));
+	if (
+		termRanges.some(
+			({ startIndex, endIndex }) =>
+				renderedTokens.slice(startIndex, endIndex).join("").trim().length === 0,
+		)
+	) {
+		return undefined;
+	}
 
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
@@ -436,10 +575,56 @@ function wrap_long_boolean_condition(
 			: 2;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const wrappedTermGroups = termRanges.reduce<string[][] | undefined>((groups, termRange) => {
+		if (!groups) return undefined;
 
-	return `${leadingWhitespace}${renderedTokens[0].trim()} (\n${terms
-		.map((term) => `${continuationIndent}${term}`)
-		.join("\n")}\n${leadingWhitespace}):`;
+		const term = renderedTokens.slice(termRange.startIndex, termRange.endIndex).join("").trim();
+		const singleLine = continuationIndent + term;
+		if (singleLine.length <= maxLineLength) {
+			groups.push([singleLine]);
+			return groups;
+		}
+
+		const nestedLines = wrap_function_call_range(
+			tokens,
+			renderedTokens,
+			termRange.startIndex,
+			termRange.endIndex,
+			continuationIndent,
+			"",
+			maxLineLength,
+			indentationUnit,
+			continuationIndentLevel,
+		);
+		if (nestedLines?.every((wrappedLine) => wrappedLine.length <= maxLineLength)) {
+			groups.push(nestedLines);
+			return groups;
+		}
+
+		const expressionLines = wrap_long_boolean_term_expression(
+			tokens,
+			renderedTokens,
+			termRange,
+			continuationIndent,
+			maxLineLength,
+			indentationUnit,
+			continuationIndentLevel,
+		);
+		if (!expressionLines) return undefined;
+		groups.push(expressionLines);
+		return groups;
+	}, []);
+
+	if (!wrappedTermGroups) return undefined;
+
+	const wrappedLines = [
+		`${leadingWhitespace}${renderedTokens[0].trim()} (`,
+		...wrappedTermGroups.flat(),
+		`${leadingWhitespace}):`,
+	];
+	return wrappedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)
+		? wrappedLines.join("\n")
+		: undefined;
 }
 
 /**
