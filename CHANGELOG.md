@@ -2,13 +2,32 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.14.3 — 2026-10-15 (pending)
+### 2.14.4 — 2026-10-16 (pending)
+
+Changes since [v2.14.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.3...v2.14.4).
+
+#### Fixed
+
+- **formatter:** collapse multiline single-argument string calls ([#198](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/198))
+
+### 2.14.3 — 2026-10-16
 
 Changes since [v2.14.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.2...v2.14.3).
 
 #### Fixed
 
 - **formatter:** preserve short calls in long assignments ([#189](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/189))
+- **formatter:** guard against source-character corruption ([#193](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/193))
+- **formatter:** keep compact assignment calls on one line ([#195](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/195))
+- **formatter:** avoid multiline wrapping for single-argument calls ([#196](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/196))
+
+#### Performance
+
+- **native:** cache native symbol lookups per LSP session ([#191](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/191))
+
+#### Documentation
+
+- **changelog:** update changelog ([3751153](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/37511531256bbb621012085b3e9753a1db347da5))
 
 #### Maintenance
 
