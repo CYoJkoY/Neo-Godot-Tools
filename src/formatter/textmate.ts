@@ -714,10 +714,10 @@ function wrap_long_dictionary_entry_ternary_value(
 
 
 /**
- * Wrap a dictionary value's top-level arithmetic operators without altering the key or colon.
+ * Wrap a dictionary value's top-level arithmetic and bitwise operators without altering the key or colon.
  * Unary operators and operators nested inside delimiters are not split points.
  */
-function wrap_long_dictionary_entry_arithmetic_value(
+function wrap_long_dictionary_entry_binary_value(
 	tokens: Token[],
 	renderedTokens: string[],
 	rangeStart: number,
@@ -772,10 +772,10 @@ function wrap_long_dictionary_entry_arithmetic_value(
 		return undefined;
 	}
 
-	const arithmeticOperatorValues = new Set(["+", "-", "*", "/", "%", "**"]);
+	const binaryOperatorValues = new Set(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>"]);
 	const splitIndexes = valueScan.topLevelIndexes.filter((tokenIndex) => {
 		const currentToken = tokens[tokenIndex];
-		if (!arithmeticOperatorValues.has(currentToken.value)) return false;
+		if (!binaryOperatorValues.has(currentToken.value)) return false;
 		const previousToken = tokens[tokenIndex - 1];
 		return (
 			previousToken !== undefined &&
@@ -1280,7 +1280,7 @@ function wrap_collection_candidate(
 						indentationUnit,
 						continuationIndentLevel,
 					) ??
-						wrap_long_dictionary_entry_arithmetic_value(
+						wrap_long_dictionary_entry_binary_value(
 							tokens,
 							renderedTokens,
 							memberRange.startIndex,
