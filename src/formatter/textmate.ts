@@ -774,6 +774,12 @@ function wrap_long_assignment_call_expression(
 	}
 
 	const expression = renderedTokens.slice(expressionStart).join("").trim();
+	// If the complete RHS call fits on its own, do not split it just because
+	// a long identifier or type annotation makes the assignment line exceed the limit.
+	if (get_line_width(expression, tabSize) <= maxLineLength) {
+		return leadingWhitespace + renderedTokens.join("");
+	}
+
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
