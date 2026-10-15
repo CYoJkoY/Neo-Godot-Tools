@@ -58,10 +58,32 @@ function isNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
 }
 
+function isNonNegativeNumber(value: unknown): value is number {
+	return isNumber(value) && value >= 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return isNonNegativeNumber(value) && Number.isInteger(value);
+}
+
+function isGodotVersion(value: unknown): value is string {
+	return typeof value === "string" && /^\d+\.\d+(?:\.\d+)?$/.test(value);
+}
+
 function isPercentiles(value: unknown): value is Percentiles {
+	if (!isRecord(value)) return false;
+	const p50 = value["p50"];
+	const p95 = value["p95"];
+	const p99 = value["p99"];
+	const max = value["max"];
 	return (
-		isRecord(value) &&
-		DISTRIBUTION_KEYS.every((key) => isNumber(value[key]))
+		isNonNegativeNumber(p50) &&
+		isNonNegativeNumber(p95) &&
+		isNonNegativeNumber(p99) &&
+		isNonNegativeNumber(max) &&
+		p50 <= p95 &&
+		p95 <= p99 &&
+		p99 <= max
 	);
 }
 
@@ -77,6 +99,7 @@ function isBenchmarkReport(value: unknown): value is BenchmarkReport {
 	const project = value["project"];
 	return (
 		typeof value["capturedAt"] === "string" &&
+		Number.isFinite(Date.parse(value["capturedAt"])) &&
 		isRecord(environment) &&
 		typeof environment["node"] === "string" &&
 		typeof environment["platform"] === "string" &&
@@ -84,9 +107,11 @@ function isBenchmarkReport(value: unknown): value is BenchmarkReport {
 		typeof environment["cpuModel"] === "string" &&
 		isRecord(project) &&
 		typeof project["name"] === "string" &&
-		isNumber(project["scriptFilesIndexed"]) &&
-		isNumber(project["sourceBytesIndexed"]) &&
-		isNumber(value["coldIndexMs"]) &&
+		project["name"].trim().length > 0 &&
+		(project["godotVersion"] === undefined || isGodotVersion(project["godotVersion"])) &&
+		isNonNegativeInteger(project["scriptFilesIndexed"]) &&
+		isNonNegativeInteger(project["sourceBytesIndexed"]) &&
+		isNonNegativeNumber(value["coldIndexMs"]) &&
 		isPercentiles(value["singleEditMs"]) &&
 		isPercentiles(value["rapidTypingMs"]) &&
 		isQueryDistributions(value["uncachedSemanticMs"]) &&
@@ -159,8 +184,18 @@ function renderComparison(baseline: BenchmarkReport, current: BenchmarkReport): 
 		baseline.environment.platform === current.environment.platform &&
 		baseline.environment.architecture === current.environment.architecture &&
 		baseline.environment.cpuModel === current.environment.cpuModel;
-	const sameProject = baseline.project.name === current.project.name;
+	const sameProjectName = baseline.project.name === current.project.name;
 	const sameFileCount = baseline.project.scriptFilesIndexed === current.project.scriptFilesIndexed;
+	const sameSourceBytes = baseline.project.sourceBytesIndexed === current.project.sourceBytesIndexed;
+	const bothGodotVersionsKnown =
+		baseline.project.godotVersion !== undefined && current.project.godotVersion !== undefined;
+	const sameGodotVersion =
+		bothGodotVersionsKnown && baseline.project.godotVersion === current.project.godotVersion;
+	const godotVersionComparison = (() => {
+		if (!bothGodotVersionsKnown) return "unknown (version metadata missing)";
+		return sameGodotVersion ? "yes" : "no";
+	})();
+	const sameProjectWorkload = sameProjectName && sameFileCount && sameSourceBytes;
 	const rows = createMetricRows(baseline, current);
 	return [
 		"# Semantic benchmark comparison",
@@ -168,10 +203,12 @@ function renderComparison(baseline: BenchmarkReport, current: BenchmarkReport): 
 		`Baseline captured: ${baseline.capturedAt}`,
 		`Current captured:  ${current.capturedAt}`,
 		`Project: ${baseline.project.name} → ${current.project.name}`,
+		`Godot version: ${baseline.project.godotVersion ?? "not recorded"} → ${current.project.godotVersion ?? "not recorded"}`,
 		`Indexed GDScript files: ${baseline.project.scriptFilesIndexed} → ${current.project.scriptFilesIndexed}`,
 		`Indexed source bytes: ${baseline.project.sourceBytesIndexed} → ${current.project.sourceBytesIndexed}`,
 		`Comparable runtime: ${sameRuntime ? "yes" : "no"} (Node, OS, architecture, and CPU model)`,
-		`Comparable project shape: ${sameProject && sameFileCount ? "yes" : "no"} (name and indexed file count)`,
+		`Comparable project shape: ${sameProjectWorkload ? "yes" : "no"} (project name, indexed file count, and source bytes)`,
+		`Comparable Godot version: ${godotVersionComparison}`,
 		"",
 		"Positive delta means the current run took longer; negative delta means it was faster.",
 		"",
