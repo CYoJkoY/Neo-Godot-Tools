@@ -2245,7 +2245,7 @@ function get_inline_block_chain(
 type FormatterIntegrityUnit = { kind: "payload" | "character"; value: string };
 
 const FORMATTER_INTEGRITY_PATTERN =
-	/("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|#.*|[^\s])/g;
+	/("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|#.*|[^\t\r\n ])/g;
 const FORMATTER_GENERATED_DELIMITERS = new Set(["(", ")", ","]);
 
 /**
