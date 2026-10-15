@@ -1885,7 +1885,7 @@ function wrap_long_comparison_expression(
 					(token.value === "func" ||
 						token.value === ";" ||
 						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
-		),
+		)
 	) {
 		return undefined;
 	}
