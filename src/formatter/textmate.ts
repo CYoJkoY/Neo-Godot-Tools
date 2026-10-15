@@ -700,8 +700,9 @@ function wrap_long_dictionary_entry_arithmetic_value(
 	});
 	if (segments.some((segment) => segment.length === 0)) return undefined;
 
-	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("") + renderedTokens[valueStart];
-	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
+	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("");
+	const valueSpacing = renderedTokens[valueStart].match(/^\s*/)?.[0] ?? "";
+	const firstLine = `${leadingWhitespace + expressionPrefix}${valueSpacing}(`;
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
 	const wrappedLines = [
