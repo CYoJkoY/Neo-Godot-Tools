@@ -26,7 +26,7 @@ export type LanguageMetric =
 /** LSP round trips are recorded per request method, hence the open suffix. */
 export type PerformanceMetric = LanguageMetric | `lsp.request.${string}`;
 
-export type PerformanceSnapshot = Partial<Record<LanguageMetric, PerformanceSample>>;
+export type PerformanceSnapshot = Partial<Record<PerformanceMetric, PerformanceSample>>;
 
 const MAX_RECENT_SAMPLES = 512;
 

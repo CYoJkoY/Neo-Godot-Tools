@@ -17,6 +17,14 @@ LSP requests are measured at the transport boundary rather than only inside fall
 
 The profiler does not write files or emit logs on every edit, so normal editing remains quiet.
 
+## Export a runtime snapshot
+
+Use the command palette action **Neo Godot Tools: Export Runtime Performance Snapshot** after reproducing the editing workload you want to measure. Choose **Copy JSON** to place the aggregate metrics on the clipboard, or **Save JSON** to select a destination file.
+
+The export contains a timestamp, VS Code/Node runtime metadata, and aggregate metric counts/totals/max/recent p50/p95/p99 values. It excludes project paths, source text, and symbol names. The command only copies or saves locally; it does not transmit the report. Exporting does not reset the profiler, so consecutive snapshots are cumulative for the extension session.
+
+The `lsp.fallback.*` samples count fallback calls by provider, while `lsp.request.<method>` samples record actual transport round trips by LSP method. These are aggregate counts and latency distributions, not a per-editor-action fallback rate. Compare snapshots from equivalent workloads, and avoid inferring a fallback percentage without an independent action count.
+
 ## Current optimization model
 
 The project has already implemented several optimizations that should be treated as architectural foundations rather than benchmark hypotheses:
