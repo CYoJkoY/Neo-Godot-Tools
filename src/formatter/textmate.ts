@@ -1904,7 +1904,7 @@ function wrap_long_binary_operator_expression(
 		assignmentOperators.has(tokens[tokenIndex].value),
 	);
 	const binaryOperatorValues = new Set(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>"]);
-	const arithmeticOperatorIndexes = topLevelIndexes.filter((tokenIndex) => {
+	const binaryOperatorIndexes = topLevelIndexes.filter((tokenIndex) => {
 		const currentToken = tokens[tokenIndex];
 		if (!binaryOperatorValues.has(currentToken.value)) return false;
 
@@ -1925,7 +1925,7 @@ function wrap_long_binary_operator_expression(
 	if (firstValue === "return" && assignmentIndexes.length > 0) return undefined;
 	if (firstValue !== "return" && assignmentIndexes.length !== 1) return undefined;
 	const expressionStart = firstValue === "return" ? 1 : assignmentIndexes[0] + 1;
-	const splitIndexes = arithmeticOperatorIndexes.filter((splitIndex) => splitIndex >= expressionStart);
+	const splitIndexes = binaryOperatorIndexes.filter((splitIndex) => splitIndex >= expressionStart);
 	if (expressionStart <= 0 || splitIndexes.length === 0 || expressionStart >= splitIndexes[0]) {
 		return undefined;
 	}
