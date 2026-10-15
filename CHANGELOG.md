@@ -2,7 +2,38 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.14.1 — 2026-10-15 (pending)
+### 2.14.2 — 2026-10-15 (pending)
+
+Changes since [v2.14.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.1...v2.14.2).
+
+#### Added
+
+- **semantic:** propagate builtin call return types ([#175](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/175))
+- **perf:** export runtime profiler snapshots ([#179](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/179))
+- **perf:** compare semantic benchmark reports ([#181](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/181))
+
+#### Fixed
+
+- **formatter:** align wrapped delimiters and reduce indentation ([#167](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/167))
+- **formatter:** align wrapped function declaration closing line ([#169](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/169))
+- **formatter:** wrap long single-argument calls ([#173](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/173))
+- **formatter:** measure wrapped lines using tab stops ([#183](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/183))
+- **perf:** validate benchmark report comparability ([#185](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/185))
+- **formatter:** recognize inline accessors on prefixed variables ([#187](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/187))
+
+#### Performance
+
+- make semantic benchmarks reproducible ([#177](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/177))
+
+#### Documentation
+
+- clarify compatibility and CI coverage ([#171](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/171))
+
+#### Maintenance
+
+- **version:** Update the version to 2.14.2. ([1201c46](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/1201c462d1ba07d46c780100fa78ea0dd5427fc9))
+
+### 2.14.1 — 2026-10-15
 
 Changes since [v2.14.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.0...v2.14.1).
 
@@ -12,6 +43,10 @@ Changes since [v2.14.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14
 - **formatter:** preserve whitespace inside multiline strings ([#163](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/163))
 - **formatter:** enforce line limits for wrapped boolean conditions ([#164](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/164))
 - **formatter:** preserve trailing commas when wrapping calls ([#165](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/165))
+
+#### Documentation
+
+- **changelog:** update changelog ([fa2c3b1](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/fa2c3b109b16c3c411e08bb8e30b72a9d2174a3b))
 
 ### 2.14.0 — 2026-10-15
 
