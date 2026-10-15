@@ -74,7 +74,7 @@ function get_formatter_options() {
 	const continuationIndentLevel =
 		typeof rawContinuationIndentLevel === "number" && Number.isFinite(rawContinuationIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(rawContinuationIndentLevel)))
-			: 2;
+			: 1;
 
 	const options: FormatterOptions = {
 		maxEmptyLines: maxEmptyLines,
@@ -572,7 +572,7 @@ function wrap_long_boolean_condition(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const wrappedTermGroups = termRanges.reduce<string[][] | undefined>((groups, termRange) => {
@@ -667,7 +667,7 @@ function wrap_long_function_call(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const wrappedLines = wrap_function_call_range(
 		tokens,
 		renderedTokens,
@@ -785,7 +785,6 @@ function wrap_function_call_candidate(
 	if (firstLine.length > maxLineLength) return undefined;
 
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
-	const closingSeparator = hasTrailingComma ? ",)" : ")";
 	const argumentLines = argumentRanges.reduce(
 		(state, argumentRange) => {
 			if (!state.valid) return state;
@@ -794,24 +793,36 @@ function wrap_function_call_candidate(
 				.slice(argumentRange.startIndex, argumentRange.endIndex)
 				.join("")
 				.trim();
-			const separator = argumentRange.isLastArgument ? `${closingSeparator}${suffix}` : ",";
+			const separator = argumentRange.isLastArgument ? (hasTrailingComma ? "," : "") : ",";
 			const singleLine = continuationIndent + argumentText + separator;
 			if (singleLine.length <= maxLineLength) {
 				state.lines.push(singleLine);
 				return state;
 			}
 
-			const nestedLines = wrap_function_call_range(
-				tokens,
-				renderedTokens,
-				argumentRange.startIndex,
-				argumentRange.endIndex,
-				continuationIndent,
-				separator,
-				maxLineLength,
-				indentationUnit,
-				continuationIndentLevel,
-			);
+			const nestedLines =
+				wrap_function_call_range(
+					tokens,
+					renderedTokens,
+					argumentRange.startIndex,
+					argumentRange.endIndex,
+					continuationIndent,
+					separator,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				) ??
+				wrap_collection_range(
+					tokens,
+					renderedTokens,
+					argumentRange.startIndex,
+					argumentRange.endIndex,
+					continuationIndent,
+					separator,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				);
 			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
@@ -823,7 +834,8 @@ function wrap_function_call_candidate(
 	);
 	if (!argumentLines.valid) return undefined;
 
-	const wrappedLines = [firstLine, ...argumentLines.lines];
+	const closingLine = `${leadingWhitespace})${suffix}`;
+	const wrappedLines = [firstLine, ...argumentLines.lines, closingLine];
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
 		: wrappedLines;
@@ -1799,7 +1811,7 @@ function wrap_long_collection_literal(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	return wrap_collection_range(
 		tokens,
 		renderedTokens,
@@ -2106,7 +2118,7 @@ function wrap_long_ternary_expression(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
@@ -2402,7 +2414,7 @@ function wrap_long_boolean_expression(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
@@ -2487,7 +2499,7 @@ function wrap_long_function_declaration(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const firstLine = leadingWhitespace + renderedTokens.slice(0, openIndex + 1).join("");
@@ -2616,7 +2628,7 @@ function wrap_long_binary_operator_expression(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
@@ -2727,7 +2739,7 @@ function wrap_long_comparison_expression(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
 		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
@@ -2843,7 +2855,7 @@ function wrap_long_method_chain(
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 2;
+			: 1;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const packedSegments = segments.reduce<string[]>((packed, segment) => {
