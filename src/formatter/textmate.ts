@@ -600,6 +600,7 @@ function wrap_function_call_candidate(
 	if (firstLine.length > maxLineLength) return undefined;
 
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const closingSeparator = hasTrailingComma ? ",)" : ")";
 	const argumentLines = argumentRanges.reduce(
 		(state, argumentRange) => {
 			if (!state.valid) return state;
@@ -608,7 +609,7 @@ function wrap_function_call_candidate(
 				.slice(argumentRange.startIndex, argumentRange.endIndex)
 				.join("")
 				.trim();
-			const separator = argumentRange.isLastArgument ? `${hasTrailingComma ? ",)" : ")"}${suffix}` : ",";
+			const separator = argumentRange.isLastArgument ? `${closingSeparator}${suffix}` : ",";
 			const singleLine = continuationIndent + argumentText + separator;
 			if (singleLine.length <= maxLineLength) {
 				state.lines.push(singleLine);
