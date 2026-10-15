@@ -1946,7 +1946,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	let onlyEmptyLinesSoFar = true;
 	let emptyLineCount = 0;
 	let inLambdaBody = false;
-	let multilineStringDelimiter: MultilineStringDelimiter | undefined = undefined;
+	const multilineStringState: { delimiter: MultilineStringDelimiter | undefined } = { delimiter: undefined };
 	const matchContexts: { indentation: string; caseIndentation?: string }[] = [];
 	const inlineIndentContexts: InlineIndentContext[] = [];
 	for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
@@ -1956,8 +1956,8 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		// blank lines, or conflict markers can still occur inside multiline strings.
 		lineTokens = activeGrammar.tokenizeLine(line.text, lineTokens?.ruleStack ?? vsctm.INITIAL);
 
-		const lineStartedInsideMultilineString = multilineStringDelimiter !== undefined;
-		multilineStringDelimiter = advance_multiline_string_delimiter(line, lineTokens, multilineStringDelimiter);
+		const lineStartedInsideMultilineString = multilineStringState.delimiter !== undefined;
+		multilineStringState.delimiter = advance_multiline_string_delimiter(line, lineTokens, multilineStringState.delimiter);
 		if (lineStartedInsideMultilineString) {
 			// Whitespace and indentation in multiline string continuations are literal data.
 			continue;
