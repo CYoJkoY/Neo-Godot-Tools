@@ -822,7 +822,7 @@ function wrap_function_call_candidate(
 	);
 	if (!argumentLines.valid) return undefined;
 
-	const closingLine = leadingWhitespace + ")" + suffix;
+	const closingLine = `${leadingWhitespace})${suffix}`;
 	const wrappedLines = [firstLine, ...argumentLines.lines, closingLine];
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
