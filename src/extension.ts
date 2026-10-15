@@ -12,6 +12,7 @@ import { RenameFallback } from "./fallback/rename";
 import { SignatureHelpFallback } from "./fallback/signature_help";
 import { FormattingProvider } from "./formatter";
 import { LanguageService } from "./language/service";
+import { languageProfiler } from "./performance/profiler";
 import { ClientConnectionManager } from "./lsp";
 import type {
 	GDCompletionItemProvider,
@@ -155,6 +156,7 @@ export function activate(context: vscode.ExtensionContext) {
 		register_command("openEditorSettings", open_godot_editor_settings),
 		register_command("copyResourcePath", copy_resource_path),
 		register_command("listGodotClasses", list_classes),
+		register_command("exportPerformanceSnapshot", export_performance_snapshot),
 		register_command("switchSceneScript", switch_scene_script),
 		register_command("getGodotPath", get_godot_path),
 	);
@@ -209,6 +211,60 @@ async function copy_resource_path(uri?: vscode.Uri) {
 
 async function list_classes() {
 	await globals.docsProvider?.list_native_classes();
+}
+
+async function export_performance_snapshot(): Promise<void> {
+	const metrics = languageProfiler.getSnapshot();
+	const metricEntries = Object.entries(metrics).filter((entry) => entry[1] !== undefined);
+	const sampleCount = metricEntries.reduce((count, entry) => count + (entry[1]?.count ?? 0), 0);
+	if (sampleCount === 0) {
+		vscode.window.showInformationMessage(
+			"Neo Godot Tools has no runtime performance samples yet. Continue editing or using language features, then export again.",
+		);
+		return;
+	}
+
+	const capturedAt = new Date().toISOString();
+	const snapshot = {
+		schemaVersion: 1,
+		capturedAt,
+		runtime: {
+			vscodeVersion: vscode.version,
+			nodeVersion: process.version,
+			platform: process.platform,
+			architecture: process.arch,
+		},
+		metrics,
+	};
+	const json = `${JSON.stringify(snapshot, null, 2)}\n`;
+	const choice = await vscode.window.showInformationMessage(
+		`Captured ${metricEntries.length} metric types across ${sampleCount} samples.`,
+		"Copy JSON",
+		"Save JSON",
+	);
+	if (choice === "Copy JSON") {
+		await vscode.env.clipboard.writeText(json);
+		vscode.window.showInformationMessage("Runtime performance snapshot copied to the clipboard.");
+		return;
+	}
+	if (choice !== "Save JSON") return;
+
+	const fileTimestamp = capturedAt.replace(/[:.]/g, "-");
+	const homeDirectory = process.env["HOME"] ?? process.env["USERPROFILE"] ?? process.cwd();
+	const defaultFileName = `neo-godot-performance-${fileTimestamp}.json`;
+	const target = await vscode.window.showSaveDialog({
+		defaultUri: vscode.Uri.file(path.join(homeDirectory, defaultFileName)),
+		saveLabel: "Save Performance Snapshot",
+		filters: { JSON: ["json"] },
+	});
+	if (!target) return;
+	try {
+		await vscode.workspace.fs.writeFile(target, Buffer.from(json, "utf8"));
+		vscode.window.showInformationMessage("Runtime performance snapshot saved.");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		vscode.window.showErrorMessage(`Failed to save runtime performance snapshot: ${message}`);
+	}
 }
 
 async function switch_scene_script() {
