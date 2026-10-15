@@ -2508,8 +2508,9 @@ function wrap_long_function_declaration(
 		firstLine,
 		...parameterTexts.map((parameterText, parameterIndex) => {
 			const isLastParameter = parameterIndex === parameterTexts.length - 1;
-			return `${continuationIndent}${parameterText}${isLastParameter ? declarationSuffix : ","}`;
+			return `${continuationIndent}${parameterText}${isLastParameter ? "" : ","}`;
 		}),
+		leadingWhitespace + declarationSuffix,
 	];
 
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
