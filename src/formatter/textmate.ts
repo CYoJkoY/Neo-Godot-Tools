@@ -440,7 +440,7 @@ function wrap_function_call_range(
 	const boundaryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!boundaryScan.valid) return undefined;
 
-	const candidateResults = [...boundaryScan.matchingClosers.entries()]
+	return [...boundaryScan.matchingClosers.entries()]
 		.filter(
 			([openIndex, closeIndex]) =>
 				openIndex >= rangeStart &&
@@ -448,88 +448,118 @@ function wrap_function_call_range(
 				tokens[openIndex]?.value === "(",
 		)
 		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0])
-		.map(([openIndex, closeIndex]) => {
-			const callableToken = tokens[openIndex - 1];
-			const isCallable =
-				callableToken !== undefined &&
-				!callableToken.string &&
-				((callableToken.identifier === true &&
-					(callableToken.type !== "keyword" || ["assert", "yield"].includes(callableToken.value))) ||
-					[")", "]"].includes(callableToken.value));
-			if (!isCallable) return undefined;
+		.reduce<string[] | undefined>(
+			(wrappedLines, [openIndex, closeIndex]) =>
+				wrappedLines ??
+				wrap_function_call_candidate(
+					tokens,
+					renderedTokens,
+					rangeStart,
+					rangeEnd,
+					openIndex,
+					closeIndex,
+					leadingWhitespace,
+					trailingSuffix,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				),
+			undefined,
+		);
+}
 
-			const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
-			if (!argumentScan.valid) return undefined;
-			const commaIndexes = argumentScan.topLevelIndexes.filter(
-				(tokenIndex) => tokens[tokenIndex].value === ",",
-			);
-			if (commaIndexes.length === 0) return undefined;
 
-			const argumentRanges = [...commaIndexes, closeIndex].map((endIndex, argumentIndex) => ({
-				startIndex: argumentIndex === 0 ? openIndex + 1 : commaIndexes[argumentIndex - 1] + 1,
-				endIndex,
-				isLastArgument: argumentIndex === commaIndexes.length,
-			}));
-			if (
-				argumentRanges.some(
-					({ startIndex, endIndex }) =>
-						renderedTokens.slice(startIndex, endIndex).join("").trim().length === 0,
-				)
-			) {
-				return undefined;
+/** Render one candidate call and recursively wrap only argument lines that need it. */
+function wrap_function_call_candidate(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	openIndex: number,
+	closeIndex: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const callableToken = tokens[openIndex - 1];
+	const isCallable =
+		callableToken !== undefined &&
+		!callableToken.string &&
+		((callableToken.identifier === true &&
+			(callableToken.type !== "keyword" || ["assert", "yield"].includes(callableToken.value))) ||
+			[")", "]"].includes(callableToken.value));
+	if (!isCallable) return undefined;
+
+	const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	if (!argumentScan.valid) return undefined;
+	const commaIndexes = argumentScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ",",
+	);
+	if (commaIndexes.length === 0) return undefined;
+
+	const argumentRanges = [...commaIndexes, closeIndex].map((endIndex, argumentIndex) => ({
+		startIndex: argumentIndex === 0 ? openIndex + 1 : commaIndexes[argumentIndex - 1] + 1,
+		endIndex,
+		isLastArgument: argumentIndex === commaIndexes.length,
+	}));
+	if (
+		argumentRanges.some(
+			({ startIndex, endIndex }) =>
+				renderedTokens.slice(startIndex, endIndex).join("").trim().length === 0,
+		)
+	) {
+		return undefined;
+	}
+
+	const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
+	const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
+	const firstLine = leadingWhitespace + prefix;
+	if (firstLine.length > maxLineLength) return undefined;
+
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const argumentLines = argumentRanges.reduce(
+		(state, argumentRange) => {
+			if (!state.valid) return state;
+
+			const argumentText = renderedTokens
+				.slice(argumentRange.startIndex, argumentRange.endIndex)
+				.join("")
+				.trim();
+			const separator = argumentRange.isLastArgument ? `)${suffix}` : ",";
+			const singleLine = continuationIndent + argumentText + separator;
+			if (singleLine.length <= maxLineLength) {
+				state.lines.push(singleLine);
+				return state;
 			}
 
-			const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
-			const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
-			const firstLine = leadingWhitespace + prefix;
-			if (firstLine.length > maxLineLength) return undefined;
-
-			const continuationIndent =
-				leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
-			const argumentLines = argumentRanges.reduce(
-				(state, argumentRange) => {
-					if (!state.valid) return state;
-
-					const argumentText = renderedTokens
-						.slice(argumentRange.startIndex, argumentRange.endIndex)
-						.join("")
-						.trim();
-					const separator = argumentRange.isLastArgument ? `)${suffix}` : ",";
-					const singleLine = continuationIndent + argumentText + separator;
-					if (singleLine.length <= maxLineLength) {
-						state.lines.push(singleLine);
-						return state;
-					}
-
-					const nestedLines = wrap_function_call_range(
-						tokens,
-						renderedTokens,
-						argumentRange.startIndex,
-						argumentRange.endIndex,
-						continuationIndent,
-						separator,
-						maxLineLength,
-						indentationUnit,
-						continuationIndentLevel,
-					);
-					if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
-						state.valid = false;
-						return state;
-					}
-					state.lines.push(...nestedLines);
-					return state;
-				},
-				{ valid: true, lines: [] as string[] },
+			const nestedLines = wrap_function_call_range(
+				tokens,
+				renderedTokens,
+				argumentRange.startIndex,
+				argumentRange.endIndex,
+				continuationIndent,
+				separator,
+				maxLineLength,
+				indentationUnit,
+				continuationIndentLevel,
 			);
-			if (!argumentLines.valid) return undefined;
+			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+				state.valid = false;
+				return state;
+			}
+			state.lines.push(...nestedLines);
+			return state;
+		},
+		{ valid: true, lines: [] as string[] },
+	);
+	if (!argumentLines.valid) return undefined;
 
-			const wrappedLines = [firstLine, ...argumentLines.lines];
-			return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
-				? undefined
-				: wrappedLines;
-		});
-
-	return candidateResults.find((candidate): candidate is string[] => candidate !== undefined);
+	const wrappedLines = [firstLine, ...argumentLines.lines];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines;
 }
 
 
