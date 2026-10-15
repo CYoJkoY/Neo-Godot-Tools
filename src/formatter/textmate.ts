@@ -869,6 +869,7 @@ function wrap_long_array_member_binary_expression(
 		">>=",
 		"&&",
 		"||",
+		"~=",
 	]);
 	if (
 		memberScan.topLevelIndexes.some((tokenIndex) =>
