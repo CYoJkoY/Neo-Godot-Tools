@@ -342,13 +342,26 @@ function get_max_line_length(options: FormatterOptions): number {
 		: 100;
 }
 
-function get_indentation_unit(document: TextDocument, leadingWhitespace: string): string {
+function get_editor_tab_size(document: TextDocument): number {
+	const rawTabSize = vscode.workspace.getConfiguration("editor", document.uri).get<number>("tabSize", 4);
+	return typeof rawTabSize === "number" && Number.isFinite(rawTabSize)
+		? Math.max(1, Math.min(8, Math.round(rawTabSize)))
+		: 4;
+}
+
+/** Measure line columns while expanding tabs to the next configured editor tab stop. */
+function get_line_width(text: string, tabSize: number): number {
+	return text.split("\t").reduce((column, segment, segmentIndex, segments) => {
+		const segmentEndColumn = column + segment.length;
+		return segmentIndex < segments.length - 1
+			? segmentEndColumn + tabSize - (segmentEndColumn % tabSize)
+			: segmentEndColumn;
+	}, 0);
+}
+
+function get_indentation_unit(document: TextDocument, leadingWhitespace: string, configuredTabSize?: number): string {
 	const editorConfiguration = vscode.workspace.getConfiguration("editor", document.uri);
-	const configuredTabSize = editorConfiguration.get<number>("tabSize", 4);
-	const tabSize =
-		typeof configuredTabSize === "number" && Number.isFinite(configuredTabSize)
-			? Math.max(1, Math.min(8, Math.round(configuredTabSize)))
-			: 4;
+	const tabSize = configuredTabSize ?? get_editor_tab_size(document);
 	const configuredInsertSpaces = editorConfiguration.get<boolean>("insertSpaces", false);
 	const indentationSample =
 		leadingWhitespace.length > 0 ? leadingWhitespace : (document.getText().match(/^[ \t]+(?=\S)/m)?.[0] ?? "");
@@ -400,6 +413,7 @@ function wrap_long_boolean_term_expression(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const logicalOperator = ["and", "or"].includes(tokens[termRange.startIndex]?.value ?? "")
 		? tokens[termRange.startIndex].value
@@ -491,7 +505,7 @@ function wrap_long_boolean_term_expression(
 
 		const segment = renderedTokens.slice(segmentRange.startIndex, segmentRange.endIndex).join("").trim();
 		const singleLine = `${nestedIndent}${segment}`;
-		if (singleLine.length <= maxLineLength) {
+		if (get_line_width(singleLine, tabSize) <= maxLineLength) {
 			groups.push([singleLine]);
 			return groups;
 		}
@@ -506,8 +520,9 @@ function wrap_long_boolean_term_expression(
 			maxLineLength,
 			indentationUnit,
 			continuationIndentLevel,
+			tabSize,
 		);
-		if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+		if (!nestedLines || nestedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)) {
 			return undefined;
 		}
 		groups.push(nestedLines);
@@ -516,7 +531,7 @@ function wrap_long_boolean_term_expression(
 	if (!wrappedSegments) return undefined;
 
 	const wrappedLines = [firstLine, ...wrappedSegments.flat(), `${continuationIndent})`];
-	return wrappedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)
+	return wrappedLines.every((wrappedLine) => get_line_width(wrappedLine, tabSize) <= maxLineLength)
 		? wrappedLines
 		: undefined;
 }
@@ -528,9 +543,11 @@ function wrap_long_boolean_condition(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength) return undefined;
+	if (currentLineWidth <= maxLineLength) return undefined;
 
 	const controlKeyword = tokens[0]?.value;
 	if (!["if", "elif", "while"].includes(controlKeyword ?? "")) return undefined;
@@ -573,14 +590,14 @@ function wrap_long_boolean_condition(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const wrappedTermGroups = termRanges.reduce<string[][] | undefined>((groups, termRange) => {
 		if (!groups) return undefined;
 
 		const term = renderedTokens.slice(termRange.startIndex, termRange.endIndex).join("").trim();
 		const singleLine = continuationIndent + term;
-		if (singleLine.length <= maxLineLength) {
+		if (get_line_width(singleLine, tabSize) <= maxLineLength) {
 			groups.push([singleLine]);
 			return groups;
 		}
@@ -595,8 +612,9 @@ function wrap_long_boolean_condition(
 			maxLineLength,
 			indentationUnit,
 			continuationIndentLevel,
+			tabSize,
 		);
-		if (nestedLines?.every((wrappedLine) => wrappedLine.length <= maxLineLength)) {
+		if (nestedLines?.every((wrappedLine) => get_line_width(wrappedLine, tabSize) <= maxLineLength)) {
 			groups.push(nestedLines);
 			return groups;
 		}
@@ -609,6 +627,7 @@ function wrap_long_boolean_condition(
 			maxLineLength,
 			indentationUnit,
 			continuationIndentLevel,
+			tabSize,
 		);
 		if (!expressionLines) return undefined;
 		groups.push(expressionLines);
@@ -622,7 +641,7 @@ function wrap_long_boolean_condition(
 		...wrappedTermGroups.flat(),
 		`${leadingWhitespace}):`,
 	];
-	return wrappedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)
+	return wrappedLines.every((wrappedLine) => get_line_width(wrappedLine, tabSize) <= maxLineLength)
 		? wrappedLines.join("\n")
 		: undefined;
 }
@@ -638,9 +657,11 @@ function wrap_long_function_call(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -662,7 +683,7 @@ function wrap_long_function_call(
 		return undefined;
 	}
 
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
@@ -678,6 +699,7 @@ function wrap_long_function_call(
 		maxLineLength,
 		indentationUnit,
 		continuationIndentLevel,
+		tabSize,
 	);
 	return wrappedLines?.join("\n");
 }
@@ -697,6 +719,7 @@ function wrap_function_call_range(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const boundaryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!boundaryScan.valid) return undefined;
@@ -724,6 +747,7 @@ function wrap_function_call_range(
 					maxLineLength,
 					indentationUnit,
 					continuationIndentLevel,
+					tabSize,
 				),
 			undefined,
 		);
@@ -743,6 +767,7 @@ function wrap_function_call_candidate(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const callableToken = tokens[openIndex - 1];
 	const isCallable =
@@ -780,7 +805,7 @@ function wrap_function_call_candidate(
 	const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
 	const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
 	const firstLine = leadingWhitespace + prefix;
-	if (firstLine.length > maxLineLength) return undefined;
+	if (get_line_width(firstLine, tabSize) > maxLineLength) return undefined;
 
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const argumentLines = argumentRanges.reduce(
@@ -793,7 +818,7 @@ function wrap_function_call_candidate(
 				.trim();
 			const separator = argumentRange.isLastArgument ? (hasTrailingComma ? "," : "") : ",";
 			const singleLine = continuationIndent + argumentText + separator;
-			if (singleLine.length <= maxLineLength) {
+			if (get_line_width(singleLine, tabSize) <= maxLineLength) {
 				state.lines.push(singleLine);
 				return state;
 			}
@@ -809,6 +834,7 @@ function wrap_function_call_candidate(
 					maxLineLength,
 					indentationUnit,
 					continuationIndentLevel,
+					tabSize,
 				) ??
 				wrap_collection_range(
 					tokens,
@@ -820,6 +846,7 @@ function wrap_function_call_candidate(
 					maxLineLength,
 					indentationUnit,
 					continuationIndentLevel,
+					tabSize,
 				) ??
 				wrap_long_binary_expression_range(
 					tokens,
@@ -831,8 +858,9 @@ function wrap_function_call_candidate(
 					maxLineLength,
 					indentationUnit,
 					continuationIndentLevel,
+					tabSize,
 				);
-			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			if (!nestedLines || nestedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)) {
 				state.valid = false;
 				return state;
 			}
@@ -845,7 +873,7 @@ function wrap_function_call_candidate(
 
 	const closingLine = `${leadingWhitespace})${suffix}`;
 	const wrappedLines = [firstLine, ...argumentLines.lines, closingLine];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines;
 }
@@ -865,6 +893,7 @@ function wrap_long_dictionary_entry_value(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!entryScan.valid) return undefined;
@@ -902,6 +931,7 @@ function wrap_long_dictionary_entry_value(
 					maxLineLength,
 					indentationUnit,
 					continuationIndentLevel,
+					tabSize,
 				),
 			undefined,
 		);
@@ -922,6 +952,7 @@ function wrap_long_dictionary_entry_ternary_value(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!entryScan.valid) return undefined;
@@ -995,7 +1026,7 @@ function wrap_long_dictionary_entry_ternary_value(
 		...segments.map((segment) => `${continuationIndent}${segment}`),
 		closingLine,
 	];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines;
 }
@@ -1015,6 +1046,7 @@ function wrap_long_dictionary_entry_binary_value(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!entryScan.valid) return undefined;
@@ -1091,7 +1123,7 @@ function wrap_long_dictionary_entry_binary_value(
 		...segments.map((segment) => `${continuationIndent}${segment}`),
 		closingLine,
 	];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines;
 }
@@ -1111,6 +1143,7 @@ function wrap_long_binary_expression_range(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const memberScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!memberScan.valid) return undefined;
@@ -1196,7 +1229,7 @@ function wrap_long_binary_expression_range(
 		...segments.map((segment) => `${continuationIndent}${segment}`),
 		closingLine,
 	];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines;
 }
@@ -1291,6 +1324,7 @@ function wrap_long_dictionary_entry_operator_value(
 	continuationIndentLevel: number,
 	splitOperatorValues: ReadonlySet<string>,
 	operatorKind: "boolean" | "comparison",
+	tabSize: number,
 ): string[] | undefined {
 	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!entryScan.valid) return undefined;
@@ -1370,7 +1404,7 @@ function wrap_long_dictionary_entry_operator_value(
 		...segments.map((segment) => `${continuationIndent}${segment}`),
 		closingLine,
 	];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines;
 }
@@ -1386,6 +1420,7 @@ function wrap_long_dictionary_entry_boolean_value(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	return wrap_long_dictionary_entry_operator_value(
 		tokens,
@@ -1399,6 +1434,7 @@ function wrap_long_dictionary_entry_boolean_value(
 		continuationIndentLevel,
 		dictionaryBooleanOperatorValues,
 		"boolean",
+		tabSize,
 	);
 }
 
@@ -1413,6 +1449,7 @@ function wrap_long_dictionary_entry_comparison_value(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	return wrap_long_dictionary_entry_operator_value(
 		tokens,
@@ -1426,6 +1463,7 @@ function wrap_long_dictionary_entry_comparison_value(
 		continuationIndentLevel,
 		comparisonOperatorValues,
 		"comparison",
+		tabSize,
 	);
 }
 
@@ -1514,6 +1552,7 @@ function format_inline_enum_declaration(
 	leadingWhitespace: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
 ): string | undefined {
 	if (tokens[0]?.value !== "enum" || tokens[0]?.string) return undefined;
 	if (
@@ -1558,7 +1597,7 @@ function format_inline_enum_declaration(
 	);
 	if (members.length === 0 || members.some((member) => member.length === 0)) return undefined;
 
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const memberIndent = leadingWhitespace + indentationUnit;
 	const maxLineLength = get_max_line_length(options);
 	const firstLine = leadingWhitespace + renderedTokens.slice(0, openIndex + 1).join("");
@@ -1568,7 +1607,7 @@ function format_inline_enum_declaration(
 		...members.map((member) => `${memberIndent}${member},`),
 		closingLine,
 	];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
@@ -1586,6 +1625,7 @@ function wrap_collection_candidate(
 	continuationIndentLevel: number,
 	openIndex: number,
 	closeIndex: number,
+	tabSize: number,
 ): string[] | undefined {
 	const openingValue = tokens[openIndex].value;
 	if (openingValue === "[") {
@@ -1623,7 +1663,7 @@ function wrap_collection_candidate(
 	const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
 	const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
 	const firstLine = leadingWhitespace + prefix;
-	if (firstLine.length > maxLineLength) return undefined;
+	if (get_line_width(firstLine, tabSize) > maxLineLength) return undefined;
 
 	const collectionIndent = leadingWhitespace + indentationUnit;
 	const renderedMembers = memberRanges.reduce(
@@ -1632,7 +1672,7 @@ function wrap_collection_candidate(
 
 			const memberText = memberTexts[memberIndex];
 			const singleLine = `${collectionIndent}${memberText},`;
-			if (singleLine.length <= maxLineLength) {
+			if (get_line_width(singleLine, tabSize) <= maxLineLength) {
 				state.lines.push(singleLine);
 				return state;
 			}
@@ -1647,6 +1687,7 @@ function wrap_collection_candidate(
 				maxLineLength,
 				indentationUnit,
 				continuationIndentLevel,
+				tabSize,
 			);
 			const wrappedEntryLines =
 				nestedLines ??
@@ -1661,6 +1702,7 @@ function wrap_collection_candidate(
 						maxLineLength,
 						indentationUnit,
 						continuationIndentLevel,
+						tabSize,
 					) ??
 						wrap_long_dictionary_entry_value(
 						tokens,
@@ -1672,6 +1714,7 @@ function wrap_collection_candidate(
 						maxLineLength,
 						indentationUnit,
 						continuationIndentLevel,
+						tabSize,
 					) ??
 						wrap_long_dictionary_entry_binary_value(
 							tokens,
@@ -1683,6 +1726,7 @@ function wrap_collection_candidate(
 							maxLineLength,
 							indentationUnit,
 							continuationIndentLevel,
+							tabSize,
 						) ??
 						wrap_long_dictionary_entry_boolean_value(
 							tokens,
@@ -1694,6 +1738,7 @@ function wrap_collection_candidate(
 							maxLineLength,
 							indentationUnit,
 							continuationIndentLevel,
+							tabSize,
 						) ??
 						wrap_long_dictionary_entry_comparison_value(
 							tokens,
@@ -1705,6 +1750,7 @@ function wrap_collection_candidate(
 							maxLineLength,
 							indentationUnit,
 							continuationIndentLevel,
+							tabSize,
 						)
 					: openingValue === "["
 						? wrap_long_binary_expression_range(
@@ -1717,9 +1763,10 @@ function wrap_collection_candidate(
 							maxLineLength,
 							indentationUnit,
 							continuationIndentLevel,
+							tabSize,
 						)
 						: undefined);
-			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)) {
 				state.valid = false;
 				return state;
 			}
@@ -1732,7 +1779,7 @@ function wrap_collection_candidate(
 
 	const closingLine = leadingWhitespace + tokens[closeIndex].value + suffix;
 	const wrappedLines = [firstLine, ...renderedMembers.lines, closingLine];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines;
 }
@@ -1748,6 +1795,7 @@ function wrap_collection_range(
 	maxLineLength: number,
 	indentationUnit: string,
 	continuationIndentLevel: number,
+	tabSize: number,
 ): string[] | undefined {
 	const delimiterScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
 	if (!delimiterScan.valid) return undefined;
@@ -1775,6 +1823,7 @@ function wrap_collection_range(
 					continuationIndentLevel,
 					openIndex,
 					closeIndex,
+					tabSize,
 				),
 			undefined,
 		);
@@ -1791,9 +1840,11 @@ function wrap_long_collection_literal(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -1815,7 +1866,7 @@ function wrap_long_collection_literal(
 		return undefined;
 	}
 
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
@@ -1831,6 +1882,7 @@ function wrap_long_collection_literal(
 		maxLineLength,
 		indentationUnit,
 		continuationIndentLevel,
+		tabSize,
 	)?.join("\n");
 }
 
@@ -1978,6 +2030,7 @@ function format_token_line(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
 	isMatchCaseLine = false,
 ): string {
 	const suiteBoundary = find_inline_suite_boundary(tokens, isMatchCaseLine);
@@ -2002,8 +2055,9 @@ function format_token_line(
 			headerLine,
 			document,
 			options,
+			tabSize,
 		);
-		const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+		const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 		const bodyIndentation = leadingWhitespace + indentationUnit;
 		const bodyLine = bodyIndentation + bodyRenderedTokens.join("");
 		const formattedBody = format_token_line(
@@ -2013,22 +2067,25 @@ function format_token_line(
 			bodyLine,
 			document,
 			options,
+			tabSize,
 			isMatchHeader,
 		);
 		return `${formattedHeader}\n${formattedBody}`;
 	}
 
+	const currentLineWidth = get_line_width(currentLine, tabSize);
+
 	return (
-		format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options) ??
-		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
-		wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize) ??
+		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
+		wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, currentLine, document, options, tabSize, currentLineWidth) ??
 		currentLine
 	);
 }
@@ -2050,9 +2107,11 @@ function wrap_long_ternary_expression(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -2128,7 +2187,7 @@ function wrap_long_ternary_expression(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
 		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
@@ -2139,7 +2198,7 @@ function wrap_long_ternary_expression(
 		`${leadingWhitespace})`,
 	];
 
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
@@ -2151,6 +2210,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	const edits: TextEdit[] = [];
 
 	const options = _options ?? get_formatter_options();
+	const tabSize = get_editor_tab_size(document);
 	const debug = is_debug_mode();
 
 	let lastToken = "";
@@ -2329,6 +2389,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			nextLine,
 			document,
 			options,
+			tabSize,
 			isMatchCaseLine,
 		);
 
@@ -2337,14 +2398,14 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			inlineIndentContexts.push({
 				baseIndentation: sourceLeadingWhitespace,
 				extraLevels: inlineBlockChain.headerCount - 1,
-				indentationUnit: get_indentation_unit(document, sourceLeadingWhitespace),
+				indentationUnit: get_indentation_unit(document, sourceLeadingWhitespace, tabSize),
 			});
 		}
 		if (inlineBlockChain.endsWithOpenSuite && inlineBlockChain.matchHeaderDepth !== undefined) {
 			matchContexts.push({
 				indentation:
 					leadingWhitespace +
-					get_indentation_unit(document, leadingWhitespace).repeat(inlineBlockChain.matchHeaderDepth),
+					get_indentation_unit(document, leadingWhitespace, tabSize).repeat(inlineBlockChain.matchHeaderDepth),
 			});
 		}
 
@@ -2367,9 +2428,11 @@ function wrap_long_boolean_expression(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -2424,7 +2487,7 @@ function wrap_long_boolean_expression(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
 		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
@@ -2435,7 +2498,7 @@ function wrap_long_boolean_expression(
 		`${leadingWhitespace})`,
 	];
 
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
@@ -2452,9 +2515,11 @@ function wrap_long_function_declaration(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const functionIndex = tokens[0]?.value === "static" ? 1 : 0;
 	if (tokens[functionIndex]?.value !== "func") return undefined;
@@ -2509,7 +2574,7 @@ function wrap_long_function_declaration(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const firstLine = leadingWhitespace + renderedTokens.slice(0, openIndex + 1).join("");
 	const declarationSuffix = `)${renderedTokens.slice(closeIndex + 1).join("")}`;
@@ -2522,7 +2587,7 @@ function wrap_long_function_declaration(
 		leadingWhitespace + declarationSuffix,
 	];
 
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
@@ -2539,9 +2604,11 @@ function wrap_long_binary_operator_expression(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -2639,7 +2706,7 @@ function wrap_long_binary_operator_expression(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const expressionPrefix =
 		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
@@ -2650,7 +2717,7 @@ function wrap_long_binary_operator_expression(
 		`${leadingWhitespace})`,
 	];
 
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
@@ -2666,9 +2733,11 @@ function wrap_long_comparison_expression(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -2744,7 +2813,7 @@ function wrap_long_comparison_expression(
 	});
 	if (segments.some((segment) => segment.length === 0)) return undefined;
 
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
@@ -2758,7 +2827,7 @@ function wrap_long_comparison_expression(
 		...segments.map((segment) => continuationIndent + segment),
 		`${leadingWhitespace})`,
 	];
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
@@ -2774,9 +2843,11 @@ function wrap_long_method_chain(
 	currentLine: string,
 	document: TextDocument,
 	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
-	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
 
 	const firstValue = tokens[0]?.value ?? "";
 	if (
@@ -2866,14 +2937,14 @@ function wrap_long_method_chain(
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const packedSegments = segments.reduce<string[]>((packed, segment) => {
 		const previousSegmentIndex = packed.length - 1;
 		const previousSegment = packed[previousSegmentIndex];
 		if (
 			previousSegment !== undefined &&
-			`${continuationIndent}${previousSegment}${segment}`.length <= maxLineLength
+			get_line_width(`${continuationIndent}${previousSegment}${segment}`, tabSize) <= maxLineLength
 		) {
 			packed[previousSegmentIndex] = `${previousSegment}${segment}`;
 			return packed;
@@ -2888,7 +2959,7 @@ function wrap_long_method_chain(
 		`${leadingWhitespace})`,
 	];
 
-	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
 		? undefined
 		: wrappedLines.join("\n");
 }
