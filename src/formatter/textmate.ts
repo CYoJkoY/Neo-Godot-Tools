@@ -575,10 +575,15 @@ function wrap_function_call_candidate(
 	);
 	if (commaIndexes.length === 0) return undefined;
 
-	const argumentRanges = [...commaIndexes, closeIndex].map((endIndex, argumentIndex) => ({
-		startIndex: argumentIndex === 0 ? openIndex + 1 : commaIndexes[argumentIndex - 1] + 1,
+	const trailingCommaIndex = commaIndexes[commaIndexes.length - 1];
+	const hasTrailingComma = trailingCommaIndex === closeIndex - 1;
+	const argumentSeparatorIndexes = hasTrailingComma ? commaIndexes.slice(0, -1) : commaIndexes;
+	const finalArgumentEndIndex = hasTrailingComma ? trailingCommaIndex : closeIndex;
+	const argumentRanges = [...argumentSeparatorIndexes, finalArgumentEndIndex].map((endIndex, argumentIndex) => ({
+		startIndex:
+			argumentIndex === 0 ? openIndex + 1 : argumentSeparatorIndexes[argumentIndex - 1] + 1,
 		endIndex,
-		isLastArgument: argumentIndex === commaIndexes.length,
+		isLastArgument: argumentIndex === argumentSeparatorIndexes.length,
 	}));
 	if (
 		argumentRanges.some(
@@ -603,7 +608,7 @@ function wrap_function_call_candidate(
 				.slice(argumentRange.startIndex, argumentRange.endIndex)
 				.join("")
 				.trim();
-			const separator = argumentRange.isLastArgument ? `)${suffix}` : ",";
+			const separator = argumentRange.isLastArgument ? `${hasTrailingComma ? ",)" : ")"}${suffix}` : ",";
 			const singleLine = continuationIndent + argumentText + separator;
 			if (singleLine.length <= maxLineLength) {
 				state.lines.push(singleLine);
