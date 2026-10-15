@@ -621,6 +621,99 @@ function wrap_long_dictionary_entry_value(
 
 
 /**
+ * Wrap clear top-level ternary branches in a dictionary value without moving the key or colon.
+ * Only complete alternating if/else sequences are eligible.
+ */
+function wrap_long_dictionary_entry_ternary_value(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!entryScan.valid) return undefined;
+
+	const separators = entryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ":",
+	);
+	if (separators.length !== 1 || separators[0] <= rangeStart || separators[0] >= rangeEnd - 1) {
+		return undefined;
+	}
+
+	const valueStart = separators[0] + 1;
+	const valueScan = scan_token_boundaries(tokens, valueStart, rangeEnd);
+	if (!valueScan.valid) return undefined;
+
+	const valueTokens = tokens.slice(valueStart, rangeEnd);
+	if (
+		valueTokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						token.value === "=" ||
+						token.value === ":=" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const markers = valueScan.topLevelIndexes.flatMap((tokenIndex) => {
+		const value = tokens[tokenIndex].value;
+		return value === "if" || value === "else" ? [{ index: tokenIndex, value }] : [];
+	});
+	const markerSequenceIsValid =
+		markers.length >= 2 &&
+		markers.length % 2 === 0 &&
+		markers.every((marker, markerIndex) => marker.value === (markerIndex % 2 === 0 ? "if" : "else"));
+	if (!markerSequenceIsValid) return undefined;
+
+	const branchesAreComplete = markers
+		.filter((_, markerIndex) => markerIndex % 2 === 0)
+		.every((ifMarker, pairIndex) => {
+			const elseMarker = markers[pairIndex * 2 + 1];
+			const branchStart = pairIndex === 0 ? valueStart : markers[pairIndex * 2 - 1].index + 1;
+			return (
+				ifMarker.index > branchStart &&
+				elseMarker.index > ifMarker.index + 1 &&
+				elseMarker.index < rangeEnd - 1
+			);
+		});
+	if (!branchesAreComplete) return undefined;
+
+	const elseIndexes = markers
+		.filter((marker) => marker.value === "else")
+		.map((marker) => marker.index);
+	const segments = [...elseIndexes, rangeEnd].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? valueStart : elseIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("");
+	const valueSpacing = renderedTokens[valueStart].match(/^\\s*/)?.[0] ?? "";
+	const firstLine = `${leadingWhitespace + expressionPrefix}${valueSpacing}(`;
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		closingLine,
+	];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines;
+}
+
+
+/**
  * Wrap a dictionary value's top-level arithmetic operators without altering the key or colon.
  * Unary operators and operators nested inside delimiters are not split points.
  */
@@ -1165,7 +1258,18 @@ function wrap_collection_candidate(
 			const wrappedEntryLines =
 				nestedLines ??
 				(openingValue === "{"
-					? wrap_long_dictionary_entry_value(
+					? wrap_long_dictionary_entry_ternary_value(
+						tokens,
+						renderedTokens,
+						memberRange.startIndex,
+						memberRange.endIndex,
+						collectionIndent,
+						",",
+						maxLineLength,
+						indentationUnit,
+						continuationIndentLevel,
+					) ??
+						wrap_long_dictionary_entry_value(
 						tokens,
 						renderedTokens,
 						memberRange.startIndex,
