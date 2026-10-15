@@ -159,6 +159,7 @@ Current foundations include:
 - simple branch propagation;
 - local function return inference;
 - member call return propagation;
+- known GDScript builtin call return types when the catalog provides a resolvable type;
 - declared member types;
 - inheritance-aware member lookup.
 

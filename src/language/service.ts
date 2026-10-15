@@ -17,6 +17,7 @@ import {
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
+import { getGDScriptBuiltin } from "./semantic/gdscript_builtins";
 import { SemanticQueryEngine } from "./semantic/query_engine";
 import { isSafeLocalConfidence } from "./semantic/resolution_policy";
 import { ScheduledUpdate, UpdateScheduler } from "./update_scheduler";
@@ -80,7 +81,12 @@ export class LanguageService implements vscode.Disposable {
 	readonly symbols = createSymbolIndex(this.files);
 	readonly references = createReferenceIndex(this.files);
 	readonly bindings = createBindingIndex(this.files);
-	readonly types = createTypeResolutionIndex(this.files, this.symbols, this.bindings);
+	readonly types = createTypeResolutionIndex(
+		this.files,
+		this.symbols,
+		this.bindings,
+		(name) => getGDScriptBuiltin(name)?.returnType,
+	);
 	readonly dependencies = createDependencyGraph(this.files);
 	readonly semantic = new SemanticQueryEngine(this.files, this.symbols, this.bindings, this.types);
 	private readonly disposables: vscode.Disposable[] = [];
