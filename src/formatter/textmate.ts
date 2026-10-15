@@ -545,26 +545,11 @@ function wrap_function_call_candidate(
 				indentationUnit,
 				continuationIndentLevel,
 			);
-			const wrappedEntryLines =
-				nestedLines ??
-				(openingValue === "{"
-					? wrap_long_dictionary_entry_value(
-						tokens,
-						renderedTokens,
-						memberRange.startIndex,
-						memberRange.endIndex,
-						collectionIndent,
-						",",
-						maxLineLength,
-						indentationUnit,
-						continuationIndentLevel,
-					)
-					: undefined);
-			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
 			}
-			state.lines.push(...wrappedEntryLines);
+			state.lines.push(...nestedLines);
 			return state;
 		},
 		{ valid: true, lines: [] as string[] },
@@ -853,11 +838,26 @@ function wrap_collection_candidate(
 				indentationUnit,
 				continuationIndentLevel,
 			);
-			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			const wrappedEntryLines =
+				nestedLines ??
+				(openingValue === "{"
+					? wrap_long_dictionary_entry_value(
+						tokens,
+						renderedTokens,
+						memberRange.startIndex,
+						memberRange.endIndex,
+						collectionIndent,
+						",",
+						maxLineLength,
+						indentationUnit,
+						continuationIndentLevel,
+					)
+					: undefined);
+			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
 			}
-			state.lines.push(...nestedLines);
+			state.lines.push(...wrappedEntryLines);
 			return state;
 		},
 		{ valid: true, lines: [] as string[] },
