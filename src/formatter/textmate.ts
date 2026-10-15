@@ -637,15 +637,81 @@ function scan_token_boundaries(
 }
 
 
-function wrap_collection_candidate(
+/**
+ * Normalize inline enum declarations to the GDScript style guide's one-member-per-line layout.
+ * Unsupported or ambiguous enum forms remain unchanged.
+ */
+function wrap_long_enum_declaration(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	if (tokens[0]?.value !== "enum" || tokens[0]?.string) return undefined;
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string && (token.value === ";" || (token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const delimiterScan = scan_token_boundaries(tokens);
+	if (!delimiterScan.valid) return undefined;
+	const openIndex = tokens[1]?.value === "{" ? 1 : tokens[2]?.value === "{" && tokens[1]?.identifier ? 2 : -1;
+	if (openIndex < 0) return undefined;
+	const closeIndex = delimiterScan.matchingClosers.get(openIndex) ?? -1;
+	if (closeIndex !== tokens.length - 1) return undefined;
+
+	const memberScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	if (!memberScan.valid) return undefined;
+	const commaIndexes = memberScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ",",
+	);
+	const lastCommaIndex = commaIndexes[commaIndexes.length - 1];
+	const hasTrailingComma = lastCommaIndex === closeIndex - 1;
+	const contentEnd = hasTrailingComma ? closeIndex - 1 : closeIndex;
+	const memberEndIndexes = commaIndexes.filter((commaIndex) => commaIndex < contentEnd).concat(contentEnd);
+	const memberRanges = memberEndIndexes.map((endIndex, memberIndex) => ({
+		startIndex: memberIndex === 0 ? openIndex + 1 : memberEndIndexes[memberIndex - 1] + 1,
+		endIndex,
+	}));
+	const members = memberRanges.map(({ startIndex, endIndex }) =>
+		renderedTokens.slice(startIndex, endIndex).join("").trim(),
+	);
+	if (members.length === 0 || members.some((member) => member.length === 0)) return undefined;
+
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const memberIndent = leadingWhitespace + indentationUnit;
+	const maxLineLength = get_max_line_length(options);
+	const firstLine = leadingWhitespace + renderedTokens.slice(0, openIndex + 1).join("");
+	const closingLine = leadingWhitespace + tokens[closeIndex].value;
+	const wrappedLines = [
+		firstLine,
+		...members.map((member) => memberIndent + member + ","),
+		closingLine,
+	];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\n");
+}
+
+/** Render one array or dictionary, recursively wrapping elements that remain overlong. */
+function wrap_collection_candidate(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
 	maxLineLength: number,
-	collectionIndent: string,
+	indentationUnit: string,
 	openIndex: number,
 	closeIndex: number,
-): string | undefined {
+): string[] | undefined {
 	const openingValue = tokens[openIndex].value;
 	if (openingValue === "[") {
 		const previousToken = tokens[openIndex - 1];
@@ -658,59 +724,116 @@ function wrap_collection_candidate(
 	}
 
 	const scan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	if (!scan.valid) return undefined;
 	const commaIndexes = scan.topLevelIndexes.filter(
 		(tokenIndex) => tokens[tokenIndex].value === ",",
 	);
-	if (!scan.valid || commaIndexes.length === 0) return undefined;
+	if (commaIndexes.length === 0) return undefined;
 
 	const lastCommaIndex = commaIndexes[commaIndexes.length - 1];
 	const hasTrailingComma = lastCommaIndex === closeIndex - 1;
 	const contentEnd = hasTrailingComma ? closeIndex - 1 : closeIndex;
-	const segmentResult = commaIndexes.reduce(
-		(state, commaIndex) => {
-			if (!state.valid || commaIndex >= contentEnd) return state;
+	const memberEndIndexes = commaIndexes.filter((commaIndex) => commaIndex < contentEnd).concat(contentEnd);
+	const memberRanges = memberEndIndexes.map((endIndex, memberIndex) => ({
+		startIndex: memberIndex === 0 ? openIndex + 1 : memberEndIndexes[memberIndex - 1] + 1,
+		endIndex,
+	}));
+	const memberTexts = memberRanges.map(({ startIndex, endIndex }) =>
+		renderedTokens.slice(startIndex, endIndex).join("").trim(),
+	);
+	if (memberTexts.length < 2 || memberTexts.some((memberText) => memberText.length === 0)) {
+		return undefined;
+	}
 
-			const elementText = renderedTokens.slice(state.segmentStart, commaIndex).join("").trim();
-			if (!elementText) {
+	const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
+	const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
+	const firstLine = leadingWhitespace + prefix;
+	if (firstLine.length > maxLineLength) return undefined;
+
+	const collectionIndent = leadingWhitespace + indentationUnit;
+	const renderedMembers = memberRanges.reduce(
+		(state, memberRange, memberIndex) => {
+			if (!state.valid) return state;
+
+			const memberText = memberTexts[memberIndex];
+			const singleLine = collectionIndent + memberText + ",";
+			if (singleLine.length <= maxLineLength) {
+				state.lines.push(singleLine);
+				return state;
+			}
+
+			const nestedLines = wrap_collection_range(
+				tokens,
+				renderedTokens,
+				memberRange.startIndex,
+				memberRange.endIndex,
+				collectionIndent,
+				",",
+				maxLineLength,
+				indentationUnit,
+			);
+			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
 			}
-			state.segments.push(elementText);
-			state.segmentStart = commaIndex + 1;
+			state.lines.push(...nestedLines);
 			return state;
 		},
-		{
-			valid: true,
-			segments: [] as string[],
-			segmentStart: openIndex + 1,
-		},
+		{ valid: true, lines: [] as string[] },
 	);
-	if (!segmentResult.valid) return undefined;
+	if (!renderedMembers.valid) return undefined;
 
-	const finalElement = renderedTokens.slice(segmentResult.segmentStart, contentEnd).join("").trim();
-	const segments = finalElement ? segmentResult.segments.concat(finalElement) : segmentResult.segments;
-	if ((!finalElement && !hasTrailingComma) || segments.length < 2) return undefined;
-
-	const prefix = renderedTokens.slice(0, openIndex + 1).join("");
-	const suffix = renderedTokens.slice(closeIndex + 1).join("");
-	const firstLine = leadingWhitespace + prefix;
 	const closingLine = leadingWhitespace + tokens[closeIndex].value + suffix;
-	const wrappedLines = [
-		firstLine,
-		...segments.map((segment) => `${collectionIndent}${segment},`),
-		closingLine,
-	];
-
-	// Do not produce unstable output when an element or the surrounding expression
-	// cannot fit within the configured line length.
+	const wrappedLines = [firstLine, ...renderedMembers.lines, closingLine];
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
-		: wrappedLines.join("\n");
+		: wrappedLines;
+}
+
+/** Find the first safe array or dictionary layout within a token range. */
+function wrap_collection_range(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+): string[] | undefined {
+	const delimiterScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!delimiterScan.valid) return undefined;
+
+	return [...delimiterScan.matchingClosers.entries()]
+		.filter(
+			([openIndex, closeIndex]) =>
+				openIndex >= rangeStart &&
+				closeIndex < rangeEnd &&
+				["[", "{"].includes(tokens[openIndex].value),
+		)
+		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0])
+		.reduce<string[] | undefined>(
+			(wrappedLines, [openIndex, closeIndex]) =>
+				wrappedLines ??
+				wrap_collection_candidate(
+					tokens,
+					renderedTokens,
+					rangeStart,
+					rangeEnd,
+					leadingWhitespace,
+					trailingSuffix,
+					maxLineLength,
+					indentationUnit,
+					openIndex,
+					closeIndex,
+				),
+			undefined,
+		);
 }
 
 /**
- * Wrap long inline arrays and dictionary literals at top-level commas.
- * Collections use one continuation indent level per the GDScript style guide.
+ * Wrap long inline arrays and dictionaries at top-level commas, recursively handling
+ * nested collections only when a containing member cannot fit on a single line.
  */
 function wrap_long_collection_literal(
 	tokens: Token[],
@@ -743,25 +866,17 @@ function wrap_long_collection_literal(
 		return undefined;
 	}
 
-	const delimiterScan = scan_token_boundaries(tokens);
-	if (!delimiterScan.valid) return undefined;
-
-	const collectionIndent = leadingWhitespace + get_indentation_unit(document, leadingWhitespace);
-	return [...delimiterScan.matchingClosers.entries()]
-		.filter(([openIndex]) => ["[", "{"].includes(tokens[openIndex].value))
-		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0])
-		.reduce<string | undefined>((matchedLine, [openIndex, closeIndex]) => {
-			if (matchedLine !== undefined) return matchedLine;
-			return wrap_collection_candidate(
-				tokens,
-				renderedTokens,
-				leadingWhitespace,
-				maxLineLength,
-				collectionIndent,
-				openIndex,
-				closeIndex,
-			);
-		}, undefined);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	return wrap_collection_range(
+		tokens,
+		renderedTokens,
+		0,
+		tokens.length,
+		leadingWhitespace,
+		"",
+		maxLineLength,
+		indentationUnit,
+	)?.join("\n");
 }
 
 export async function format_document_async(document: TextDocument, options?: FormatterOptions): Promise<TextEdit[]> {
@@ -988,6 +1103,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 
 		const nextLine = leadingWhitespace + renderedTokens.join("");
 		const formattedLine =
+			wrap_long_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options) ??
 			wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
