@@ -679,7 +679,13 @@ function wrap_long_dictionary_entry_ternary_value(
 		const ifMarker = markers[markerIndex];
 		const elseMarker = markers[markerIndex + 1];
 		const branchStart = markerIndex === 0 ? valueStart : markers[markerIndex - 1].index + 1;
-		if (ifMarker.index <= branchStart || elseMarker.index <= ifMarker.index + 1) return undefined;
+		if (
+			ifMarker.index <= branchStart ||
+			elseMarker.index <= ifMarker.index + 1 ||
+			elseMarker.index >= rangeEnd - 1
+		) {
+			return undefined;
+		}
 	}
 
 	const elseIndexes = markers
