@@ -1901,6 +1901,76 @@ const blockHeaderKeywords = new Set([
 	"set",
 ]);
 
+/** Detect inline accessor bodies on annotated or static variable declarations. */
+function has_potential_property_accessor(tokens: Token[]): boolean {
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue !== "var" &&
+		firstValue !== "static" &&
+		firstValue !== "@" &&
+		!firstValue.startsWith("@")
+	) {
+		return false;
+	}
+	if (
+		!tokens.some(
+			(token, tokenIndex) =>
+				token.value === ":" && ["get", "set"].includes(tokens[tokenIndex + 1]?.value ?? ""),
+		)
+	) {
+		return false;
+	}
+
+	const boundaryScan = scan_token_boundaries(tokens);
+	if (!boundaryScan.valid) return false;
+	const variableIndex = boundaryScan.topLevelIndexes.find(
+		(tokenIndex) => tokens[tokenIndex].value === "var",
+	);
+	if (
+		variableIndex === undefined ||
+		!has_supported_variable_declaration_prefix(tokens, variableIndex, boundaryScan.matchingClosers)
+	) {
+		return false;
+	}
+
+	const topLevelColons = boundaryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ":",
+	);
+	return topLevelColons.some(
+		(colonIndex) =>
+			["get", "set"].includes(tokens[colonIndex + 1]?.value ?? "") &&
+			topLevelColons.some((candidate) => candidate > colonIndex + 1),
+	);
+}
+
+/** Accept only a static modifier and/or annotation prefixes before the top-level var keyword. */
+function has_supported_variable_declaration_prefix(
+	tokens: Token[],
+	variableIndex: number,
+	matchingClosers: Map<number, number>,
+): boolean {
+	let prefixIndex = tokens[0]?.value === "static" ? 1 : 0;
+	while (prefixIndex < variableIndex) {
+		const prefixValue = tokens[prefixIndex]?.value ?? "";
+		if (prefixValue === "@") {
+			const annotationName = tokens[prefixIndex + 1]?.value ?? "";
+			if (!/^[A-Za-z_]\w*$/.test(annotationName)) return false;
+			prefixIndex += 2;
+		} else if (prefixValue.startsWith("@")) {
+			prefixIndex += 1;
+		} else {
+			return false;
+		}
+
+		if (tokens[prefixIndex]?.value === "(") {
+			const closingIndex = matchingClosers.get(prefixIndex);
+			if (closingIndex === undefined || closingIndex >= variableIndex) return false;
+			prefixIndex = closingIndex + 1;
+		}
+	}
+	return prefixIndex === variableIndex;
+}
+
 function find_inline_suite_boundary(
 	tokens: Token[],
 	isMatchCaseLine: boolean,
@@ -1911,12 +1981,7 @@ function find_inline_suite_boundary(
 	const headerKeywordIndex = firstValue === "static" && tokens[1]?.value === "func" ? 1 : 0;
 	const headerKeyword = tokens[headerKeywordIndex]?.value ?? "";
 	const isBlockHeader = blockHeaderKeywords.has(headerKeyword);
-	const hasPotentialPropertyAccessor =
-		firstValue === "var" &&
-		tokens.some(
-			(token, tokenIndex) =>
-				token.value === ":" && ["get", "set"].includes(tokens[tokenIndex + 1]?.value ?? ""),
-		);
+	const hasPotentialPropertyAccessor = has_potential_property_accessor(tokens);
 	if (!isBlockHeader && !isMatchCaseLine && !hasPotentialPropertyAccessor) return undefined;
 
 	const boundaryScan = scan_token_boundaries(tokens);
@@ -1972,12 +2037,7 @@ function get_inline_block_chain(
 	const firstValue = tokens[0]?.value ?? "";
 	const headerKeywordIndex = firstValue === "static" && tokens[1]?.value === "func" ? 1 : 0;
 	const headerKeyword = tokens[headerKeywordIndex]?.value ?? "";
-	const hasPotentialPropertyAccessor =
-		firstValue === "var" &&
-		tokens.some(
-			(token, tokenIndex) =>
-				token.value === ":" && ["get", "set"].includes(tokens[tokenIndex + 1]?.value ?? ""),
-		);
+	const hasPotentialPropertyAccessor = has_potential_property_accessor(tokens);
 	const isPotentialBlockHeader = blockHeaderKeywords.has(headerKeyword) || hasPotentialPropertyAccessor;
 	if (!isPotentialBlockHeader && !isMatchCaseLine) {
 		return { headerCount, endsWithOpenSuite: false, matchHeaderDepth };
