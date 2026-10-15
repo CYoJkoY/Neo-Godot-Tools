@@ -1,271 +1,1192 @@
 {
-  "name": "neo-godot-tools",
-  "displayName": "Neo Godot Tools",
-  "icon": "icon.png",
-  "version": "2.14.1",
-  "description": "Godot development tools for VS Code with local-first GDScript intelligence, documentation, debugging, and Godot LSP integration.",
-  "repository": { "type": "git", "url": "https://github.com/CYoJkoY/Neo-Godot-Tools.git" },
-  "bugs": { "url": "https://github.com/CYoJkoY/Neo-Godot-Tools/issues" },
-  "license": "SEE LICENSE IN LICENSE",
-  "author": "CYoJkoY",
-  "publisher": "CYoJkoY",
-  "engines": { "vscode": "^1.96.0" },
-  "categories": ["Programming Languages", "Linters", "Snippets", "Debuggers", "Formatters", "Other"],
-  "activationEvents": ["workspaceContains:project.godot", "onDebugResolve:godot"],
-  "main": "./out/extension.js",
-  "scripts": {
-    "format": "biome format --write --changed src",
-    "compile": "tsc -p ./",
-    "lint": "biome lint src tools",
-    "check:standards": "ts-node tools/check_standards.ts",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package",
-    "vscode:prepublish": "npm run esbuild-base -- --minify",
-    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
-    "esbuild": "npm run esbuild-base -- --sourcemap",
-    "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
-    "generate-icons": "ts-node tools/generate_icons.ts",
-    "test": "vscode-test",
-    "test:formatter:host": "tsc -p tsconfig.vscode-test.json && vscode-test --config .vscode-test.formatter.json",
-    "test:formatter:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm run test:formatter:host",
-    "test:unit": "tsc -p tsconfig.test.json && node out-test/tools/run_unit_tests.js",
-    "test:release": "node -r ts-node/register --test tools/changelog.test.ts tools/changelog_workflow.test.ts",
-    "changelog": "ts-node tools/changelog.ts",
-    "profile:language": "ts-node tools/profile_language.ts",
-    "compare:semantic-benchmarks": "ts-node tools/compare_semantic_benchmarks.ts",
-    "test:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm test",
-    "test:engine": "ts-node tools/run_tests.ts"
-  },
-  "contributes": {
-    "customEditors": [
-      { "viewType": "gddoc", "displayName": "Godot Documentation", "selector": [{ "filenamePattern": "*.gddoc" }] },
-      { "viewType": "neoGodotTools.resourceInspector", "displayName": "Resource Inspector", "selector": [{ "filenamePattern": "*.tres" }], "priority": "option" }
-    ],
-    "commands": [
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.openEditor", "title": "Open workspace with Godot editor" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.openEditorSettings", "title": "Open EditorSettings File" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.openResourceInspector", "title": "Open Resource Inspector" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.startLanguageServer", "title": "Start the GDScript Language Server for this workspace" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.stopLanguageServer", "title": "Stop the GDScript Language Server for this workspace" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.listGodotClasses", "title": "List Godot classes" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.exportPerformanceSnapshot", "title": "Export Runtime Performance Snapshot" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.inspectNode", "title": "Inspect Remote Node", "icon": { "light": "resources/godot_icons/light/GuiVisibilityVisible.svg", "dark": "resources/godot_icons/dark/GuiVisibilityVisible.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.refreshSceneTree", "title": "Refresh", "icon": { "light": "resources/godot_icons/light/Reload.svg", "dark": "resources/godot_icons/dark/Reload.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.refreshInspector", "title": "Refresh", "icon": { "light": "resources/godot_icons/light/Reload.svg", "dark": "resources/godot_icons/dark/Reload.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.editValue", "title": "Edit value", "icon": { "light": "resources/godot_icons/light/Edit.svg", "dark": "resources/godot_icons/dark/Edit.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.debugCurrentFile", "title": "Debug Current File", "icon": { "light": "resources/godot_icons/light/PlayScene.svg", "dark": "resources/godot_icons/dark/PlayScene.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.debugPinnedFile", "title": "Debug Pinned File", "icon": { "light": "resources/godot_icons/light/Play.svg", "dark": "resources/godot_icons/dark/Play.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.pinFile", "title": "Pin Scene File", "icon": "resources/pin_off.svg" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.unpinFile", "title": "Unpin Scene File", "icon": "resources/pin_on.svg" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.debugger.openPinnedFile", "title": "Open the currently pinned scene" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openPropertyInspector", "title": "Edit Scene Node Properties", "icon": "$(edit)" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.editProperty", "title": "Edit Node Property", "icon": "$(edit)" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.addProperty", "title": "Add Node Property", "icon": "$(add)" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.removeProperty", "title": "Remove Node Property", "icon": "$(trash)" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.refresh", "title": "Refresh Scene Preview", "icon": { "light": "resources/godot_icons/light/Reload.svg", "dark": "resources/godot_icons/dark/Reload.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openCurrentScene", "title": "Open the Scene Preview's current scene", "icon": { "light": "resources/godot_icons/light/PackedScene.svg", "dark": "resources/godot_icons/dark/PackedScene.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openMainScript", "title": "Open the main script of the Scene Preview's current scene", "icon": { "light": "resources/godot_icons/light/Script.svg", "dark": "resources/godot_icons/dark/Script.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.lock", "title": "Lock Scene Preview", "icon": { "light": "resources/godot_icons/light/Unlock.svg", "dark": "resources/godot_icons/dark/Unlock.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.unlock", "title": "Unlock Scene Preview", "icon": { "light": "resources/godot_icons/light/Lock.svg", "dark": "resources/godot_icons/dark/Lock.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.goToDefinition", "title": "Go to Definition" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openDocumentation", "title": "Open Documentation" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.copyNodePath", "title": "Copy Node Path" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.copyResourcePath", "title": "Copy Resource Path" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openScene", "title": "Open Scene", "icon": { "light": "resources/InstanceOptions.svg", "dark": "resources/InstanceOptions.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.scenePreview.openScript", "title": "Open Script", "icon": { "light": "resources/godot_icons/light/Script.svg", "dark": "resources/godot_icons/dark/Script.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.refresh", "title": "Refresh Resource Inspector", "icon": { "light": "resources/godot_icons/light/Reload.svg", "dark": "resources/godot_icons/dark/Reload.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.openCurrentResource", "title": "Open the Resource Inspector's current resource", "icon": { "light": "resources/godot_icons/light/Object.svg", "dark": "resources/godot_icons/dark/Object.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.openScript", "title": "Open the script of the Resource Inspector's current resource", "icon": { "light": "resources/godot_icons/light/Script.svg", "dark": "resources/godot_icons/dark/Script.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.lock", "title": "Lock Resource Inspector", "icon": { "light": "resources/godot_icons/light/Unlock.svg", "dark": "resources/godot_icons/dark/Unlock.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.resourceInspector.unlock", "title": "Unlock Resource Inspector", "icon": { "light": "resources/godot_icons/light/Lock.svg", "dark": "resources/godot_icons/dark/Lock.svg" } },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.switchSceneScript", "title": "Switch Scene/Script" },
-      { "category": "Neo Godot Tools", "command": "neoGodotTools.copyResourcePath", "title": "Copy Resource Path" }
-    ],
-    "keybindings": [{ "command": "neoGodotTools.switchSceneScript", "key": "alt+o", "when": "editorLangId in neoGodotTools.context.godotFiles && editorTextFocus" }],
-    "configuration": {
-      "type": "object",
-      "title": "Neo Godot Tools",
-      "properties": {
-        "neoGodotTools.documentation.pageScale": { "type": "integer", "default": 100, "minimum": 50, "maximum": 200, "description": "Scale factor (%) to apply to the Godot documentation viewer." },
-        "neoGodotTools.documentation.displayMinimap": { "type": "boolean", "default": true, "description": "Whether to display the minimap for the Godot documentation viewer." },
-        "neoGodotTools.editorPath.godot3": { "type": "string", "default": "godot3", "description": "Path to the Godot 3 editor executable. Supports environment variables using '${env:VAR_NAME}'." },
-        "neoGodotTools.editorPath.godot4": { "type": "string", "default": "godot", "description": "Path to the Godot 4 editor executable. Supports environment variables using '${env:VAR_NAME}'." },
-        "neoGodotTools.editor.verbose": { "type": "boolean", "default": false, "description": "Whether to launch the Godot Editor with the --verbose flag" },
-        "neoGodotTools.editor.detached": { "type": "boolean", "default": true, "description": "Launch the Godot Editor as a detached process so it keeps running (and can prompt to save) after VS Code is closed." },
-				"neoGodotTools.editor.revealTerminal": { "type": "boolean", "default": true, "description": "Whether to reveal the terminal when launching the Godot Editor" },
-        "neoGodotTools.formatter.maxEmptyLines": { "type": "number", "default": 2, "minimum": 0, "description": "Number of empty lines allowed anywhere in the file" },
-        "neoGodotTools.formatter.maxLineLength": { "type": "number", "default": 100, "minimum": 40, "maximum": 240, "description": "Maximum line length before eligible function declarations, conditions, calls, additive expressions, method/property chains, arrays, dictionaries, ternary expressions, and boolean expressions are wrapped" },
-        "neoGodotTools.formatter.continuationIndentLevel": { "type": "number", "default": 1, "minimum": 1, "maximum": 4, "description": "Indent levels for wrapped function declarations, conditions, calls, additive expressions, method/property chains, ternary expressions, and boolean expressions; default: one indent level. Collections use one indent level" },
-        "neoGodotTools.formatter.denseFunctionParameters": { "type": "boolean", "default": false, "description": "Whether extra space should be removed from function parameter lists" },
-        "neoGodotTools.formatter.spacesBeforeEndOfLineComment": { "type": "string", "enum": ["1", "2"], "enumDescriptions": ["1 space before EOL comments # Like this.", "2 spaces before EOL comments  # Like this."], "default": "1", "description": "Number of spaces before an end-of-line comment" },
-        "neoGodotTools.lsp.serverHost": { "type": "string", "default": "127.0.0.1", "description": "The server host of the GDScript language server" },
-        "neoGodotTools.lsp.serverPort": { "type": "number", "default": 6008, "minimum": 0, "maximum": 65535, "description": "The server port of the GDScript language server" },
-        "neoGodotTools.lsp.headless": { "type": "boolean", "default": false, "description": "Whether to launch the LSP as a headless child process" },
-        "neoGodotTools.lsp.autoReconnect.enabled": { "type": "boolean", "default": true, "description": "Whether the plugin should attempt to reconnect to the GDScript language server" },
-        "neoGodotTools.lsp.autoReconnect.cooldown": { "type": "number", "default": 3000, "description": "The number of milliseconds to wait before attempting to reconnect" },
-        "neoGodotTools.lsp.autoReconnect.attempts": { "type": "number", "default": 10, "description": "How many times the client will attempt to reconnect" },
-        "neoGodotTools.scenePreview.previewRelatedScenes": { "enum": ["anyFolder", "sameFolder", "off"], "enumDescriptions": ["Attempt to preview a related scene from anywhere in the workspace.", "Attempt to preview a related scene from the same folder.", "Do not attempt to preview a related scene."], "default": "sameFolder", "description": "Controls where the Scene Preview will search for related scenes when viewing a script file." },
-        "neoGodotTools.inlayHints.gdscript": { "type": "boolean", "default": false, "description": "Whether to enable inlay hints in GDScript files (experimental)" },
-        "neoGodotTools.inlayHints.gdresource": { "type": "boolean", "default": true, "description": "Whether to enable inlay hints in GDResource (.tscn, .tres, etc) files" },
-        "neoGodotTools.resource.inspector.openIn": {
-          "type": "string",
-          "enum": ["editor", "panel"],
-          "enumDescriptions": ["Open .tres files in a dedicated Resource Inspector editor tab", "Show the Resource Inspector in the side panel"],
-          "default": "editor",
-          "description": "Where the Resource Inspector opens when using the Open Resource Inspector command."
-        },
-        "neoGodotTools.resource.inspector.diagnostics": {
-          "type": "boolean",
-          "default": false,
-          "description": "Report resource problems (dangling ExtResource/SubResource ids, unparsable values, type mismatches against the attached script) as diagnostics in .tres files. Disabled by default: without the Godot language server's full property list the inspector cannot tell a real mistake from a property it does not know about, and Godot's own inspector does not flag resources either."
-        }
-      }
-    },
-    "languages": [
-      { "id": "gdscript", "aliases": ["GDScript", "gdscript"], "extensions": [".gd"], "configuration": "./configurations/gdscript.language-configuration.json" },
-      { "id": "gdscene", "aliases": ["GDScene", "gdscene"], "extensions": [".tscn"], "configuration": "./configurations/gdresource.language-configuration.json" },
-      { "id": "gdresource", "aliases": ["GDResource", "gdresource"], "extensions": [".godot", ".tres", ".import", ".gdns", ".gdnlib"], "configuration": "./configurations/gdresource.language-configuration.json" },
-      { "id": "gdshader", "aliases": ["gdshader"], "extensions": [".gdshader", ".gdshaderinc"], "configuration": "./configurations/gdshader.language-configuration.json" }
-    ],
-    "grammars": [
-      { "language": "gdscript", "scopeName": "source.gdscript", "path": "./syntaxes/GDScript.tmLanguage.json" },
-      { "language": "gdresource", "scopeName": "source.gdresource", "path": "./syntaxes/GDResource.tmLanguage.json" },
-      { "language": "gdscene", "scopeName": "source.gdresource", "path": "./syntaxes/GDResource.tmLanguage.json" },
-      { "language": "gdshader", "scopeName": "source.gdshader", "path": "./syntaxes/GDShader.tmLanguage.json" }
-    ],
-    "semanticTokenScopes": [{ "scopes": { "nodePath": ["constant.character.escape"] } }],
-    "snippets": [{ "language": "gdscript", "path": "./configurations/snippets.json" }],
-    "debuggers": [{
-      "type": "godot", "label": "GDScript Godot Debug", "runtime": "node",
-      "configurationAttributes": {
-        "launch": { "required": [], "properties": {
-          "project": { "type": "string", "description": "Absolute path to a directory with a project.godot file.", "default": "${workspaceFolder}" },
-          "address": { "type": "string", "description": "The IP address for the Godot remote debugger to use.", "default": "127.0.0.1" },
-          "port": { "type": "number", "description": "The port number for the Godot remote debugger to use.", "default": 6007 },
-          "scene": { "type": "string", "enum": ["main", "current", "pinned"], "enumDescriptions": ["Launch the 'main_scene' specified in project.godot", "Launch the scene (or related scene) in the current editor", "Launch the pinned scene"], "description": "Scene file to run when debugging. Choices are 'main', 'current', 'pinned', or providing a custom path to a scene.", "default": "" },
-          "editor_path": { "type": "string", "description": "Absolute path to the Godot executable to be used for this debug profile.", "default": false },
-          "profiling": { "type": "boolean", "description": "Enable profiling in the script debugger.", "default": false },
-          "single_threaded_scene": { "type": "boolean", "description": "Scene tree runs in single-threaded mode. Sub-thread groups are disabled and run on the main thread. (Godot 4 only)", "default": false },
-          "debug_collisions": { "type": "boolean", "description": "Show collision shapes when running the scene.", "default": false },
-          "debug_paths": { "type": "boolean", "description": "Show navigation polygons when running the scene. (Godot 4 only)", "default": false },
-          "debug_navigation": { "type": "boolean", "description": "Show navigation polygons when running the scene.", "default": false },
-          "debug_avoidance": { "type": "boolean", "description": "Show navigation avoidance debug visuals when running the scene. (Godot 4 only)", "default": false },
-          "debug_stringnames": { "type": "boolean", "description": "Print all StringName allocations to stdout when the engine quits. (Godot 4 only)", "default": false },
-          "frame_delay": { "type": "number", "description": "Simulate high CPU load (delay each frame by <ms> milliseconds)." },
-          "time_scale": { "type": "number", "description": "Force time scale (higher values are faster, 1.0 is normal speed)." },
-          "disable_vsync": { "type": "boolean", "description": "Forces disabling of vertical synchronization, even if enabled in the project settings. Does not override driver-level V-Sync enforcement. (Godot 4 only)", "default": false },
-          "fixed_fps": { "type": "number", "description": "Force a fixed number of frames per second. This setting disables real-time synchronization." },
-          "additional_options": { "type": "string", "description": "Additional command line arguments.", "default": "" }
-        } },
-        "attach": { "required": [], "properties": { "address": { "type": "string", "description": "The IP address for the Godot remote debugger to use.", "default": "127.0.0.1" }, "port": { "type": "number", "description": "The port number for the Godot remote debugger to use.", "default": 6007 } } }
-      },
-      "initialConfigurations": [{ "name": "GDScript: Launch Project", "type": "godot", "request": "launch", "project": "${workspaceFolder}", "debug_collisions": false, "debug_paths": false, "debug_navigation": false, "additional_options": "" }],
-      "configurationSnippets": [
-        { "label": "GDScript: Launch Project", "description": "A config to launch the current project.", "body": { "name": "GDScript: Launch Project", "type": "godot", "request": "launch", "project": "${workspaceFolder}", "debug_collisions": false, "debug_paths": false, "debug_navigation": false, "additional_options": "" } },
-        { "label": "GDScript: Launch Current File", "description": "A config to launch the currently open scene.", "body": { "name": "GDScript: Launch Current File", "type": "godot", "request": "launch", "scene": "current", "project": "${workspaceFolder}", "additional_options": "" } },
-        { "label": "GDScript: Launch Pinned File", "description": "A config to launch the currently pinned scene.", "body": { "name": "GDScript: Launch Pinned File", "type": "godot", "request": "launch", "scene": "pinned", "project": "${workspaceFolder}", "additional_options": "" } }
-      ]
-    }],
-    "breakpoints": [{ "language": "gdscript" }],
-    "viewsContainers": { "activitybar": [{ "id": "neoGodotTools", "title": "Neo Godot Tools", "icon": "resources/godot_icon.svg" }] },
-    "views": { "debug": [
-      { "id": "neoGodotTools.activeSceneTree", "name": "Active Scene Tree", "icon": "resources/godot_icon.svg" },
-      { "id": "neoGodotTools.nodeInspector", "name": "Inspector", "icon": "resources/godot_icon.svg" }
-    ], "neoGodotTools": [
-      { "id": "neoGodotTools.scenePreview", "name": "Scene Preview", "icon": "resources/godot_icon.svg" },
-      { "id": "neoGodotTools.resourceInspector", "name": "Resource Inspector", "type": "webview", "icon": "resources/godot_icon.svg" }
-    ] },
-    "viewsWelcome": [
-      { "view": "neoGodotTools.activeSceneTree", "contents": "Scene Tree data has not been requested" },
-      { "view": "neoGodotTools.nodeInspector", "contents": "Node has not been inspected" },
-      { "view": "neoGodotTools.scenePreview", "contents": "Open a Scene to see a preview of its structure" }
-    ],
-    "menus": {
-      "commandPalette": [
-        { "command": "neoGodotTools.listGodotClasses", "when": "neoGodotTools.context.connectedToLSP" },
-        { "command": "neoGodotTools.scenePreview.goToDefinition", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.openDocumentation", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.openPropertyInspector", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.copyNodePath", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.copyResourcePath", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.openScript", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.openScene", "when": "false" },
-        { "command": "neoGodotTools.resourceInspector.refresh", "when": "false" },
-        { "command": "neoGodotTools.resourceInspector.openCurrentResource", "when": "false" },
-        { "command": "neoGodotTools.resourceInspector.openScript", "when": "false" },
-        { "command": "neoGodotTools.resourceInspector.lock", "when": "false" },
-        { "command": "neoGodotTools.resourceInspector.unlock", "when": "false" },
-        { "command": "neoGodotTools.debugger.editValue", "when": "false" },
-        { "command": "neoGodotTools.debugger.inspectNode", "when": "false" },
-        { "command": "neoGodotTools.debugger.refreshSceneTree", "when": "false" },
-        { "command": "neoGodotTools.debugger.refreshInspector", "when": "false" }
-      ],
-      "view/title": [
-        { "command": "neoGodotTools.debugger.refreshSceneTree", "when": "view == neoGodotTools.activeSceneTree", "group": "navigation" },
-        { "command": "neoGodotTools.debugger.refreshInspector", "when": "view == neoGodotTools.nodeInspector", "group": "navigation" },
-        { "command": "neoGodotTools.scenePreview.lock", "when": "view == neoGodotTools.scenePreview && !neoGodotTools.context.scenePreview.locked", "group": "navigation@1" },
-        { "command": "neoGodotTools.scenePreview.unlock", "when": "view == neoGodotTools.scenePreview && neoGodotTools.context.scenePreview.locked", "group": "navigation@1" },
-        { "command": "neoGodotTools.scenePreview.refresh", "when": "view == neoGodotTools.scenePreview", "group": "navigation@2" },
-        { "command": "neoGodotTools.scenePreview.openMainScript", "when": "view == neoGodotTools.scenePreview", "group": "navigation@3" },
-        { "command": "neoGodotTools.scenePreview.openCurrentScene", "when": "view == neoGodotTools.scenePreview", "group": "navigation@4" },
-        { "command": "neoGodotTools.resourceInspector.lock", "when": "view == neoGodotTools.resourceInspector && !neoGodotTools.context.resourceInspector.locked", "group": "navigation@1" },
-        { "command": "neoGodotTools.resourceInspector.unlock", "when": "view == neoGodotTools.resourceInspector && neoGodotTools.context.resourceInspector.locked", "group": "navigation@1" },
-        { "command": "neoGodotTools.resourceInspector.refresh", "when": "view == neoGodotTools.resourceInspector", "group": "navigation@2" },
-        { "command": "neoGodotTools.resourceInspector.openScript", "when": "view == neoGodotTools.resourceInspector", "group": "navigation@3" },
-        { "command": "neoGodotTools.resourceInspector.openCurrentResource", "when": "view == neoGodotTools.resourceInspector", "group": "navigation@4" }
-      ],
-      "view/item/context": [
-        { "command": "neoGodotTools.debugger.inspectNode", "when": "view == neoGodotTools.activeSceneTree", "group": "inline" },
-        { "command": "neoGodotTools.debugger.inspectNode", "when": "view == neoGodotTools.nodeInspector && viewItem == remote_object", "group": "inline" },
-        { "command": "neoGodotTools.debugger.editValue", "when": "view == neoGodotTools.nodeInspector && viewItem == editable_value", "group": "inline" },
-        { "command": "neoGodotTools.scenePreview.goToDefinition", "when": "view == neoGodotTools.scenePreview", "group": "1@1" },
-        { "command": "neoGodotTools.scenePreview.openDocumentation", "when": "view == neoGodotTools.scenePreview", "group": "1@1" },
-        { "command": "neoGodotTools.scenePreview.editProperty", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.addProperty", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.removeProperty", "when": "false" },
-        { "command": "neoGodotTools.scenePreview.copyNodePath", "when": "view == neoGodotTools.scenePreview" },
-        { "command": "neoGodotTools.scenePreview.copyResourcePath", "when": "view == neoGodotTools.scenePreview && viewItem =~ /hasResourcePath/" },
-        { "command": "neoGodotTools.scenePreview.openScene", "when": "view == neoGodotTools.scenePreview && viewItem =~ /openable/", "group": "1@2" },
-        { "command": "neoGodotTools.scenePreview.openScript", "when": "view == neoGodotTools.scenePreview && viewItem =~ /hasScript/", "group": "1@2" },
-        { "command": "neoGodotTools.scenePreview.openScene", "when": "view == neoGodotTools.scenePreview && viewItem =~ /openable/", "group": "inline" },
-        { "command": "neoGodotTools.scenePreview.openScript", "when": "view == neoGodotTools.scenePreview && viewItem =~ /hasScript/", "group": "inline" },
-        { "command": "neoGodotTools.scenePreview.openPropertyInspector", "when": "view == neoGodotTools.scenePreview && viewItem =~ /sceneNode/", "group": "1@0" },
-        { "command": "neoGodotTools.scenePreview.openPropertyInspector", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties", "group": "1@0" },
-        { "command": "neoGodotTools.scenePreview.editProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty", "group": "1@1" },
-        { "command": "neoGodotTools.scenePreview.removeProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty", "group": "1@2" },
-        { "command": "neoGodotTools.scenePreview.editProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty", "group": "inline" },
-        { "command": "neoGodotTools.scenePreview.addProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties", "group": "1@1" },
-        { "command": "neoGodotTools.scenePreview.addProperty", "when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties", "group": "inline" }
-      ],
-      "explorer/context": [
-        { "command": "neoGodotTools.debugger.pinFile", "group": "2_workspace", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && !(resourcePath in neoGodotTools.context.pinnedScene)" },
-        { "command": "neoGodotTools.debugger.unpinFile", "group": "2_workspace", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && (resourcePath in neoGodotTools.context.pinnedScene)" },
-        { "command": "neoGodotTools.copyResourcePath", "group": "6_copypath" },
-        { "command": "neoGodotTools.openResourceInspector", "group": "2_workspace", "when": "resourceExtname == .tres" }
-      ],
-      "editor/title/run": [
-        { "command": "neoGodotTools.debugger.debugCurrentFile", "group": "navigation@10", "when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace" },
-        { "command": "neoGodotTools.debugger.debugPinnedFile", "group": "navigation@10", "when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace" }
-      ],
-      "editor/title": [
-        { "command": "neoGodotTools.debugger.pinFile", "group": "navigation@11", "when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace && !(resourcePath in neoGodotTools.context.pinnedScene)" },
-        { "command": "neoGodotTools.debugger.unpinFile", "group": "navigation@11", "when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace && (resourcePath in neoGodotTools.context.pinnedScene)" }
-      ],
-      "editor/title/context": [
-        { "command": "neoGodotTools.copyResourcePath", "group": "1_godot" },
-        { "command": "neoGodotTools.openResourceInspector", "group": "1_godot", "when": "resourceExtname == .tres" },
-        { "command": "neoGodotTools.debugger.pinFile", "group": "1_godot", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && !(resourcePath in neoGodotTools.context.pinnedScene)" },
-        { "command": "neoGodotTools.debugger.unpinFile", "group": "1_godot", "when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && (resourcePath in neoGodotTools.context.pinnedScene)" }
-      ],
-      "editor/context": [{ "command": "neoGodotTools.switchSceneScript", "when": "editorLangId in neoGodotTools.context.godotFiles", "group": "custom1@1" }]
-    }
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^1.9.4", "@types/chai": "^4.3.11", "@types/chai-as-promised": "^8.0.1", "@types/chai-subset": "^1.3.5", "@types/marked": "^4.0.8", "@types/mocha": "^10.0.6", "@types/node": "^18.19.75", "@types/prismjs": "^1.16.8", "@types/sinon": "^17.0.4", "@types/vscode": "^1.96.0", "@types/ws": "^8.5.4", "@vscode/test-cli": "^0.0.10", "@vscode/test-electron": "^2.3.8", "@vscode/vsce": "^2.29.0", "chai": "^4.5.0", "chai-as-promised": "^8.0.1", "chai-subset": "^1.6.0", "esbuild": "^0.25.0", "mocha": "^10.8.2", "sinon": "^19.0.2", "ts-node": "^10.9.1", "tsconfig-paths": "^4.2.0", "typescript": "^5.9.3" },
-  "dependencies": {
-    "@vscode/debugadapter": "^1.68.0", "@vscode/debugprotocol": "^1.68.0", "await-notify": "^1.0.1", "bbcode-to-ansi": "^1.0.0", "global": "^4.4.0", "marked": "^4.0.11", "net": "^1.0.2", "prismjs": "^1.30.0", "terminate": "^2.5.0", "vscode-jsonrpc": "^8.2.0", "vscode-languageclient": "^9.0.1", "vscode-oniguruma": "^2.0.0", "vscode-textmate": "^9.0.0", "ws": "^8.17.1", "ya-bbcode": "^4.0.0" },
-  "homepage": "https://github.com/CYoJkoY/Neo-Godot-Tools",
-  "keywords": ["godot", "gdscript", "game development", "language server", "debugger", "code completion", "go to definition", "intellisense"],
-  "pricing": "Free",
-  "sponsor": { "url": "https://cyojkoy.github.io/Payment/" }
+	"name": "neo-godot-tools",
+	"displayName": "Neo Godot Tools",
+	"icon": "icon.png",
+	"version": "2.14.2",
+	"description": "Godot development tools for VS Code with local-first GDScript intelligence, documentation, debugging, and Godot LSP integration.",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/CYoJkoY/Neo-Godot-Tools.git"
+	},
+	"bugs": {
+		"url": "https://github.com/CYoJkoY/Neo-Godot-Tools/issues"
+	},
+	"license": "SEE LICENSE IN LICENSE",
+	"author": "CYoJkoY",
+	"publisher": "CYoJkoY",
+	"engines": {
+		"vscode": "^1.96.0"
+	},
+	"categories": [
+		"Programming Languages",
+		"Linters",
+		"Snippets",
+		"Debuggers",
+		"Formatters",
+		"Other"
+	],
+	"activationEvents": [
+		"workspaceContains:project.godot",
+		"onDebugResolve:godot"
+	],
+	"main": "./out/extension.js",
+	"scripts": {
+		"format": "biome format --write --changed src",
+		"compile": "tsc -p ./",
+		"lint": "biome lint src tools",
+		"check:standards": "ts-node tools/check_standards.ts",
+		"watch": "tsc -watch -p ./",
+		"package": "vsce package",
+		"vscode:prepublish": "npm run esbuild-base -- --minify",
+		"esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+		"esbuild": "npm run esbuild-base -- --sourcemap",
+		"esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
+		"generate-icons": "ts-node tools/generate_icons.ts",
+		"test": "vscode-test",
+		"test:formatter:host": "tsc -p tsconfig.vscode-test.json && vscode-test --config .vscode-test.formatter.json",
+		"test:formatter:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm run test:formatter:host",
+		"test:unit": "tsc -p tsconfig.test.json && node out-test/tools/run_unit_tests.js",
+		"test:release": "node -r ts-node/register --test tools/changelog.test.ts tools/changelog_workflow.test.ts",
+		"changelog": "ts-node tools/changelog.ts",
+		"profile:language": "ts-node tools/profile_language.ts",
+		"compare:semantic-benchmarks": "ts-node tools/compare_semantic_benchmarks.ts",
+		"test:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm test",
+		"test:engine": "ts-node tools/run_tests.ts"
+	},
+	"contributes": {
+		"customEditors": [
+			{
+				"viewType": "gddoc",
+				"displayName": "Godot Documentation",
+				"selector": [
+					{
+						"filenamePattern": "*.gddoc"
+					}
+				]
+			},
+			{
+				"viewType": "neoGodotTools.resourceInspector",
+				"displayName": "Resource Inspector",
+				"selector": [
+					{
+						"filenamePattern": "*.tres"
+					}
+				],
+				"priority": "option"
+			}
+		],
+		"commands": [
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.openEditor",
+				"title": "Open workspace with Godot editor"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.openEditorSettings",
+				"title": "Open EditorSettings File"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.openResourceInspector",
+				"title": "Open Resource Inspector"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.startLanguageServer",
+				"title": "Start the GDScript Language Server for this workspace"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.stopLanguageServer",
+				"title": "Stop the GDScript Language Server for this workspace"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.listGodotClasses",
+				"title": "List Godot classes"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.exportPerformanceSnapshot",
+				"title": "Export Runtime Performance Snapshot"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.inspectNode",
+				"title": "Inspect Remote Node",
+				"icon": {
+					"light": "resources/godot_icons/light/GuiVisibilityVisible.svg",
+					"dark": "resources/godot_icons/dark/GuiVisibilityVisible.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.refreshSceneTree",
+				"title": "Refresh",
+				"icon": {
+					"light": "resources/godot_icons/light/Reload.svg",
+					"dark": "resources/godot_icons/dark/Reload.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.refreshInspector",
+				"title": "Refresh",
+				"icon": {
+					"light": "resources/godot_icons/light/Reload.svg",
+					"dark": "resources/godot_icons/dark/Reload.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.editValue",
+				"title": "Edit value",
+				"icon": {
+					"light": "resources/godot_icons/light/Edit.svg",
+					"dark": "resources/godot_icons/dark/Edit.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.debugCurrentFile",
+				"title": "Debug Current File",
+				"icon": {
+					"light": "resources/godot_icons/light/PlayScene.svg",
+					"dark": "resources/godot_icons/dark/PlayScene.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.debugPinnedFile",
+				"title": "Debug Pinned File",
+				"icon": {
+					"light": "resources/godot_icons/light/Play.svg",
+					"dark": "resources/godot_icons/dark/Play.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.pinFile",
+				"title": "Pin Scene File",
+				"icon": "resources/pin_off.svg"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.unpinFile",
+				"title": "Unpin Scene File",
+				"icon": "resources/pin_on.svg"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.debugger.openPinnedFile",
+				"title": "Open the currently pinned scene"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.openPropertyInspector",
+				"title": "Edit Scene Node Properties",
+				"icon": "$(edit)"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.editProperty",
+				"title": "Edit Node Property",
+				"icon": "$(edit)"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.addProperty",
+				"title": "Add Node Property",
+				"icon": "$(add)"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.removeProperty",
+				"title": "Remove Node Property",
+				"icon": "$(trash)"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.refresh",
+				"title": "Refresh Scene Preview",
+				"icon": {
+					"light": "resources/godot_icons/light/Reload.svg",
+					"dark": "resources/godot_icons/dark/Reload.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.openCurrentScene",
+				"title": "Open the Scene Preview's current scene",
+				"icon": {
+					"light": "resources/godot_icons/light/PackedScene.svg",
+					"dark": "resources/godot_icons/dark/PackedScene.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.openMainScript",
+				"title": "Open the main script of the Scene Preview's current scene",
+				"icon": {
+					"light": "resources/godot_icons/light/Script.svg",
+					"dark": "resources/godot_icons/dark/Script.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.lock",
+				"title": "Lock Scene Preview",
+				"icon": {
+					"light": "resources/godot_icons/light/Unlock.svg",
+					"dark": "resources/godot_icons/dark/Unlock.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.unlock",
+				"title": "Unlock Scene Preview",
+				"icon": {
+					"light": "resources/godot_icons/light/Lock.svg",
+					"dark": "resources/godot_icons/dark/Lock.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.goToDefinition",
+				"title": "Go to Definition"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.openDocumentation",
+				"title": "Open Documentation"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.copyNodePath",
+				"title": "Copy Node Path"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.copyResourcePath",
+				"title": "Copy Resource Path"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.openScene",
+				"title": "Open Scene",
+				"icon": {
+					"light": "resources/InstanceOptions.svg",
+					"dark": "resources/InstanceOptions.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.scenePreview.openScript",
+				"title": "Open Script",
+				"icon": {
+					"light": "resources/godot_icons/light/Script.svg",
+					"dark": "resources/godot_icons/dark/Script.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.resourceInspector.refresh",
+				"title": "Refresh Resource Inspector",
+				"icon": {
+					"light": "resources/godot_icons/light/Reload.svg",
+					"dark": "resources/godot_icons/dark/Reload.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.resourceInspector.openCurrentResource",
+				"title": "Open the Resource Inspector's current resource",
+				"icon": {
+					"light": "resources/godot_icons/light/Object.svg",
+					"dark": "resources/godot_icons/dark/Object.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.resourceInspector.openScript",
+				"title": "Open the script of the Resource Inspector's current resource",
+				"icon": {
+					"light": "resources/godot_icons/light/Script.svg",
+					"dark": "resources/godot_icons/dark/Script.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.resourceInspector.lock",
+				"title": "Lock Resource Inspector",
+				"icon": {
+					"light": "resources/godot_icons/light/Unlock.svg",
+					"dark": "resources/godot_icons/dark/Unlock.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.resourceInspector.unlock",
+				"title": "Unlock Resource Inspector",
+				"icon": {
+					"light": "resources/godot_icons/light/Lock.svg",
+					"dark": "resources/godot_icons/dark/Lock.svg"
+				}
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.switchSceneScript",
+				"title": "Switch Scene/Script"
+			},
+			{
+				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.copyResourcePath",
+				"title": "Copy Resource Path"
+			}
+		],
+		"keybindings": [
+			{
+				"command": "neoGodotTools.switchSceneScript",
+				"key": "alt+o",
+				"when": "editorLangId in neoGodotTools.context.godotFiles && editorTextFocus"
+			}
+		],
+		"configuration": {
+			"type": "object",
+			"title": "Neo Godot Tools",
+			"properties": {
+				"neoGodotTools.documentation.pageScale": {
+					"type": "integer",
+					"default": 100,
+					"minimum": 50,
+					"maximum": 200,
+					"description": "Scale factor (%) to apply to the Godot documentation viewer."
+				},
+				"neoGodotTools.documentation.displayMinimap": {
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to display the minimap for the Godot documentation viewer."
+				},
+				"neoGodotTools.editorPath.godot3": {
+					"type": "string",
+					"default": "godot3",
+					"description": "Path to the Godot 3 editor executable. Supports environment variables using '${env:VAR_NAME}'."
+				},
+				"neoGodotTools.editorPath.godot4": {
+					"type": "string",
+					"default": "godot",
+					"description": "Path to the Godot 4 editor executable. Supports environment variables using '${env:VAR_NAME}'."
+				},
+				"neoGodotTools.editor.verbose": {
+					"type": "boolean",
+					"default": false,
+					"description": "Whether to launch the Godot Editor with the --verbose flag"
+				},
+				"neoGodotTools.editor.detached": {
+					"type": "boolean",
+					"default": true,
+					"description": "Launch the Godot Editor as a detached process so it keeps running (and can prompt to save) after VS Code is closed."
+				},
+				"neoGodotTools.editor.revealTerminal": {
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to reveal the terminal when launching the Godot Editor"
+				},
+				"neoGodotTools.formatter.maxEmptyLines": {
+					"type": "number",
+					"default": 2,
+					"minimum": 0,
+					"description": "Number of empty lines allowed anywhere in the file"
+				},
+				"neoGodotTools.formatter.maxLineLength": {
+					"type": "number",
+					"default": 100,
+					"minimum": 40,
+					"maximum": 240,
+					"description": "Maximum line length before eligible function declarations, conditions, calls, additive expressions, method/property chains, arrays, dictionaries, ternary expressions, and boolean expressions are wrapped"
+				},
+				"neoGodotTools.formatter.continuationIndentLevel": {
+					"type": "number",
+					"default": 1,
+					"minimum": 1,
+					"maximum": 4,
+					"description": "Indent levels for wrapped function declarations, conditions, calls, additive expressions, method/property chains, ternary expressions, and boolean expressions; default: one indent level. Collections use one indent level"
+				},
+				"neoGodotTools.formatter.denseFunctionParameters": {
+					"type": "boolean",
+					"default": false,
+					"description": "Whether extra space should be removed from function parameter lists"
+				},
+				"neoGodotTools.formatter.spacesBeforeEndOfLineComment": {
+					"type": "string",
+					"enum": [
+						"1",
+						"2"
+					],
+					"enumDescriptions": [
+						"1 space before EOL comments # Like this.",
+						"2 spaces before EOL comments  # Like this."
+					],
+					"default": "1",
+					"description": "Number of spaces before an end-of-line comment"
+				},
+				"neoGodotTools.lsp.serverHost": {
+					"type": "string",
+					"default": "127.0.0.1",
+					"description": "The server host of the GDScript language server"
+				},
+				"neoGodotTools.lsp.serverPort": {
+					"type": "number",
+					"default": 6008,
+					"minimum": 0,
+					"maximum": 65535,
+					"description": "The server port of the GDScript language server"
+				},
+				"neoGodotTools.lsp.headless": {
+					"type": "boolean",
+					"default": false,
+					"description": "Whether to launch the LSP as a headless child process"
+				},
+				"neoGodotTools.lsp.autoReconnect.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Whether the plugin should attempt to reconnect to the GDScript language server"
+				},
+				"neoGodotTools.lsp.autoReconnect.cooldown": {
+					"type": "number",
+					"default": 3000,
+					"description": "The number of milliseconds to wait before attempting to reconnect"
+				},
+				"neoGodotTools.lsp.autoReconnect.attempts": {
+					"type": "number",
+					"default": 10,
+					"description": "How many times the client will attempt to reconnect"
+				},
+				"neoGodotTools.scenePreview.previewRelatedScenes": {
+					"enum": [
+						"anyFolder",
+						"sameFolder",
+						"off"
+					],
+					"enumDescriptions": [
+						"Attempt to preview a related scene from anywhere in the workspace.",
+						"Attempt to preview a related scene from the same folder.",
+						"Do not attempt to preview a related scene."
+					],
+					"default": "sameFolder",
+					"description": "Controls where the Scene Preview will search for related scenes when viewing a script file."
+				},
+				"neoGodotTools.inlayHints.gdscript": {
+					"type": "boolean",
+					"default": false,
+					"description": "Whether to enable inlay hints in GDScript files (experimental)"
+				},
+				"neoGodotTools.inlayHints.gdresource": {
+					"type": "boolean",
+					"default": true,
+					"description": "Whether to enable inlay hints in GDResource (.tscn, .tres, etc) files"
+				},
+				"neoGodotTools.resource.inspector.openIn": {
+					"type": "string",
+					"enum": [
+						"editor",
+						"panel"
+					],
+					"enumDescriptions": [
+						"Open .tres files in a dedicated Resource Inspector editor tab",
+						"Show the Resource Inspector in the side panel"
+					],
+					"default": "editor",
+					"description": "Where the Resource Inspector opens when using the Open Resource Inspector command."
+				},
+				"neoGodotTools.resource.inspector.diagnostics": {
+					"type": "boolean",
+					"default": false,
+					"description": "Report resource problems (dangling ExtResource/SubResource ids, unparsable values, type mismatches against the attached script) as diagnostics in .tres files. Disabled by default: without the Godot language server's full property list the inspector cannot tell a real mistake from a property it does not know about, and Godot's own inspector does not flag resources either."
+				}
+			}
+		},
+		"languages": [
+			{
+				"id": "gdscript",
+				"aliases": [
+					"GDScript",
+					"gdscript"
+				],
+				"extensions": [
+					".gd"
+				],
+				"configuration": "./configurations/gdscript.language-configuration.json"
+			},
+			{
+				"id": "gdscene",
+				"aliases": [
+					"GDScene",
+					"gdscene"
+				],
+				"extensions": [
+					".tscn"
+				],
+				"configuration": "./configurations/gdresource.language-configuration.json"
+			},
+			{
+				"id": "gdresource",
+				"aliases": [
+					"GDResource",
+					"gdresource"
+				],
+				"extensions": [
+					".godot",
+					".tres",
+					".import",
+					".gdns",
+					".gdnlib"
+				],
+				"configuration": "./configurations/gdresource.language-configuration.json"
+			},
+			{
+				"id": "gdshader",
+				"aliases": [
+					"gdshader"
+				],
+				"extensions": [
+					".gdshader",
+					".gdshaderinc"
+				],
+				"configuration": "./configurations/gdshader.language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "gdscript",
+				"scopeName": "source.gdscript",
+				"path": "./syntaxes/GDScript.tmLanguage.json"
+			},
+			{
+				"language": "gdresource",
+				"scopeName": "source.gdresource",
+				"path": "./syntaxes/GDResource.tmLanguage.json"
+			},
+			{
+				"language": "gdscene",
+				"scopeName": "source.gdresource",
+				"path": "./syntaxes/GDResource.tmLanguage.json"
+			},
+			{
+				"language": "gdshader",
+				"scopeName": "source.gdshader",
+				"path": "./syntaxes/GDShader.tmLanguage.json"
+			}
+		],
+		"semanticTokenScopes": [
+			{
+				"scopes": {
+					"nodePath": [
+						"constant.character.escape"
+					]
+				}
+			}
+		],
+		"snippets": [
+			{
+				"language": "gdscript",
+				"path": "./configurations/snippets.json"
+			}
+		],
+		"debuggers": [
+			{
+				"type": "godot",
+				"label": "GDScript Godot Debug",
+				"runtime": "node",
+				"configurationAttributes": {
+					"launch": {
+						"required": [],
+						"properties": {
+							"project": {
+								"type": "string",
+								"description": "Absolute path to a directory with a project.godot file.",
+								"default": "${workspaceFolder}"
+							},
+							"address": {
+								"type": "string",
+								"description": "The IP address for the Godot remote debugger to use.",
+								"default": "127.0.0.1"
+							},
+							"port": {
+								"type": "number",
+								"description": "The port number for the Godot remote debugger to use.",
+								"default": 6007
+							},
+							"scene": {
+								"type": "string",
+								"enum": [
+									"main",
+									"current",
+									"pinned"
+								],
+								"enumDescriptions": [
+									"Launch the 'main_scene' specified in project.godot",
+									"Launch the scene (or related scene) in the current editor",
+									"Launch the pinned scene"
+								],
+								"description": "Scene file to run when debugging. Choices are 'main', 'current', 'pinned', or providing a custom path to a scene.",
+								"default": ""
+							},
+							"editor_path": {
+								"type": "string",
+								"description": "Absolute path to the Godot executable to be used for this debug profile.",
+								"default": false
+							},
+							"profiling": {
+								"type": "boolean",
+								"description": "Enable profiling in the script debugger.",
+								"default": false
+							},
+							"single_threaded_scene": {
+								"type": "boolean",
+								"description": "Scene tree runs in single-threaded mode. Sub-thread groups are disabled and run on the main thread. (Godot 4 only)",
+								"default": false
+							},
+							"debug_collisions": {
+								"type": "boolean",
+								"description": "Show collision shapes when running the scene.",
+								"default": false
+							},
+							"debug_paths": {
+								"type": "boolean",
+								"description": "Show navigation polygons when running the scene. (Godot 4 only)",
+								"default": false
+							},
+							"debug_navigation": {
+								"type": "boolean",
+								"description": "Show navigation polygons when running the scene.",
+								"default": false
+							},
+							"debug_avoidance": {
+								"type": "boolean",
+								"description": "Show navigation avoidance debug visuals when running the scene. (Godot 4 only)",
+								"default": false
+							},
+							"debug_stringnames": {
+								"type": "boolean",
+								"description": "Print all StringName allocations to stdout when the engine quits. (Godot 4 only)",
+								"default": false
+							},
+							"frame_delay": {
+								"type": "number",
+								"description": "Simulate high CPU load (delay each frame by <ms> milliseconds)."
+							},
+							"time_scale": {
+								"type": "number",
+								"description": "Force time scale (higher values are faster, 1.0 is normal speed)."
+							},
+							"disable_vsync": {
+								"type": "boolean",
+								"description": "Forces disabling of vertical synchronization, even if enabled in the project settings. Does not override driver-level V-Sync enforcement. (Godot 4 only)",
+								"default": false
+							},
+							"fixed_fps": {
+								"type": "number",
+								"description": "Force a fixed number of frames per second. This setting disables real-time synchronization."
+							},
+							"additional_options": {
+								"type": "string",
+								"description": "Additional command line arguments.",
+								"default": ""
+							}
+						}
+					},
+					"attach": {
+						"required": [],
+						"properties": {
+							"address": {
+								"type": "string",
+								"description": "The IP address for the Godot remote debugger to use.",
+								"default": "127.0.0.1"
+							},
+							"port": {
+								"type": "number",
+								"description": "The port number for the Godot remote debugger to use.",
+								"default": 6007
+							}
+						}
+					}
+				},
+				"initialConfigurations": [
+					{
+						"name": "GDScript: Launch Project",
+						"type": "godot",
+						"request": "launch",
+						"project": "${workspaceFolder}",
+						"debug_collisions": false,
+						"debug_paths": false,
+						"debug_navigation": false,
+						"additional_options": ""
+					}
+				],
+				"configurationSnippets": [
+					{
+						"label": "GDScript: Launch Project",
+						"description": "A config to launch the current project.",
+						"body": {
+							"name": "GDScript: Launch Project",
+							"type": "godot",
+							"request": "launch",
+							"project": "${workspaceFolder}",
+							"debug_collisions": false,
+							"debug_paths": false,
+							"debug_navigation": false,
+							"additional_options": ""
+						}
+					},
+					{
+						"label": "GDScript: Launch Current File",
+						"description": "A config to launch the currently open scene.",
+						"body": {
+							"name": "GDScript: Launch Current File",
+							"type": "godot",
+							"request": "launch",
+							"scene": "current",
+							"project": "${workspaceFolder}",
+							"additional_options": ""
+						}
+					},
+					{
+						"label": "GDScript: Launch Pinned File",
+						"description": "A config to launch the currently pinned scene.",
+						"body": {
+							"name": "GDScript: Launch Pinned File",
+							"type": "godot",
+							"request": "launch",
+							"scene": "pinned",
+							"project": "${workspaceFolder}",
+							"additional_options": ""
+						}
+					}
+				]
+			}
+		],
+		"breakpoints": [
+			{
+				"language": "gdscript"
+			}
+		],
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "neoGodotTools",
+					"title": "Neo Godot Tools",
+					"icon": "resources/godot_icon.svg"
+				}
+			]
+		},
+		"views": {
+			"debug": [
+				{
+					"id": "neoGodotTools.activeSceneTree",
+					"name": "Active Scene Tree",
+					"icon": "resources/godot_icon.svg"
+				},
+				{
+					"id": "neoGodotTools.nodeInspector",
+					"name": "Inspector",
+					"icon": "resources/godot_icon.svg"
+				}
+			],
+			"neoGodotTools": [
+				{
+					"id": "neoGodotTools.scenePreview",
+					"name": "Scene Preview",
+					"icon": "resources/godot_icon.svg"
+				},
+				{
+					"id": "neoGodotTools.resourceInspector",
+					"name": "Resource Inspector",
+					"type": "webview",
+					"icon": "resources/godot_icon.svg"
+				}
+			]
+		},
+		"viewsWelcome": [
+			{
+				"view": "neoGodotTools.activeSceneTree",
+				"contents": "Scene Tree data has not been requested"
+			},
+			{
+				"view": "neoGodotTools.nodeInspector",
+				"contents": "Node has not been inspected"
+			},
+			{
+				"view": "neoGodotTools.scenePreview",
+				"contents": "Open a Scene to see a preview of its structure"
+			}
+		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "neoGodotTools.listGodotClasses",
+					"when": "neoGodotTools.context.connectedToLSP"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.goToDefinition",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openDocumentation",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openPropertyInspector",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.copyNodePath",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.copyResourcePath",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openScript",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openScene",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.refresh",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.openCurrentResource",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.openScript",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.lock",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.unlock",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.debugger.editValue",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.debugger.inspectNode",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.debugger.refreshSceneTree",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.debugger.refreshInspector",
+					"when": "false"
+				}
+			],
+			"view/title": [
+				{
+					"command": "neoGodotTools.debugger.refreshSceneTree",
+					"when": "view == neoGodotTools.activeSceneTree",
+					"group": "navigation"
+				},
+				{
+					"command": "neoGodotTools.debugger.refreshInspector",
+					"when": "view == neoGodotTools.nodeInspector",
+					"group": "navigation"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.lock",
+					"when": "view == neoGodotTools.scenePreview && !neoGodotTools.context.scenePreview.locked",
+					"group": "navigation@1"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.unlock",
+					"when": "view == neoGodotTools.scenePreview && neoGodotTools.context.scenePreview.locked",
+					"group": "navigation@1"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.refresh",
+					"when": "view == neoGodotTools.scenePreview",
+					"group": "navigation@2"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openMainScript",
+					"when": "view == neoGodotTools.scenePreview",
+					"group": "navigation@3"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openCurrentScene",
+					"when": "view == neoGodotTools.scenePreview",
+					"group": "navigation@4"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.lock",
+					"when": "view == neoGodotTools.resourceInspector && !neoGodotTools.context.resourceInspector.locked",
+					"group": "navigation@1"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.unlock",
+					"when": "view == neoGodotTools.resourceInspector && neoGodotTools.context.resourceInspector.locked",
+					"group": "navigation@1"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.refresh",
+					"when": "view == neoGodotTools.resourceInspector",
+					"group": "navigation@2"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.openScript",
+					"when": "view == neoGodotTools.resourceInspector",
+					"group": "navigation@3"
+				},
+				{
+					"command": "neoGodotTools.resourceInspector.openCurrentResource",
+					"when": "view == neoGodotTools.resourceInspector",
+					"group": "navigation@4"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "neoGodotTools.debugger.inspectNode",
+					"when": "view == neoGodotTools.activeSceneTree",
+					"group": "inline"
+				},
+				{
+					"command": "neoGodotTools.debugger.inspectNode",
+					"when": "view == neoGodotTools.nodeInspector && viewItem == remote_object",
+					"group": "inline"
+				},
+				{
+					"command": "neoGodotTools.debugger.editValue",
+					"when": "view == neoGodotTools.nodeInspector && viewItem == editable_value",
+					"group": "inline"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.goToDefinition",
+					"when": "view == neoGodotTools.scenePreview",
+					"group": "1@1"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openDocumentation",
+					"when": "view == neoGodotTools.scenePreview",
+					"group": "1@1"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.editProperty",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.addProperty",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.removeProperty",
+					"when": "false"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.copyNodePath",
+					"when": "view == neoGodotTools.scenePreview"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.copyResourcePath",
+					"when": "view == neoGodotTools.scenePreview && viewItem =~ /hasResourcePath/"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openScene",
+					"when": "view == neoGodotTools.scenePreview && viewItem =~ /openable/",
+					"group": "1@2"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openScript",
+					"when": "view == neoGodotTools.scenePreview && viewItem =~ /hasScript/",
+					"group": "1@2"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openScene",
+					"when": "view == neoGodotTools.scenePreview && viewItem =~ /openable/",
+					"group": "inline"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openScript",
+					"when": "view == neoGodotTools.scenePreview && viewItem =~ /hasScript/",
+					"group": "inline"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openPropertyInspector",
+					"when": "view == neoGodotTools.scenePreview && viewItem =~ /sceneNode/",
+					"group": "1@0"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.openPropertyInspector",
+					"when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties",
+					"group": "1@0"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.editProperty",
+					"when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty",
+					"group": "1@1"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.removeProperty",
+					"when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty",
+					"group": "1@2"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.editProperty",
+					"when": "view == neoGodotTools.scenePreview && viewItem == sceneProperty",
+					"group": "inline"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.addProperty",
+					"when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties",
+					"group": "1@1"
+				},
+				{
+					"command": "neoGodotTools.scenePreview.addProperty",
+					"when": "view == neoGodotTools.scenePreview && viewItem == sceneProperties",
+					"group": "inline"
+				}
+			],
+			"explorer/context": [
+				{
+					"command": "neoGodotTools.debugger.pinFile",
+					"group": "2_workspace",
+					"when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && !(resourcePath in neoGodotTools.context.pinnedScene)"
+				},
+				{
+					"command": "neoGodotTools.debugger.unpinFile",
+					"group": "2_workspace",
+					"when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && (resourcePath in neoGodotTools.context.pinnedScene)"
+				},
+				{
+					"command": "neoGodotTools.copyResourcePath",
+					"group": "6_copypath"
+				},
+				{
+					"command": "neoGodotTools.openResourceInspector",
+					"group": "2_workspace",
+					"when": "resourceExtname == .tres"
+				}
+			],
+			"editor/title/run": [
+				{
+					"command": "neoGodotTools.debugger.debugCurrentFile",
+					"group": "navigation@10",
+					"when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace"
+				},
+				{
+					"command": "neoGodotTools.debugger.debugPinnedFile",
+					"group": "navigation@10",
+					"when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace"
+				}
+			],
+			"editor/title": [
+				{
+					"command": "neoGodotTools.debugger.pinFile",
+					"group": "navigation@11",
+					"when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace && !(resourcePath in neoGodotTools.context.pinnedScene)"
+				},
+				{
+					"command": "neoGodotTools.debugger.unpinFile",
+					"group": "navigation@11",
+					"when": "editorLangId in neoGodotTools.context.sceneLikeFiles && !isInDiffEditor && !virtualWorkspace && (resourcePath in neoGodotTools.context.pinnedScene)"
+				}
+			],
+			"editor/title/context": [
+				{
+					"command": "neoGodotTools.copyResourcePath",
+					"group": "1_godot"
+				},
+				{
+					"command": "neoGodotTools.openResourceInspector",
+					"group": "1_godot",
+					"when": "resourceExtname == .tres"
+				},
+				{
+					"command": "neoGodotTools.debugger.pinFile",
+					"group": "1_godot",
+					"when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && !(resourcePath in neoGodotTools.context.pinnedScene)"
+				},
+				{
+					"command": "neoGodotTools.debugger.unpinFile",
+					"group": "1_godot",
+					"when": "resourceLangId in neoGodotTools.context.sceneLikeFiles && (resourcePath in neoGodotTools.context.pinnedScene)"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "neoGodotTools.switchSceneScript",
+					"when": "editorLangId in neoGodotTools.context.godotFiles",
+					"group": "custom1@1"
+				}
+			]
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/chai": "^4.3.11",
+		"@types/chai-as-promised": "^8.0.1",
+		"@types/chai-subset": "^1.3.5",
+		"@types/marked": "^4.0.8",
+		"@types/mocha": "^10.0.6",
+		"@types/node": "^18.19.75",
+		"@types/prismjs": "^1.16.8",
+		"@types/sinon": "^17.0.4",
+		"@types/vscode": "^1.96.0",
+		"@types/ws": "^8.5.4",
+		"@vscode/test-cli": "^0.0.10",
+		"@vscode/test-electron": "^2.3.8",
+		"@vscode/vsce": "^2.29.0",
+		"chai": "^4.5.0",
+		"chai-as-promised": "^8.0.1",
+		"chai-subset": "^1.6.0",
+		"esbuild": "^0.25.0",
+		"mocha": "^10.8.2",
+		"sinon": "^19.0.2",
+		"ts-node": "^10.9.1",
+		"tsconfig-paths": "^4.2.0",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@vscode/debugadapter": "^1.68.0",
+		"@vscode/debugprotocol": "^1.68.0",
+		"await-notify": "^1.0.1",
+		"bbcode-to-ansi": "^1.0.0",
+		"global": "^4.4.0",
+		"marked": "^4.0.11",
+		"net": "^1.0.2",
+		"prismjs": "^1.30.0",
+		"terminate": "^2.5.0",
+		"vscode-jsonrpc": "^8.2.0",
+		"vscode-languageclient": "^9.0.1",
+		"vscode-oniguruma": "^2.0.0",
+		"vscode-textmate": "^9.0.0",
+		"ws": "^8.17.1",
+		"ya-bbcode": "^4.0.0"
+	},
+	"homepage": "https://github.com/CYoJkoY/Neo-Godot-Tools",
+	"keywords": [
+		"godot",
+		"gdscript",
+		"game development",
+		"language server",
+		"debugger",
+		"code completion",
+		"go to definition",
+		"intellisense"
+	],
+	"pricing": "Free",
+	"sponsor": {
+		"url": "https://cyojkoy.github.io/Payment/"
+	}
 }
