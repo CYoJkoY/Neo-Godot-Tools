@@ -646,10 +646,6 @@ function wrap_long_boolean_condition(
 }
 
 /**
- * Wrap a long single-line function call when top-level argument commas provide
- * safe split points. Unsupported shapes remain untouched.
- */
-/**
  * Keep a short single-argument call intact when the assignment target alone makes its line too long.
  * Parenthesize the right-hand side instead of unnecessarily splitting the call's argument layout.
  */
@@ -762,6 +758,10 @@ function wrap_long_assignment_call_expression(
 }
 
 
+/**
+ * Wrap a long single-line function call when top-level argument commas provide
+ * safe split points. Unsupported shapes remain untouched.
+ */
 function wrap_long_function_call(
 	tokens: Token[],
 	renderedTokens: string[],
