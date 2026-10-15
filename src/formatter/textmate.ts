@@ -340,47 +340,13 @@ function wrap_long_boolean_condition(
 		return undefined;
 	}
 
-	const scan = tokens.slice(1, endIndex).reduce(
-		(state, token, offset) => {
-			if (token.string) return state;
-
-			const index = offset + 1;
-			const atTopLevel = state.parentheses === 0 && state.brackets === 0 && state.braces === 0;
-			if (atTopLevel && (token.value === "and" || token.value === "or")) {
-				state.splitIndexes.push(index);
-			}
-
-			if (token.value === "(") state.parentheses += 1;
-			if (token.value === ")") {
-				state.parentheses -= 1;
-				if (state.parentheses < 0) state.valid = false;
-			}
-			if (token.value === "[") state.brackets += 1;
-			if (token.value === "]") {
-				state.brackets -= 1;
-				if (state.brackets < 0) state.valid = false;
-			}
-			if (token.value === "{") state.braces += 1;
-			if (token.value === "}") {
-				state.braces -= 1;
-				if (state.braces < 0) state.valid = false;
-			}
-			return state;
-		},
-		{ valid: true, parentheses: 0, brackets: 0, braces: 0, splitIndexes: [] as number[] },
+	const scan = scan_token_boundaries(tokens, 1, endIndex);
+	const splitIndexes = scan.topLevelIndexes.filter(
+		(tokenIndex) => ["and", "or"].includes(tokens[tokenIndex].value),
 	);
+	if (!scan.valid || splitIndexes.length === 0) return undefined;
 
-	if (
-		!scan.valid ||
-		scan.parentheses !== 0 ||
-		scan.brackets !== 0 ||
-		scan.braces !== 0 ||
-		scan.splitIndexes.length === 0
-	) {
-		return undefined;
-	}
-
-	const boundaries = [...scan.splitIndexes, endIndex];
+	const boundaries = [...splitIndexes, endIndex];
 	const terms = boundaries.map((end, index) => {
 		const start = index === 0 ? 1 : boundaries[index - 1];
 		return renderedTokens.slice(start, end).join("").trim();
@@ -435,18 +401,13 @@ function wrap_long_function_call(
 		return undefined;
 	}
 
-	const matchingClosers = new Map<number, number>();
-	const openParentheses: number[] = [];
-	for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
-		if (tokens[tokenIndex].string) continue;
-		if (tokens[tokenIndex].value === "(") {
-			openParentheses.push(tokenIndex);
-		} else if (tokens[tokenIndex].value === ")") {
-			const openIndex = openParentheses.pop();
-			if (openIndex !== undefined) matchingClosers.set(openIndex, tokenIndex);
-		}
-	}
-
+	const boundaryScan = scan_token_boundaries(tokens);
+	if (!boundaryScan.valid) return undefined;
+	const matchingClosers = new Map(
+		[...boundaryScan.matchingClosers.entries()].filter(
+			([openIndex]) => tokens[openIndex]?.value === "(",
+		),
+	);
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
@@ -465,56 +426,25 @@ function wrap_long_function_call(
 				[")", "]"].includes(callableToken.value));
 		if (!isCallable) continue;
 
-		const commaIndexes: number[] = [];
-		let nestedParentheses = 0;
-		let nestedBrackets = 0;
-		let nestedBraces = 0;
-		let valid = true;
-		for (let tokenIndex = openIndex + 1; tokenIndex < closeIndex; tokenIndex++) {
-			const argumentToken = tokens[tokenIndex];
-			if (argumentToken.string) continue;
-
-			if (argumentToken.value === "(") nestedParentheses++;
-			if (argumentToken.value === ")") nestedParentheses--;
-			if (argumentToken.value === "[") nestedBrackets++;
-			if (argumentToken.value === "]") nestedBrackets--;
-			if (argumentToken.value === "{") nestedBraces++;
-			if (argumentToken.value === "}") nestedBraces--;
-			if (nestedParentheses < 0 || nestedBrackets < 0 || nestedBraces < 0) {
-				valid = false;
-				break;
-			}
-			if (
-				argumentToken.value === "," &&
-				nestedParentheses === 0 &&
-				nestedBrackets === 0 &&
-				nestedBraces === 0
-			) {
-				commaIndexes.push(tokenIndex);
-			}
-		}
-		if (
-			!valid ||
-			nestedParentheses !== 0 ||
-			nestedBrackets !== 0 ||
-			nestedBraces !== 0 ||
-			commaIndexes.length === 0
-		) {
-			continue;
-		}
+		const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+		const commaIndexes = argumentScan.topLevelIndexes.filter(
+			(tokenIndex) => tokens[tokenIndex].value === ",",
+		);
+		if (!argumentScan.valid || commaIndexes.length === 0) continue;
 
 		const argumentSegments: string[] = [];
 		let segmentStart = openIndex + 1;
+		let segmentsValid = true;
 		for (const commaIndex of commaIndexes) {
 			const argumentText = renderedTokens.slice(segmentStart, commaIndex).join("").trim();
 			if (!argumentText) {
-				valid = false;
+				segmentsValid = false;
 				break;
 			}
 			argumentSegments.push(argumentText);
 			segmentStart = commaIndex + 1;
 		}
-		if (!valid) continue;
+		if (!segmentsValid) continue;
 		const finalArgument = renderedTokens.slice(segmentStart, closeIndex).join("").trim();
 		if (!finalArgument) continue;
 		argumentSegments.push(finalArgument);
@@ -562,6 +492,58 @@ const closingDelimiters = new Map([
 	["}", "{"],
 ]);
 
+interface TokenBoundaryScan {
+	valid: boolean;
+	topLevelIndexes: number[];
+	matchingClosers: Map<number, number>;
+}
+
+/**
+ * Finds syntax boundaries without interpreting GDScript operators or keywords.
+ * Strings and comments are opaque; malformed delimiter ranges fail closed.
+ */
+function scan_token_boundaries(
+	tokens: Token[],
+	startIndex = 0,
+	endIndex = tokens.length,
+): TokenBoundaryScan {
+	const scan = tokens.slice(startIndex, endIndex).reduce(
+		(state, currentToken, offset) => {
+			if (currentToken.string || currentToken.type === "comment" || !state.valid) return state;
+
+			const tokenIndex = startIndex + offset;
+			if (state.stack.length === 0) state.topLevelIndexes.push(tokenIndex);
+			if (openingDelimiters.has(currentToken.value)) {
+				state.stack.push({ index: tokenIndex, value: currentToken.value });
+				return state;
+			}
+
+			const expectedOpening = closingDelimiters.get(currentToken.value);
+			if (expectedOpening === undefined) return state;
+
+			const openingToken = state.stack.pop();
+			if (!openingToken || openingToken.value !== expectedOpening) {
+				state.valid = false;
+				return state;
+			}
+			state.matchingClosers.set(openingToken.index, tokenIndex);
+			return state;
+		},
+		{
+			valid: true,
+			stack: [] as { index: number; value: string }[],
+			topLevelIndexes: [] as number[],
+			matchingClosers: new Map<number, number>(),
+		},
+	);
+	return {
+		valid: scan.valid && scan.stack.length === 0,
+		topLevelIndexes: scan.topLevelIndexes,
+		matchingClosers: scan.matchingClosers,
+	};
+}
+
+
 function wrap_collection_candidate(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -582,54 +564,16 @@ function wrap_collection_candidate(
 		if (!isArrayLiteral) return undefined;
 	}
 
-	const scan = tokens.slice(openIndex + 1, closeIndex).reduce(
-		(state, elementToken, relativeIndex) => {
-			if (!state.valid || elementToken.string) return state;
-
-			if (elementToken.value === "(") state.parentheses++;
-			if (elementToken.value === ")") state.parentheses--;
-			if (elementToken.value === "[") state.brackets++;
-			if (elementToken.value === "]") state.brackets--;
-			if (elementToken.value === "{") state.braces++;
-			if (elementToken.value === "}") state.braces--;
-			if (state.parentheses < 0 || state.brackets < 0 || state.braces < 0) {
-				state.valid = false;
-				return state;
-			}
-
-			if (
-				elementToken.value === "," &&
-				state.parentheses === 0 &&
-				state.brackets === 0 &&
-				state.braces === 0
-			) {
-				state.commaIndexes.push(openIndex + 1 + relativeIndex);
-			}
-			return state;
-		},
-		{
-			parentheses: 0,
-			brackets: 0,
-			braces: 0,
-			valid: true,
-			commaIndexes: [] as number[],
-		},
+	const scan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	const commaIndexes = scan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ",",
 	);
+	if (!scan.valid || commaIndexes.length === 0) return undefined;
 
-	if (
-		!scan.valid ||
-		scan.parentheses !== 0 ||
-		scan.brackets !== 0 ||
-		scan.braces !== 0 ||
-		scan.commaIndexes.length === 0
-	) {
-		return undefined;
-	}
-
-	const lastCommaIndex = scan.commaIndexes[scan.commaIndexes.length - 1];
+	const lastCommaIndex = commaIndexes[commaIndexes.length - 1];
 	const hasTrailingComma = lastCommaIndex === closeIndex - 1;
 	const contentEnd = hasTrailingComma ? closeIndex - 1 : closeIndex;
-	const segmentResult = scan.commaIndexes.reduce(
+	const segmentResult = commaIndexes.reduce(
 		(state, commaIndex) => {
 			if (!state.valid || commaIndex >= contentEnd) return state;
 
@@ -706,34 +650,11 @@ function wrap_long_collection_literal(
 		return undefined;
 	}
 
-	const delimiterState = tokens.reduce(
-		(state, currentToken, tokenIndex) => {
-			if (!state.valid || currentToken.string) return state;
-			if (openingDelimiters.has(currentToken.value)) {
-				state.stack.push({ index: tokenIndex, value: currentToken.value });
-				return state;
-			}
-			const expectedOpening = closingDelimiters.get(currentToken.value);
-			if (!expectedOpening) return state;
-
-			const openingToken = state.stack.pop();
-			if (!openingToken || openingToken.value !== expectedOpening) {
-				state.valid = false;
-				return state;
-			}
-			state.pairs.set(openingToken.index, tokenIndex);
-			return state;
-		},
-		{
-			valid: true,
-			stack: [] as { index: number; value: string }[],
-			pairs: new Map<number, number>(),
-		},
-	);
-	if (!delimiterState.valid || delimiterState.stack.length > 0) return undefined;
+	const delimiterScan = scan_token_boundaries(tokens);
+	if (!delimiterScan.valid) return undefined;
 
 	const collectionIndent = leadingWhitespace + get_indentation_unit(document, leadingWhitespace);
-	return [...delimiterState.pairs.entries()]
+	return [...delimiterScan.matchingClosers.entries()]
 		.filter(([openIndex]) => ["[", "{"].includes(tokens[openIndex].value))
 		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0])
 		.reduce<string | undefined>((matchedLine, [openIndex, closeIndex]) => {
@@ -791,46 +712,23 @@ function wrap_long_ternary_expression(
 		return undefined;
 	}
 
-	const scan = tokens.reduce(
-		(state, currentToken, tokenIndex) => {
-			if (!state.valid || currentToken.string) return state;
-			if (openingDelimiters.has(currentToken.value)) {
-				state.stack.push({ index: tokenIndex, value: currentToken.value });
-				return state;
-			}
-			const expectedOpening = closingDelimiters.get(currentToken.value);
-			if (expectedOpening) {
-				const openingToken = state.stack.pop();
-				if (!openingToken || openingToken.value !== expectedOpening) state.valid = false;
-				return state;
-			}
-			if (state.stack.length === 0) {
-				if (currentToken.value === "if" || currentToken.value === "else") {
-					state.markers.push({ index: tokenIndex, value: currentToken.value });
-				}
-				if (currentToken.value === "=" || currentToken.value === ":=") {
-					state.assignmentIndexes.push(tokenIndex);
-				}
-			}
-			return state;
-		},
-		{
-			valid: true,
-			stack: [] as { index: number; value: string }[],
-			markers: [] as { index: number; value: string }[],
-			assignmentIndexes: [] as number[],
-		},
+	const boundaryScan = scan_token_boundaries(tokens);
+	const markers = boundaryScan.topLevelIndexes.flatMap((tokenIndex) => {
+		const value = tokens[tokenIndex].value;
+		return value === "if" || value === "else" ? [{ index: tokenIndex, value }] : [];
+	});
+	const assignmentIndexes = boundaryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === "=" || tokens[tokenIndex].value === ":=",
 	);
 	const markerSequenceIsValid =
-		scan.valid &&
-		scan.stack.length === 0 &&
-		scan.markers.length >= 2 &&
-		scan.markers.length % 2 === 0 &&
-		scan.markers.every((marker, index) => marker.value === (index % 2 === 0 ? "if" : "else"));
+		boundaryScan.valid &&
+		markers.length >= 2 &&
+		markers.length % 2 === 0 &&
+		markers.every((marker, index) => marker.value === (index % 2 === 0 ? "if" : "else"));
 	if (!markerSequenceIsValid) return undefined;
 
-	const firstIfIndex = scan.markers[0].index;
-	const assignmentIndex = scan.assignmentIndexes.reduce(
+	const firstIfIndex = markers[0].index;
+	const assignmentIndex = assignmentIndexes.reduce(
 		(matchedIndex, currentIndex) =>
 			currentIndex < firstIfIndex && currentIndex > matchedIndex ? currentIndex : matchedIndex,
 		-1,
@@ -839,7 +737,7 @@ function wrap_long_ternary_expression(
 	if (expressionStart <= 0 && firstValue !== "return") return undefined;
 	if (expressionStart >= firstIfIndex) return undefined;
 
-	const elseIndexes = scan.markers
+	const elseIndexes = markers
 		.filter((marker) => marker.value === "else")
 		.map((marker) => marker.index);
 	const segments = [...elseIndexes, tokens.length].map((endIndex, segmentIndex) => {
@@ -1050,58 +948,20 @@ function wrap_long_boolean_expression(
 		return undefined;
 	}
 
-	const scan = tokens.reduce(
-		(state, token, tokenIndex) => {
-			if (!state.valid || token.string) return state;
-
-			const atTopLevel = state.parentheses === 0 && state.brackets === 0 && state.braces === 0;
-			if (atTopLevel) {
-				if (token.value === "if" || token.value === "else") state.hasTernaryMarker = true;
-				if (token.value === "and" || token.value === "or") state.splitIndexes.push(tokenIndex);
-				if (token.value === "=" || token.value === ":=") state.assignmentIndexes.push(tokenIndex);
-			}
-
-			if (token.value === "(") state.parentheses += 1;
-			if (token.value === ")") {
-				state.parentheses -= 1;
-				if (state.parentheses < 0) state.valid = false;
-			}
-			if (token.value === "[") state.brackets += 1;
-			if (token.value === "]") {
-				state.brackets -= 1;
-				if (state.brackets < 0) state.valid = false;
-			}
-			if (token.value === "{") state.braces += 1;
-			if (token.value === "}") {
-				state.braces -= 1;
-				if (state.braces < 0) state.valid = false;
-			}
-			return state;
-		},
-		{
-			valid: true,
-			parentheses: 0,
-			brackets: 0,
-			braces: 0,
-			hasTernaryMarker: false,
-			splitIndexes: [] as number[],
-			assignmentIndexes: [] as number[],
-		},
+	const boundaryScan = scan_token_boundaries(tokens);
+	const splitIndexes = boundaryScan.topLevelIndexes.filter((tokenIndex) =>
+		["and", "or"].includes(tokens[tokenIndex].value),
 	);
+	const assignmentIndexes = boundaryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === "=" || tokens[tokenIndex].value === ":=",
+	);
+	const hasTernaryMarker = boundaryScan.topLevelIndexes.some((tokenIndex) =>
+		["if", "else"].includes(tokens[tokenIndex].value),
+	);
+	if (!boundaryScan.valid || hasTernaryMarker || splitIndexes.length === 0) return undefined;
 
-	if (
-		!scan.valid ||
-		scan.parentheses !== 0 ||
-		scan.brackets !== 0 ||
-		scan.braces !== 0 ||
-		scan.hasTernaryMarker ||
-		scan.splitIndexes.length === 0
-	) {
-		return undefined;
-	}
-
-	const firstSplitIndex = scan.splitIndexes[0];
-	const assignmentIndex = scan.assignmentIndexes.reduce(
+	const firstSplitIndex = splitIndexes[0];
+	const assignmentIndex = assignmentIndexes.reduce(
 		(matchedIndex, currentIndex) =>
 			currentIndex < firstSplitIndex && currentIndex > matchedIndex ? currentIndex : matchedIndex,
 		-1,
@@ -1110,8 +970,8 @@ function wrap_long_boolean_expression(
 	if (expressionStart <= 0 && firstValue !== "return") return undefined;
 	if (expressionStart >= firstSplitIndex) return undefined;
 
-	const segments = [...scan.splitIndexes, tokens.length].map((endIndex, segmentIndex) => {
-		const segmentStart = segmentIndex === 0 ? expressionStart : scan.splitIndexes[segmentIndex - 1];
+	const segments = [...splitIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : splitIndexes[segmentIndex - 1];
 		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
 	});
 	if (segments.some((segment) => segment.length === 0)) return undefined;
@@ -1171,70 +1031,17 @@ function wrap_long_function_declaration(
 	}
 
 	const openIndex = functionIndex + 2;
-	const delimiterState = tokens.slice(openIndex).reduce(
-		(state, currentToken, tokenOffset) => {
-			if (!state.valid || state.done || currentToken.string) return state;
-			const tokenIndex = openIndex + tokenOffset;
+	const delimiterScan = scan_token_boundaries(tokens, openIndex);
+	const closeIndex = delimiterScan.matchingClosers.get(openIndex) ?? -1;
+	if (!delimiterScan.valid || closeIndex <= openIndex) return undefined;
 
-			if (openingDelimiters.has(currentToken.value)) {
-				state.stack.push({ index: tokenIndex, value: currentToken.value });
-				return state;
-			}
-
-			const expectedOpening = closingDelimiters.get(currentToken.value);
-			if (!expectedOpening) return state;
-			const openingToken = state.stack.pop();
-			if (!openingToken || openingToken.value !== expectedOpening) {
-				state.valid = false;
-				return state;
-			}
-			if (openingToken.index === openIndex) {
-				state.closeIndex = tokenIndex;
-				state.done = true;
-			}
-			return state;
-		},
-		{
-			valid: true,
-			done: false,
-			closeIndex: -1,
-			stack: [] as { index: number; value: string }[],
-		},
+	const parameterScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	const commaIndexes = parameterScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ",",
 	);
-	const closeIndex = delimiterState.closeIndex;
-	if (!delimiterState.valid || closeIndex <= openIndex || delimiterState.stack.length !== 0) {
-		return undefined;
-	}
+	if (!parameterScan.valid || commaIndexes.length === 0) return undefined;
 
-	const parameterState = tokens.slice(openIndex + 1, closeIndex).reduce(
-		(state, currentToken, tokenOffset) => {
-			if (!state.valid || currentToken.string) return state;
-
-			if (currentToken.value === "," && state.stack.length === 1) {
-				state.commaIndexes.push(openIndex + 1 + tokenOffset);
-				return state;
-			}
-			if (openingDelimiters.has(currentToken.value)) {
-				state.stack.push(currentToken.value);
-				return state;
-			}
-
-			const expectedOpening = closingDelimiters.get(currentToken.value);
-			if (expectedOpening && state.stack.pop() !== expectedOpening) state.valid = false;
-			return state;
-		},
-		{ valid: true, stack: ["("] as string[], commaIndexes: [] as number[] },
-	);
-	if (
-		!parameterState.valid ||
-		parameterState.stack.length !== 1 ||
-		parameterState.stack[0] !== "(" ||
-		parameterState.commaIndexes.length === 0
-	) {
-		return undefined;
-	}
-
-	const parameterCollection = parameterState.commaIndexes.reduce(
+	const parameterCollection = commaIndexes.reduce(
 		(state, commaIndex) => {
 			const parameterText = renderedTokens.slice(state.nextStart, commaIndex).join("").trim();
 			if (!parameterText) {
@@ -1331,65 +1138,33 @@ function wrap_long_additive_expression(
 		">",
 		">=",
 	]);
-	const scan = tokens.reduce(
-		(state, token, tokenIndex) => {
-			if (!state.valid || token.string) return state;
-
-			const atTopLevel = state.stack.length === 0;
-			const expectedOpening = closingDelimiters.get(token.value);
-			const openingMismatch =
-				expectedOpening !== undefined && state.stack[state.stack.length - 1] !== expectedOpening;
-			const nextStack = openingDelimiters.has(token.value)
-				? [...state.stack, token.value]
-				: expectedOpening
-					? state.stack.slice(0, -1)
-					: state.stack;
-			const previousToken = tokens[tokenIndex - 1];
-			const previousCanEndExpression =
-				previousToken !== undefined &&
-				(previousToken.string === true ||
-					(previousToken.identifier === true && previousToken.type !== "keyword") ||
-					["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
-					[")", "]", "}"].includes(previousToken.value));
-
-			return {
-				valid: state.valid && !openingMismatch,
-				stack: nextStack,
-				assignmentIndexes:
-					atTopLevel && assignmentOperators.has(token.value)
-						? [...state.assignmentIndexes, tokenIndex]
-						: state.assignmentIndexes,
-				splitIndexes:
-					atTopLevel &&
-					(token.value === "+" || token.value === "-") &&
-					previousCanEndExpression
-						? [...state.splitIndexes, tokenIndex]
-						: state.splitIndexes,
-				hasUnsupportedTopLevelOperator:
-					state.hasUnsupportedTopLevelOperator ||
-					(atTopLevel && unsupportedTopLevelOperators.has(token.value)),
-			};
-		},
-		{
-			valid: true,
-			stack: [] as string[],
-			assignmentIndexes: [] as number[],
-			splitIndexes: [] as number[],
-			hasUnsupportedTopLevelOperator: false,
-		},
+	const boundaryScan = scan_token_boundaries(tokens);
+	const topLevelIndexes = boundaryScan.topLevelIndexes;
+	const assignmentIndexes = topLevelIndexes.filter((tokenIndex) =>
+		assignmentOperators.has(tokens[tokenIndex].value),
 	);
-	if (
-		!scan.valid ||
-		scan.stack.length > 0 ||
-		scan.hasUnsupportedTopLevelOperator
-	) {
-		return undefined;
-	}
+	const additiveOperatorIndexes = topLevelIndexes.filter((tokenIndex) => {
+		const currentToken = tokens[tokenIndex];
+		if (currentToken.value !== "+" && currentToken.value !== "-") return false;
 
-	if (firstValue === "return" && scan.assignmentIndexes.length > 0) return undefined;
-	if (firstValue !== "return" && scan.assignmentIndexes.length !== 1) return undefined;
-	const expressionStart = firstValue === "return" ? 1 : scan.assignmentIndexes[0] + 1;
-	const splitIndexes = scan.splitIndexes.filter((splitIndex) => splitIndex >= expressionStart);
+		const previousToken = tokens[tokenIndex - 1];
+		return (
+			previousToken !== undefined &&
+			(previousToken.string === true ||
+				(previousToken.identifier === true && previousToken.type !== "keyword") ||
+				["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
+				[")", "]", "}"].includes(previousToken.value))
+		);
+	});
+	const hasUnsupportedTopLevelOperator = topLevelIndexes.some((tokenIndex) =>
+		unsupportedTopLevelOperators.has(tokens[tokenIndex].value),
+	);
+	if (!boundaryScan.valid || hasUnsupportedTopLevelOperator) return undefined;
+
+	if (firstValue === "return" && assignmentIndexes.length > 0) return undefined;
+	if (firstValue !== "return" && assignmentIndexes.length !== 1) return undefined;
+	const expressionStart = firstValue === "return" ? 1 : assignmentIndexes[0] + 1;
+	const splitIndexes = additiveOperatorIndexes.filter((splitIndex) => splitIndex >= expressionStart);
 	if (expressionStart <= 0 || splitIndexes.length === 0 || expressionStart >= splitIndexes[0]) {
 		return undefined;
 	}
@@ -1487,46 +1262,23 @@ function wrap_long_method_chain(
 		"<<=",
 		">>=",
 	]);
-	const scan = tokens.reduce(
-		(state, currentToken, tokenIndex) => {
-			if (!state.valid || currentToken.string) return state;
-
-			const atTopLevel = state.stack.length === 0;
-			const expectedOpening = closingDelimiters.get(currentToken.value);
-			const openingMismatch =
-				expectedOpening !== undefined &&
-				state.stack[state.stack.length - 1] !== expectedOpening;
-			const nextStack = openingDelimiters.has(currentToken.value)
-				? [...state.stack, currentToken.value]
-				: expectedOpening
-					? state.stack.slice(0, -1)
-					: state.stack;
-
-			return {
-				valid: state.valid && !openingMismatch,
-				stack: nextStack,
-				dotIndexes:
-					atTopLevel && currentToken.value === "."
-						? [...state.dotIndexes, tokenIndex]
-						: state.dotIndexes,
-				assignmentIndexes:
-					atTopLevel && assignmentOperators.has(currentToken.value)
-						? [...state.assignmentIndexes, tokenIndex]
-						: state.assignmentIndexes,
-			};
-		},
-		{ valid: true, stack: [] as string[], dotIndexes: [] as number[], assignmentIndexes: [] as number[] },
+	const boundaryScan = scan_token_boundaries(tokens);
+	if (!boundaryScan.valid) return undefined;
+	const topLevelDotIndexes = boundaryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ".",
 	);
-	if (!scan.valid || scan.stack.length > 0) return undefined;
+	const assignmentIndexes = boundaryScan.topLevelIndexes.filter((tokenIndex) =>
+		assignmentOperators.has(tokens[tokenIndex].value),
+	);
 
-	const lastAssignmentIndex = scan.assignmentIndexes.reduce(
+	const lastAssignmentIndex = assignmentIndexes.reduce(
 		(currentLast, assignmentIndex) => Math.max(currentLast, assignmentIndex),
 		-1,
 	);
 	if (["const", "static", "var"].includes(firstValue) && lastAssignmentIndex < 0) return undefined;
 	const expressionStart =
 		firstValue === "return" ? 1 : lastAssignmentIndex >= 0 ? lastAssignmentIndex + 1 : 0;
-	const dotIndexes = scan.dotIndexes.filter((dotIndex) => dotIndex >= expressionStart);
+	const dotIndexes = topLevelDotIndexes.filter((dotIndex) => dotIndex >= expressionStart);
 	if (
 		dotIndexes.length === 0 ||
 		dotIndexes.some((dotIndex) => !tokens[dotIndex - 1] || !tokens[dotIndex + 1])
