@@ -649,6 +649,119 @@ function wrap_long_boolean_condition(
  * Wrap a long single-line function call when top-level argument commas provide
  * safe split points. Unsupported shapes remain untouched.
  */
+/**
+ * Keep a short single-argument call intact when the assignment target alone makes its line too long.
+ * Parenthesize the right-hand side instead of unnecessarily splitting the call's argument layout.
+ */
+function wrap_long_assignment_call_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	document: TextDocument,
+	options: FormatterOptions,
+	tabSize: number,
+	currentLineWidth: number,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLineWidth <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["class", "class_name", "elif", "enum", "extends", "for", "func", "if", "match", "signal", "while"].includes(
+			firstValue,
+		)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92) ||
+						token.value === "func")),
+		)
+	) {
+		return undefined;
+	}
+
+	const assignmentOperators = new Set([
+		"=",
+		":=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"**=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+	]);
+	const boundaryScan = scan_token_boundaries(tokens);
+	if (!boundaryScan.valid) return undefined;
+	const assignmentIndexes = boundaryScan.topLevelIndexes.filter((tokenIndex) =>
+		assignmentOperators.has(tokens[tokenIndex].value),
+	);
+	if (assignmentIndexes.length !== 1) return undefined;
+
+	const expressionStart = assignmentIndexes[0] + 1;
+	if (expressionStart >= tokens.length) return undefined;
+	const matchingCall = [...boundaryScan.matchingClosers.entries()].find(
+		([openIndex, closeIndex]) =>
+			openIndex >= expressionStart &&
+			tokens[openIndex]?.value === "(" &&
+			closeIndex === tokens.length - 1,
+	);
+	if (!matchingCall) return undefined;
+
+	const [openIndex, closeIndex] = matchingCall;
+	const callableToken = tokens[openIndex - 1];
+	const isCallable =
+		callableToken !== undefined &&
+		!callableToken.string &&
+		((callableToken.identifier === true &&
+			(callableToken.type !== "keyword" || ["assert", "yield"].includes(callableToken.value))) ||
+			[")", "]"].includes(callableToken.value));
+	if (!isCallable) return undefined;
+
+	const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	if (!argumentScan.valid) return undefined;
+	const commaIndexes = argumentScan.topLevelIndexes.filter((tokenIndex) => tokens[tokenIndex].value === ",");
+	if (commaIndexes.length > 1 || (commaIndexes.length === 1 && commaIndexes[0] !== closeIndex - 1)) {
+		return undefined;
+	}
+	const argumentEndIndex = commaIndexes[0] ?? closeIndex;
+	if (renderedTokens.slice(openIndex + 1, argumentEndIndex).join("").trim().length === 0) {
+		return undefined;
+	}
+
+	const expression = renderedTokens.slice(expressionStart).join("").trim();
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 1;
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const expressionPrefix =
+		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
+	const wrappedLines = [
+		`${leadingWhitespace + expressionPrefix}(`,
+		`${continuationIndent}${expression}`,
+		`${leadingWhitespace})`,
+	];
+
+	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
+		? undefined
+		: wrappedLines.join("\n");
+}
+
+
 function wrap_long_function_call(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -2151,6 +2264,7 @@ function format_token_line(
 		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		wrap_long_assignment_call_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
