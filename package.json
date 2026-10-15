@@ -32,6 +32,7 @@
     "test:release": "node -r ts-node/register --test tools/changelog.test.ts tools/changelog_workflow.test.ts",
     "changelog": "ts-node tools/changelog.ts",
     "profile:language": "ts-node tools/profile_language.ts",
+    "compare:semantic-benchmarks": "ts-node tools/compare_semantic_benchmarks.ts",
     "test:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm test",
     "test:engine": "ts-node tools/run_tests.ts"
   },
