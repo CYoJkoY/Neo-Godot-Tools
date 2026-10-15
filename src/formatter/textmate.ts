@@ -620,6 +620,101 @@ function wrap_long_dictionary_entry_value(
 }
 
 
+/**
+ * Wrap a dictionary value's top-level arithmetic operators without altering the key or colon.
+ * Unary operators and operators nested inside delimiters are not split points.
+ */
+function wrap_long_dictionary_entry_arithmetic_value(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const entryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!entryScan.valid) return undefined;
+	const separators = entryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ":",
+	);
+	if (separators.length !== 1 || separators[0] <= rangeStart || separators[0] >= rangeEnd - 1) {
+		return undefined;
+	}
+
+	const valueStart = separators[0] + 1;
+	const valueScan = scan_token_boundaries(tokens, valueStart, rangeEnd);
+	if (!valueScan.valid) return undefined;
+	if (
+		tokens.slice(valueStart, rangeEnd).some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string && (token.value === ";" || (token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const unsupportedTopLevelOperators = new Set([
+		"and",
+		"as",
+		"else",
+		"if",
+		"in",
+		"is",
+		"not",
+		"or",
+		"!=",
+		"<",
+		"<=",
+		"==",
+		">",
+		">=",
+		"=",
+		":=",
+	]);
+	if (valueScan.topLevelIndexes.some((tokenIndex) => unsupportedTopLevelOperators.has(tokens[tokenIndex].value))) {
+		return undefined;
+	}
+
+	const arithmeticOperatorValues = new Set(["+", "-", "*", "/", "%", "**"]);
+	const splitIndexes = valueScan.topLevelIndexes.filter((tokenIndex) => {
+		const currentToken = tokens[tokenIndex];
+		if (!arithmeticOperatorValues.has(currentToken.value)) return false;
+		const previousToken = tokens[tokenIndex - 1];
+		return (
+			previousToken !== undefined &&
+			(previousToken.string === true ||
+				(previousToken.identifier === true && previousToken.type !== "keyword") ||
+				["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
+				[")", "]", "}"].includes(previousToken.value))
+		);
+	});
+	if (splitIndexes.length === 0 || splitIndexes[0] <= valueStart) return undefined;
+
+	const segments = [...splitIndexes, rangeEnd].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? valueStart : splitIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("") + renderedTokens[valueStart];
+	const firstLine = `${leadingWhitespace + expressionPrefix}(`;
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		closingLine,
+	];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines;
+}
+
+
 const arrayLiteralPrefixes = new Set([
 	"=",
 	":=",
@@ -851,7 +946,18 @@ function wrap_collection_candidate(
 						maxLineLength,
 						indentationUnit,
 						continuationIndentLevel,
-					)
+					) ??
+						wrap_long_dictionary_entry_arithmetic_value(
+							tokens,
+							renderedTokens,
+							memberRange.startIndex,
+							memberRange.endIndex,
+							collectionIndent,
+							",",
+							maxLineLength,
+							indentationUnit,
+							continuationIndentLevel,
+						)
 					: undefined);
 			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
