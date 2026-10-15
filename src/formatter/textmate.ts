@@ -641,7 +641,7 @@ function scan_token_boundaries(
  * Normalize inline enum declarations to the GDScript style guide's one-member-per-line layout.
  * Unsupported or ambiguous enum forms remain unchanged.
  */
-function wrap_long_enum_declaration(
+function format_inline_enum_declaration(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
@@ -661,7 +661,14 @@ function wrap_long_enum_declaration(
 
 	const delimiterScan = scan_token_boundaries(tokens);
 	if (!delimiterScan.valid) return undefined;
-	const openIndex = tokens[1]?.value === "{" ? 1 : tokens[2]?.value === "{" && tokens[1]?.identifier ? 2 : -1;
+	const enumName = tokens[1];
+	const isNamedEnum =
+		tokens[2]?.value === "{" &&
+		enumName !== undefined &&
+		!enumName.string &&
+		enumName.type !== "keyword" &&
+		/^[A-Za-z_]\\w*$/.test(enumName.value);
+	const openIndex = tokens[1]?.value === "{" ? 1 : isNamedEnum ? 2 : -1;
 	if (openIndex < 0) return undefined;
 	const closeIndex = delimiterScan.matchingClosers.get(openIndex) ?? -1;
 	if (closeIndex !== tokens.length - 1) return undefined;
@@ -1103,7 +1110,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 
 		const nextLine = leadingWhitespace + renderedTokens.join("");
 		const formattedLine =
-			wrap_long_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options) ??
+			format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options) ??
 			wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
