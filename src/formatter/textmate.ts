@@ -691,7 +691,7 @@ function wrap_long_enum_declaration(
 	const closingLine = leadingWhitespace + tokens[closeIndex].value;
 	const wrappedLines = [
 		firstLine,
-		...members.map((member) => memberIndent + member + ","),
+		...members.map((member) => `${memberIndent}${member},`),
 		closingLine,
 	];
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
@@ -756,7 +756,7 @@ function wrap_collection_candidate(
 			if (!state.valid) return state;
 
 			const memberText = memberTexts[memberIndex];
-			const singleLine = collectionIndent + memberText + ",";
+			const singleLine = `${collectionIndent}${memberText},`;
 			if (singleLine.length <= maxLineLength) {
 				state.lines.push(singleLine);
 				return state;
