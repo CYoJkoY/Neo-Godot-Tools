@@ -2242,6 +2242,50 @@ function get_inline_block_chain(
  * split into a header and an indented body first, then both pieces use the same rules.
  * Lambda expressions remain intact because they do not start with a block declaration.
  */
+type FormatterIntegrityUnit = { kind: "payload" | "character"; value: string };
+
+const FORMATTER_INTEGRITY_PATTERN =
+	/("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|#.*|[^\t\r\n ])/g;
+const FORMATTER_GENERATED_DELIMITERS = new Set(["(", ")", ","]);
+
+/**
+ * Treat strings and comments as opaque payloads, while discarding only code whitespace.
+ * This lets us compare lexical content across formatter-generated line breaks and indentation.
+ */
+function get_formatter_integrity_units(source: string): FormatterIntegrityUnit[] {
+	return (source.match(FORMATTER_INTEGRITY_PATTERN) ?? []).map((value) => ({
+		kind:
+			value.startsWith("#") || value.startsWith("\"") || value.startsWith("'")
+				? "payload"
+				: "character",
+		value,
+	}));
+}
+
+/**
+ * Formatting may add layout parentheses and enum/collection commas, but must not alter,
+ * remove, or inject any other source characters. Return false to preserve the raw input line.
+ */
+function preserves_source_characters(source: string, formatted: string): boolean {
+	const sourceUnits = get_formatter_integrity_units(source);
+	const formattedUnits = get_formatter_integrity_units(formatted);
+	const comparison = formattedUnits.reduce(
+		(state, unit) => {
+			if (!state.valid) return state;
+			const expected = sourceUnits[state.sourceIndex];
+			if (expected && expected.kind === unit.kind && expected.value === unit.value) {
+				state.sourceIndex++;
+				return state;
+			}
+			if (unit.kind === "character" && FORMATTER_GENERATED_DELIMITERS.has(unit.value)) return state;
+			state.valid = false;
+			return state;
+		},
+		{ sourceIndex: 0, valid: true },
+	);
+	return comparison.valid && comparison.sourceIndex === sourceUnits.length;
+}
+
 function format_token_line(
 	tokens: Token[],
 	renderedTokens: string[],
@@ -2611,6 +2655,8 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			tabSize,
 			isMatchCaseLine,
 		);
+		const safeFormattedLine =
+			formattedLine === line.text || preserves_source_characters(line.text, formattedLine) ? formattedLine : line.text;
 
 		const inlineBlockChain = get_inline_block_chain(tokens, isMatchCaseLine);
 		if (inlineBlockChain.endsWithOpenSuite && inlineBlockChain.headerCount > 1) {
@@ -2630,7 +2676,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 
 		// Returning edits for unchanged lines costs allocations and slows VS Code's
 		// edit application on large scripts. Keep only actual replacements.
-		if (formattedLine !== line.text) edits.push(TextEdit.replace(line.range, formattedLine));
+		if (safeFormattedLine !== line.text) edits.push(TextEdit.replace(line.range, safeFormattedLine));
 	}
 
 	return edits;
