@@ -45,11 +45,19 @@ If you create `workspace.code-workspace`, the `Run Extension with workspace file
 
 ### Unit tests
 
-Formatter snapshot tests and pure TypeScript tests run without a Godot installation:
+Pure TypeScript tests run without a Godot installation:
 
 ```bash
-npm test
+npm run test:unit
 ```
+
+Formatter snapshots run in a real VS Code extension host. On Linux, use the headless command:
+
+```bash
+npm run test:formatter:headless
+```
+
+This command compiles the existing host-test sources into the ignored `out-test-host/` directory and runs only the existing formatter snapshot suite. It does not add test cases or require a Godot binary.
 
 ### Engine-in-the-loop tests
 

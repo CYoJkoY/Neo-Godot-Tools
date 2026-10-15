@@ -26,6 +26,8 @@
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
     "generate-icons": "ts-node tools/generate_icons.ts",
     "test": "vscode-test",
+    "test:formatter:host": "tsc -p tsconfig.vscode-test.json && vscode-test --config .vscode-test.formatter.json",
+    "test:formatter:headless": "WAYLAND_DISPLAY= xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24 -ac +extension GLX' npm run test:formatter:host",
     "test:unit": "tsc -p tsconfig.test.json && node out-test/tools/run_unit_tests.js",
     "test:release": "node -r ts-node/register --test tools/changelog.test.ts tools/changelog_workflow.test.ts",
     "changelog": "ts-node tools/changelog.ts",
