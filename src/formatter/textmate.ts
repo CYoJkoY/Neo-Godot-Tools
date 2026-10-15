@@ -809,6 +809,111 @@ function wrap_long_dictionary_entry_binary_value(
 }
 
 
+/**
+ * Wrap top-level arithmetic, bitwise, and shift operators in a single array member.
+ * Mixed expressions and unsupported statement forms remain unchanged.
+ */
+function wrap_long_array_member_binary_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const memberScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!memberScan.valid) return undefined;
+	if (
+		tokens.slice(rangeStart, rangeEnd).some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		)
+	) {
+		return undefined;
+	}
+
+	const unsupportedTopLevelOperators = new Set([
+		"and",
+		"as",
+		"else",
+		"if",
+		"in",
+		"is",
+		"not",
+		"or",
+		"!=",
+		"<",
+		"<=",
+		"==",
+		">",
+		">=",
+		"=",
+		":=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"**=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+		"&&",
+		"||",
+		"~=",
+	]);
+	if (
+		memberScan.topLevelIndexes.some((tokenIndex) =>
+			unsupportedTopLevelOperators.has(tokens[tokenIndex].value),
+		)
+	) {
+		return undefined;
+	}
+
+	const binaryOperatorValues = new Set(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>"]);
+	const splitIndexes = memberScan.topLevelIndexes.filter((tokenIndex) => {
+		const currentToken = tokens[tokenIndex];
+		if (tokenIndex <= rangeStart || !binaryOperatorValues.has(currentToken.value)) return false;
+		const previousToken = tokens[tokenIndex - 1];
+		return (
+			previousToken !== undefined &&
+			(previousToken.string === true ||
+				(previousToken.identifier === true && previousToken.type !== "keyword") ||
+				["bare_nodepath", "constant", "literal", "nodepath", "variable"].includes(previousToken.type ?? "") ||
+				[")", "]", "}"].includes(previousToken.value))
+		);
+	});
+	if (splitIndexes.length === 0) return undefined;
+
+	const segments = [...splitIndexes, rangeEnd].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? rangeStart : splitIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const firstLine = `${leadingWhitespace}(`;
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
+	const wrappedLines = [
+		firstLine,
+		...segments.map((segment) => `${continuationIndent}${segment}`),
+		closingLine,
+	];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines;
+}
+
+
 const dictionaryBooleanOperatorValues = new Set(["and", "or"]);
 const comparisonOperatorValues = new Set(["==", "!=", "<", "<=", ">", ">="]);
 const comparisonOperandPrefixValues = new Set(["+", "-", "!", "~", "not", "await"]);
@@ -1313,7 +1418,19 @@ function wrap_collection_candidate(
 							indentationUnit,
 							continuationIndentLevel,
 						)
-					: undefined);
+					: openingValue === "["
+						? wrap_long_array_member_binary_expression(
+							tokens,
+							renderedTokens,
+							memberRange.startIndex,
+							memberRange.endIndex,
+							collectionIndent,
+							",",
+							maxLineLength,
+							indentationUnit,
+							continuationIndentLevel,
+						)
+						: undefined);
 			if (!wrappedEntryLines || wrappedEntryLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
 				state.valid = false;
 				return state;
