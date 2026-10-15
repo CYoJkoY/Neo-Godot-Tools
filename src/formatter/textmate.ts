@@ -758,8 +758,6 @@ function wrap_function_call_candidate(
 	const commaIndexes = argumentScan.topLevelIndexes.filter(
 		(tokenIndex) => tokens[tokenIndex].value === ",",
 	);
-	if (commaIndexes.length === 0) return undefined;
-
 	const trailingCommaIndex = commaIndexes[commaIndexes.length - 1];
 	const hasTrailingComma = trailingCommaIndex === closeIndex - 1;
 	const argumentSeparatorIndexes = hasTrailingComma ? commaIndexes.slice(0, -1) : commaIndexes;
@@ -813,6 +811,17 @@ function wrap_function_call_candidate(
 					continuationIndentLevel,
 				) ??
 				wrap_collection_range(
+					tokens,
+					renderedTokens,
+					argumentRange.startIndex,
+					argumentRange.endIndex,
+					continuationIndent,
+					separator,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				) ??
+				wrap_long_binary_expression_range(
 					tokens,
 					renderedTokens,
 					argumentRange.startIndex,
@@ -1089,10 +1098,10 @@ function wrap_long_dictionary_entry_binary_value(
 
 
 /**
- * Wrap top-level arithmetic, bitwise, and shift operators in a single array member.
- * Mixed expressions and unsupported statement forms remain unchanged.
+ * Wrap top-level arithmetic, bitwise, and shift operators in an expression range.
+ * Parentheses preserve precedence, while unsupported expression forms remain unchanged.
  */
-function wrap_long_array_member_binary_expression(
+function wrap_long_binary_expression_range(
 	tokens: Token[],
 	renderedTokens: string[],
 	rangeStart: number,
@@ -1698,7 +1707,7 @@ function wrap_collection_candidate(
 							continuationIndentLevel,
 						)
 					: openingValue === "["
-						? wrap_long_array_member_binary_expression(
+						? wrap_long_binary_expression_range(
 							tokens,
 							renderedTokens,
 							memberRange.startIndex,
