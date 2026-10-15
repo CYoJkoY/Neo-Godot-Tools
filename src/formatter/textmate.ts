@@ -1475,8 +1475,23 @@ function wrap_long_ternary_expression(
 		const value = tokens[tokenIndex].value;
 		return value === "if" || value === "else" ? [{ index: tokenIndex, value }] : [];
 	});
-	const assignmentIndexes = boundaryScan.topLevelIndexes.filter(
-		(tokenIndex) => tokens[tokenIndex].value === "=" || tokens[tokenIndex].value === ":=",
+	const assignmentOperators = new Set([
+		"=",
+		":=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"**=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+	]);
+	const assignmentIndexes = boundaryScan.topLevelIndexes.filter((tokenIndex) =>
+		assignmentOperators.has(tokens[tokenIndex].value),
 	);
 	const markerSequenceIsValid =
 		boundaryScan.valid &&
