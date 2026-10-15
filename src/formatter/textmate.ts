@@ -280,6 +280,52 @@ function between(tokens: Token[], current: number, options: FormatterOptions) {
 	return "";
 }
 
+type MultilineStringDelimiter = '"""' | "'''";
+
+/** Recognize an unescaped multiline-string terminator within a lexical string token. */
+function contains_unescaped_multiline_string_delimiter(
+	text: string,
+	delimiter: MultilineStringDelimiter,
+): boolean {
+	const pattern = delimiter === '"""' ? /(?<!\\)(?:\\\\)*"""/ : /(?<!\\)(?:\\\\)*'''/;
+	return pattern.test(text);
+}
+
+/**
+ * Carry multiline-string state across physical lines, using TextMate string scopes
+ * so delimiters inside comments and ordinary strings do not open a multiline literal.
+ */
+function advance_multiline_string_delimiter(
+	line: TextLine,
+	tokenizedLine: vsctm.ITokenizeLineResult,
+	activeDelimiter: MultilineStringDelimiter | undefined,
+): MultilineStringDelimiter | undefined {
+	return tokenizedLine.tokens.reduce((currentDelimiter, token) => {
+		if (!token.scopes.includes("string.quoted.gdscript")) return currentDelimiter;
+
+		const tokenText = line.text.slice(token.startIndex, token.endIndex);
+		if (currentDelimiter) {
+			return contains_unescaped_multiline_string_delimiter(tokenText, currentDelimiter)
+				? undefined
+				: currentDelimiter;
+		}
+
+		const openingDelimiter =
+			tokenText.startsWith('"""') || tokenText.startsWith('r"""')
+				? '"""'
+				: tokenText.startsWith("'''") || tokenText.startsWith("r'''")
+					? "'''"
+					: undefined;
+		if (!openingDelimiter) return currentDelimiter;
+
+		const openingOffset = tokenText.startsWith("r") ? 1 : 0;
+		const openingEnd = openingOffset + openingDelimiter.length;
+		return contains_unescaped_multiline_string_delimiter(tokenText.slice(openingEnd), openingDelimiter)
+			? undefined
+			: openingDelimiter;
+	}, activeDelimiter);
+}
+
 function is_comment(line: TextLine): boolean {
 	return line.text[line.firstNonWhitespaceCharacterIndex] === "#";
 }
@@ -1900,6 +1946,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	let onlyEmptyLinesSoFar = true;
 	let emptyLineCount = 0;
 	let inLambdaBody = false;
+	let multilineStringDelimiter: MultilineStringDelimiter | undefined = undefined;
 	const matchContexts: { indentation: string; caseIndentation?: string }[] = [];
 	const inlineIndentContexts: InlineIndentContext[] = [];
 	for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
@@ -1908,6 +1955,13 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		// Advance lexical state before any skip path. Lines that look like comments,
 		// blank lines, or conflict markers can still occur inside multiline strings.
 		lineTokens = activeGrammar.tokenizeLine(line.text, lineTokens?.ruleStack ?? vsctm.INITIAL);
+
+		const lineStartedInsideMultilineString = multilineStringDelimiter !== undefined;
+		multilineStringDelimiter = advance_multiline_string_delimiter(line, lineTokens, multilineStringDelimiter);
+		if (lineStartedInsideMultilineString) {
+			// Whitespace and indentation in multiline string continuations are literal data.
+			continue;
+		}
 
 		// skip empty lines
 		if (line.isEmptyOrWhitespace) {
