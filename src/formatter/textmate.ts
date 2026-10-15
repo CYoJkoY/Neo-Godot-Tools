@@ -2274,10 +2274,12 @@ function preserves_source_characters(source: string, formatted: string): boolean
 			if (!state.valid) return state;
 			const expected = sourceUnits[state.sourceIndex];
 			if (expected && expected.kind === unit.kind && expected.value === unit.value) {
-				return { ...state, sourceIndex: state.sourceIndex + 1 };
+				state.sourceIndex++;
+				return state;
 			}
 			if (unit.kind === "character" && FORMATTER_GENERATED_DELIMITERS.has(unit.value)) return state;
-			return { ...state, valid: false };
+			state.valid = false;
+			return state;
 		},
 		{ sourceIndex: 0, valid: true },
 	);
