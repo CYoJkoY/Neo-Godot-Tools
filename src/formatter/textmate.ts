@@ -596,7 +596,7 @@ function wrap_long_boolean_condition(
 			indentationUnit,
 			continuationIndentLevel,
 		);
-		if (nestedLines && nestedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)) {
+		if (nestedLines?.every((wrappedLine) => wrappedLine.length <= maxLineLength)) {
 			groups.push(nestedLines);
 			return groups;
 		}
