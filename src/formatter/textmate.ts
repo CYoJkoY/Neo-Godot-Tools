@@ -726,7 +726,6 @@ const comparisonIncompleteExpressionValues = new Set([
 	"==",
 	">",
 	">=",
-	"!=",
 	"and",
 	"as",
 	"else",
@@ -776,16 +775,13 @@ function has_valid_dictionary_comparison_operands(
 			return false;
 		}
 
-		let rightOperandStart = operatorIndex + 1;
-		while (
-			rightOperandStart < rightSegmentEnd &&
-			comparisonOperandPrefixValues.has(tokens[rightOperandStart].value)
-		) {
-			rightOperandStart++;
-		}
-		if (rightOperandStart >= rightSegmentEnd) return false;
+		const rightOperandTokens = tokens.slice(operatorIndex + 1, rightSegmentEnd);
+		const firstOperandIndex = rightOperandTokens.findIndex(
+			(token) => !comparisonOperandPrefixValues.has(token.value),
+		);
+		if (firstOperandIndex < 0) return false;
 
-		const firstOperandToken = tokens[rightOperandStart];
+		const firstOperandToken = rightOperandTokens[firstOperandIndex];
 		return (
 			!dictionaryComparisonOperatorValues.has(firstOperandToken.value) &&
 			!["and", "or", "if", "else", "=", ":=", ".", ",", ":"].includes(firstOperandToken.value)
@@ -869,8 +865,8 @@ function wrap_long_dictionary_entry_operator_value(
 		if (segmentIndex === 0) return true;
 
 		const leadingOperator = operatorKind === "boolean"
-			? /^(and|or)\\b/.exec(segmentText)
-			: /^(==|!=|<=|>=|<|>)\\b?/.exec(segmentText);
+			? /^(and|or)\b/.exec(segmentText)
+			: /^(==|!=|<=|>=|<|>)/.exec(segmentText);
 		if (!leadingOperator) return false;
 		const expressionText = segmentText.slice(leadingOperator[0].length).trim();
 		if (operatorKind === "boolean") return expressionText.length > 0 && expressionText !== "not";
@@ -879,7 +875,7 @@ function wrap_long_dictionary_entry_operator_value(
 	if (!segmentsAreValid) return undefined;
 
 	const expressionPrefix = renderedTokens.slice(rangeStart, valueStart).join("");
-	const valueSpacing = renderedTokens[valueStart].match(/^\\s*/)?.[0] ?? "";
+	const valueSpacing = renderedTokens[valueStart].match(/^\s*/)?.[0] ?? "";
 	const firstLine = `${leadingWhitespace + expressionPrefix}${valueSpacing}(`;
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
 	const closingLine = `${leadingWhitespace})${trailingSuffix}`;
