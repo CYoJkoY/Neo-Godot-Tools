@@ -422,12 +422,18 @@ function wrap_long_boolean_condition(
 	);
 	if (!scan.valid || splitIndexes.length === 0) return undefined;
 
-	const boundaries = [...splitIndexes, endIndex];
-	const terms = boundaries.map((end, index) => {
-		const start = index === 0 ? 1 : boundaries[index - 1];
-		return renderedTokens.slice(start, end).join("").trim();
-	});
-	if (terms.some((term) => term.length === 0)) return undefined;
+	const termRanges = [...splitIndexes, endIndex].map((endIndex, termIndex) => ({
+		startIndex: termIndex === 0 ? 1 : splitIndexes[termIndex - 1],
+		endIndex,
+	}));
+	if (
+		termRanges.some(
+			({ startIndex, endIndex }) =>
+				renderedTokens.slice(startIndex, endIndex).join("").trim().length === 0,
+		)
+	) {
+		return undefined;
+	}
 
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
@@ -436,10 +442,44 @@ function wrap_long_boolean_condition(
 			: 2;
 	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const wrappedTermGroups = termRanges.reduce<string[][] | undefined>((groups, termRange) => {
+		if (!groups) return undefined;
 
-	return `${leadingWhitespace}${renderedTokens[0].trim()} (\n${terms
-		.map((term) => `${continuationIndent}${term}`)
-		.join("\n")}\n${leadingWhitespace}):`;
+		const term = renderedTokens.slice(termRange.startIndex, termRange.endIndex).join("").trim();
+		const singleLine = continuationIndent + term;
+		if (singleLine.length <= maxLineLength) {
+			groups.push([singleLine]);
+			return groups;
+		}
+
+		const nestedLines = wrap_function_call_range(
+			tokens,
+			renderedTokens,
+			termRange.startIndex,
+			termRange.endIndex,
+			continuationIndent,
+			"",
+			maxLineLength,
+			indentationUnit,
+			continuationIndentLevel,
+		);
+		if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			return undefined;
+		}
+		groups.push(nestedLines);
+		return groups;
+	}, []);
+
+	if (!wrappedTermGroups) return undefined;
+
+	const wrappedLines = [
+		leadingWhitespace + renderedTokens[0].trim() + " (",
+		...wrappedTermGroups.flat(),
+		leadingWhitespace + "):",
+	];
+	return wrappedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)
+		? wrappedLines.join("\n")
+		: undefined;
 }
 
 /**
