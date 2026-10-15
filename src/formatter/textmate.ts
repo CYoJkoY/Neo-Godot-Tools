@@ -2245,7 +2245,7 @@ function get_inline_block_chain(
 type FormatterIntegrityUnit = { kind: "payload" | "character"; value: string };
 
 const FORMATTER_INTEGRITY_PATTERN =
-	/("""[\\s\\S]*?(?:"""|$)|'''[\\s\\S]*?(?:'''|$)|"(?:\\\\.|[^"\\\\])*(?:"|$)|'(?:\\\\.|[^'\\\\])*(?:'|$)|#.*|[^\\s])/g;
+	/("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|#.*|[^\s])/g;
 const FORMATTER_GENERATED_DELIMITERS = new Set(["(", ")", ","]);
 
 /**
@@ -2255,7 +2255,7 @@ const FORMATTER_GENERATED_DELIMITERS = new Set(["(", ")", ","]);
 function get_formatter_integrity_units(source: string): FormatterIntegrityUnit[] {
 	return (source.match(FORMATTER_INTEGRITY_PATTERN) ?? []).map((value) => ({
 		kind:
-			value.startsWith("#") || value.startsWith('"') || value.startsWith("'")
+			value.startsWith("#") || value.startsWith("\"") || value.startsWith("'")
 				? "payload"
 				: "character",
 		value,
