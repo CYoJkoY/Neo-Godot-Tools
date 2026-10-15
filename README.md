@@ -53,14 +53,16 @@ Godot development tools for Visual Studio Code with local-first GDScript intelli
 
 ## Compatibility
 
-| Component | Release validation |
+| Component | Compatibility target / automated coverage |
 | --- | --- |
-| Godot 3 | **3.6.2** smoke-tested in CI |
-| Godot 4 | **4.5.1** and **4.7** smoke-tested in CI |
+| Godot 3 | **3.6.2** is a documented compatibility target; engine-in-the-loop checks are opt-in |
+| Godot 4 | **4.5.1** and **4.7** are documented compatibility targets; engine-in-the-loop checks are opt-in |
 | Visual Studio Code | `^1.96.0` |
-| CI platforms | Ubuntu and Windows |
+| Standard GitHub Actions CI | Ubuntu (`ubuntu-latest`) only; no Windows runner matrix |
 
-Godot 3 releases older than 3.6 are outside the automated release-validation matrix. Other Godot 4 releases may work, but are not individually covered by the CI matrix.
+The standard CI workflow checks TypeScript compilation, unit and release tooling, coding standards, formatter snapshots, and VSIX packaging. The checked-in CI and release workflows do not automatically invoke the Godot engine-in-the-loop runner (`npm run test:engine`), so the Godot versions above should not be interpreted as an automatically exercised engine-version matrix.
+
+Godot 3 releases older than 3.6 remain outside the project's documented compatibility target. Other Godot 4 releases may work, but are not individually covered by an automated engine-in-the-loop matrix.
 
 ## Installation
 
