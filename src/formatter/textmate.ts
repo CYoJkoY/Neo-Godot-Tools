@@ -675,18 +675,18 @@ function wrap_long_dictionary_entry_ternary_value(
 		markers.every((marker, markerIndex) => marker.value === (markerIndex % 2 === 0 ? "if" : "else"));
 	if (!markerSequenceIsValid) return undefined;
 
-	for (let markerIndex = 0; markerIndex < markers.length; markerIndex += 2) {
-		const ifMarker = markers[markerIndex];
-		const elseMarker = markers[markerIndex + 1];
-		const branchStart = markerIndex === 0 ? valueStart : markers[markerIndex - 1].index + 1;
-		if (
-			ifMarker.index <= branchStart ||
-			elseMarker.index <= ifMarker.index + 1 ||
-			elseMarker.index >= rangeEnd - 1
-		) {
-			return undefined;
-		}
-	}
+	const branchesAreComplete = markers
+		.filter((_, markerIndex) => markerIndex % 2 === 0)
+		.every((ifMarker, pairIndex) => {
+			const elseMarker = markers[pairIndex * 2 + 1];
+			const branchStart = pairIndex === 0 ? valueStart : markers[pairIndex * 2 - 1].index + 1;
+			return (
+				ifMarker.index > branchStart &&
+				elseMarker.index > ifMarker.index + 1 &&
+				elseMarker.index < rangeEnd - 1
+			);
+		});
+	if (!branchesAreComplete) return undefined;
 
 	const elseIndexes = markers
 		.filter((marker) => marker.value === "else")
