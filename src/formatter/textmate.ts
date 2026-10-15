@@ -2341,11 +2341,13 @@ function format_token_line(
 	return (
 		format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize) ??
 		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		// Prefer preserving a compact assigned call before general expression wrappers
+		// can split the call's own argument list.
+		wrap_long_assignment_call_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
-		wrap_long_assignment_call_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
