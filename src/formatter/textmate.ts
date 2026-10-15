@@ -717,7 +717,7 @@ function wrap_long_dictionary_entry_arithmetic_value(
 
 
 const dictionaryBooleanOperatorValues = new Set(["and", "or"]);
-const dictionaryComparisonOperatorValues = new Set(["==", "!=", "<", "<=", ">", ">="]);
+const comparisonOperatorValues = new Set(["==", "!=", "<", "<=", ">", ">="]);
 const comparisonOperandPrefixValues = new Set(["+", "-", "!", "~", "not", "await"]);
 const comparisonIncompleteExpressionValues = new Set([
 	"!=",
@@ -757,7 +757,7 @@ const comparisonIncompleteExpressionValues = new Set([
 /**
  * Verify comparison operands are present before introducing line breaks at symbolic comparisons.
  */
-function has_valid_dictionary_comparison_operands(
+function has_valid_comparison_operands(
 	tokens: Token[],
 	splitIndexes: number[],
 	rangeEnd: number,
@@ -783,7 +783,7 @@ function has_valid_dictionary_comparison_operands(
 
 		const firstOperandToken = rightOperandTokens[firstOperandIndex];
 		return (
-			!dictionaryComparisonOperatorValues.has(firstOperandToken.value) &&
+			!comparisonOperatorValues.has(firstOperandToken.value) &&
 			!["and", "or", "if", "else", "=", ":=", ".", ",", ":"].includes(firstOperandToken.value)
 		);
 	});
@@ -848,7 +848,7 @@ function wrap_long_dictionary_entry_operator_value(
 	if (splitIndexes.length === 0 || splitIndexes[0] <= valueStart) return undefined;
 	if (
 		operatorKind === "comparison" &&
-		!has_valid_dictionary_comparison_operands(tokens, splitIndexes, rangeEnd)
+		!has_valid_comparison_operands(tokens, splitIndexes, rangeEnd)
 	) {
 		return undefined;
 	}
@@ -938,7 +938,7 @@ function wrap_long_dictionary_entry_comparison_value(
 		maxLineLength,
 		indentationUnit,
 		continuationIndentLevel,
-		dictionaryComparisonOperatorValues,
+		comparisonOperatorValues,
 		"comparison",
 	);
 }
@@ -1554,6 +1554,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_arithmetic_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
@@ -1850,6 +1851,114 @@ function wrap_long_arithmetic_expression(
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
 		: wrappedLines.join("\\n");
+}
+
+/**
+ * Wrap safe top-level symbolic comparisons in assignment, declaration, and return expressions.
+ * Mixed boolean chains and ambiguous statements remain unchanged.
+ */
+function wrap_long_comparison_expression(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+): string | undefined {
+	const maxLineLength = get_max_line_length(options);
+	if (currentLine.length <= maxLineLength || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	if (
+		firstValue.startsWith("@") ||
+		["class", "class_name", "elif", "enum", "extends", "for", "func", "if", "match", "signal", "while"].includes(
+			firstValue,
+		)
+	) {
+		return undefined;
+	}
+	if (
+		tokens.some(
+			(token) =>
+				token.type === "comment" ||
+				(!token.string &&
+					(token.value === "func" ||
+						token.value === ";" ||
+						(token.value.length === 1 && token.value.charCodeAt(0) === 92))),
+		),
+	) {
+		return undefined;
+	}
+
+	const boundaryScan = scan_token_boundaries(tokens);
+	if (!boundaryScan.valid) return undefined;
+	const topLevelIndexes = boundaryScan.topLevelIndexes;
+	const splitIndexes = topLevelIndexes.filter((tokenIndex) =>
+		comparisonOperatorValues.has(tokens[tokenIndex].value),
+	);
+	if (splitIndexes.length === 0) return undefined;
+
+	const assignmentIndexes = topLevelIndexes.filter((tokenIndex) =>
+		["=", ":="].includes(tokens[tokenIndex].value),
+	);
+	if (firstValue === "return" && assignmentIndexes.length > 0) return undefined;
+	if (firstValue !== "return" && assignmentIndexes.length !== 1) return undefined;
+	const expressionStart = firstValue === "return" ? 1 : assignmentIndexes[0] + 1;
+	if (expressionStart <= 0 || expressionStart >= splitIndexes[0]) return undefined;
+
+	const expressionSplitIndexes = splitIndexes.filter((tokenIndex) => tokenIndex >= expressionStart);
+	if (
+		expressionSplitIndexes.length === 0 ||
+		!has_valid_comparison_operands(tokens, expressionSplitIndexes, tokens.length)
+	) {
+		return undefined;
+	}
+
+	const unsupportedTopLevelValues = new Set([
+		"&&",
+		"||",
+		"and",
+		"as",
+		"else",
+		"if",
+		"in",
+		"is",
+		"not",
+		"or",
+	]);
+	if (
+		topLevelIndexes.some(
+			(tokenIndex) =>
+				tokenIndex >= expressionStart &&
+				unsupportedTopLevelValues.has(tokens[tokenIndex].value),
+		)
+	) {
+		return undefined;
+	}
+
+	const segments = [...expressionSplitIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : expressionSplitIndexes[segmentIndex - 1];
+		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
+	});
+	if (segments.some((segment) => segment.length === 0)) return undefined;
+
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+	const configuredIndentLevel = options.continuationIndentLevel;
+	const continuationIndentLevel =
+		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
+			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
+			: 2;
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const expressionPrefix =
+		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
+	const wrappedLines = [
+		leadingWhitespace + expressionPrefix + "(",
+		...segments.map((segment) => continuationIndent + segment),
+		leadingWhitespace + ")",
+	];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines.join("\n");
 }
 
 /**
