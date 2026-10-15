@@ -2,13 +2,59 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.13.2 — 2026-10-09 (pending)
+### 2.14.0 — 2026-10-15 (pending)
+
+Changes since [v2.13.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.2...v2.14.0).
+
+#### Added
+
+- **formatter:** wrap long boolean conditions ([#110](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/110))
+- **formatter:** wrap long single-line function calls ([#114](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/114))
+- **formatter:** wrap long inline collections ([#116](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/116))
+- **formatter:** wrap long ternary expressions ([#117](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/117))
+- **formatter:** wrap long boolean expressions in assignments and returns ([#118](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/118))
+- **formatter:** wrap long function declarations ([#120](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/120))
+- **formatter:** wrap long method and property chains ([#122](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/122))
+- **formatter:** wrap long additive expressions in assignments and returns ([#124](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/124))
+- **formatter:** wrap long multiplicative and mixed arithmetic expressions ([#127](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/127))
+- **formatter:** wrap nested function calls and long arguments safely ([#129](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/129))
+- **formatter:** normalize enums and recursively wrap collections ([#132](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/132))
+- **formatter:** wrap long function-call values in dictionary entries ([#134](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/134))
+- **formatter:** wrap long arithmetic expressions in dictionary values ([#136](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/136))
+- **formatter:** wrap long boolean expressions in dictionary values ([#138](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/138))
+- **formatter:** wrap long comparison expressions in dictionary values ([#140](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/140))
+- **formatter:** wrap long comparison expressions in assignments and returns ([#142](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/142))
+- **formatter:** wrap long ternary expressions in dictionary values ([#146](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/146))
+- **formatter:** wrap long bitwise and shift expressions ([#148](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/148))
+- **formatter:** wrap long compound-assignment expressions ([#150](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/150))
+- **formatter:** wrap dictionary bitwise and shift expressions ([#153](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/153))
+- **formatter:** wrap ternary expressions after compound assignments ([#154](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/154))
+- **formatter:** wrap long binary expressions in array members ([#156](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/156))
+
+#### Fixed
+
+- **formatter:** preserve tokenizer state across skipped lines ([#108](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/108))
+- **actions:** skip changelog sync when version is unchanged ([#112](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/112))
+- **formatter:** emit real newlines for arithmetic expression wrapping ([#144](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/144))
+- **formatter:** enforce multiline block suites ([#160](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/160))
+- **formatter:** preserve comment indentation after inline suite expansion ([#161](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/161))
+
+#### Maintenance
+
+- **formatter:** centralize token boundary scanning ([#126](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/126))
+- **formatter:** run existing formatter snapshots in CI ([#158](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/158))
+
+### 2.13.2 — 2026-10-09
 
 Changes since [v2.13.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13.1...v2.13.2).
 
 #### Added
 
 - **syntaxes:** update Godot TextMate grammars ([5bfd07b](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/5bfd07b2a6de77543679d1cb2f64c94facca02d4))
+
+#### Changed
+
+- Update CHANGELOG.md ([e25ce19](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/e25ce19dbc7f5ee3c0804b2a5f88dc0d6eb4d7c6))
 
 #### Documentation
 
@@ -18,6 +64,7 @@ Changes since [v2.13.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.13
 
 - **deps:** bump actions/upload-artifact from 4 to 6 ([#105](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/105))
 - **deps:** bump actions/setup-node from 5 to 6 ([#106](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/106))
+- **changelog:** update changelog workflow authentication and commit message ([fbbab8c](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/fbbab8cf19c38b2d9550653bcd4b3b6dde149439))
 
 ### 2.13.1 — 2026-10-04
 
