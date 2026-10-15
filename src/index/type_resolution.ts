@@ -36,6 +36,7 @@ const BUILTIN_TYPES = new Set([
 	"Object",
 	"RefCounted",
 	"Resource",
+	"WeakRef",
 	"Array",
 	"Dictionary",
 	"Callable",
@@ -273,6 +274,7 @@ export function createTypeResolutionIndex(
 	files: FileIndex,
 	symbols: SymbolIndex,
 	bindings: BindingIndex,
+	getBuiltinReturnType?: (name: string) => string | undefined,
 ): TypeResolutionIndex {
 	const nameCache = new Map<string, { signature: string; value: ResolvedType | null }>();
 
@@ -523,12 +525,17 @@ export function createTypeResolutionIndex(
 	const resolveCallResult = (uri: string, offset: number, name: string): ResolvedType | undefined => {
 		const binding = bindings.getBinding(uri, offset, name);
 		if (binding) {
-			const type = resolveBinding(binding, offset);
-			if (type) return type;
+			// A local or project binding shadows a global builtin even when its
+			// return type is unknown; never guess through that shadowing.
+			return resolveBinding(binding, offset);
 		}
 		const named = resolveName(name);
 		if (named) return named;
 		const functions = symbols.find(name).filter((symbol) => symbol.kind === "function");
+		if (functions.length === 0) {
+			const builtinReturnType = getBuiltinReturnType?.(name);
+			return builtinReturnType ? resolveTypeReference(builtinReturnType) : undefined;
+		}
 		if (functions.length !== 1) return undefined;
 		const fn = functions[0];
 		return fn.returnType

@@ -90,7 +90,7 @@ Local analysis currently covers:
 
 A builtin catalog now provides local intelligence for common language-level functions such as `abs`, `clamp`, `lerp`, `load`, `preload`, `print`, and `typeof`, including completion/hover/signature-help metadata.
 
-Builtin return-type propagation into the general type-resolution graph remains an explicit follow-up item.
+The type-resolution index now consumes known return types from the builtin catalog when no project function shadows that name. Unknown, `void`, and unsupported return types remain unresolved; this does not replace the native Godot API model.
 
 ### Godot Engine API scope
 
@@ -218,10 +218,9 @@ The architecture is now sufficiently established to move from broad restructurin
 3. add provider-level routing counters where profiling is insufficient;
 4. expand native Godot API modeling for methods, properties, signals, and constants;
 5. add regression fixtures for native-member navigation and compatibility failures;
-6. add builtin return-type propagation to `TypeResolutionIndex`;
-7. improve expression/range parsing only where measured gaps exist;
-8. harden LSP failure/cancellation from measured failures;
-9. reconsider persistent disk caching or worker threads only if evidence justifies them.
+6. improve expression/range parsing only where measured gaps exist;
+7. harden LSP failure/cancellation from measured failures;
+8. reconsider persistent disk caching or worker threads only if evidence justifies them.
 
 ## 10. Explicitly deferred
 
