@@ -497,7 +497,8 @@ function wrap_function_call_range(
 					const separator = argumentRange.isLastArgument ? `)${suffix}` : ",";
 					const singleLine = continuationIndent + argumentText + separator;
 					if (singleLine.length <= maxLineLength) {
-						return { ...state, lines: [...state.lines, singleLine] };
+						state.lines.push(singleLine);
+						return state;
 					}
 
 					const nestedLines = wrap_function_call_range(
@@ -512,9 +513,11 @@ function wrap_function_call_range(
 						continuationIndentLevel,
 					);
 					if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
-						return { ...state, valid: false };
+						state.valid = false;
+						return state;
 					}
-					return { ...state, lines: [...state.lines, ...nestedLines] };
+					state.lines.push(...nestedLines);
+					return state;
 				},
 				{ valid: true, lines: [] as string[] },
 			);
