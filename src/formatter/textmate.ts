@@ -649,13 +649,11 @@ function wrap_long_boolean_condition(
  * Keep a short single-argument call intact when the assignment target alone makes its line too long.
  * Parenthesize the right-hand side instead of unnecessarily splitting the call's argument layout.
  */
-function wrap_long_assignment_call_expression(
+function preserve_assignment_call_with_fewer_than_two_arguments(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
-	document: TextDocument,
 	options: FormatterOptions,
-	tabSize: number,
 	currentLineWidth: number,
 ): string | undefined {
 	const maxLineLength = get_max_line_length(options);
@@ -753,6 +751,7 @@ function wrap_long_assignment_call_expression(
 	) {
 		return undefined;
 	}
+
 	const callableToken = tokens[openIndex - 1];
 	const isCallable =
 		callableToken !== undefined &&
@@ -765,39 +764,15 @@ function wrap_long_assignment_call_expression(
 	const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
 	if (!argumentScan.valid) return undefined;
 	const commaIndexes = argumentScan.topLevelIndexes.filter((tokenIndex) => tokens[tokenIndex].value === ",");
-	if (commaIndexes.length > 1 || (commaIndexes.length === 1 && commaIndexes[0] !== closeIndex - 1)) {
-		return undefined;
-	}
-	const argumentEndIndex = commaIndexes[0] ?? closeIndex;
-	if (renderedTokens.slice(openIndex + 1, argumentEndIndex).join("").trim().length === 0) {
-		return undefined;
-	}
+	const trailingCommaIndex = commaIndexes[commaIndexes.length - 1];
+	const hasTrailingComma = trailingCommaIndex === closeIndex - 1;
+	const argumentSeparatorIndexes = hasTrailingComma ? commaIndexes.slice(0, -1) : commaIndexes;
+	const hasArguments = renderedTokens.slice(openIndex + 1, closeIndex).join("").trim().length > 0;
+	const argumentCount = hasArguments ? argumentSeparatorIndexes.length + 1 : 0;
 
-	const expression = renderedTokens.slice(expressionStart).join("").trim();
-	// If the complete RHS call fits on its own, do not split it just because
-	// a long identifier or type annotation makes the assignment line exceed the limit.
-	if (get_line_width(expression, tabSize) <= maxLineLength) {
-		return leadingWhitespace + renderedTokens.join("");
-	}
-
-	const configuredIndentLevel = options.continuationIndentLevel;
-	const continuationIndentLevel =
-		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
-			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
-			: 1;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace, tabSize);
-	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
-	const expressionPrefix =
-		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
-	const wrappedLines = [
-		`${leadingWhitespace + expressionPrefix}(`,
-		`${continuationIndent}${expression}`,
-		`${leadingWhitespace})`,
-	];
-
-	return wrappedLines.some((wrappedLine) => get_line_width(wrappedLine, tabSize) > maxLineLength)
-		? undefined
-		: wrappedLines.join("\n");
+	// Preserve calls with zero or one argument as a single line. Their multiline
+	// parentheses make otherwise similar assignment declarations visually uneven.
+	return argumentCount < 2 ? leadingWhitespace + renderedTokens.join("") : undefined;
 }
 
 
@@ -955,6 +930,9 @@ function wrap_function_call_candidate(
 	) {
 		return undefined;
 	}
+	// Only multiline-wrap calls with multiple arguments. Single-argument calls
+	// stay compact instead of gaining a visually noisy block of parentheses.
+	if (argumentRanges.length < 2) return undefined;
 
 	const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
 	const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
@@ -2349,7 +2327,7 @@ function format_token_line(
 		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		// Prefer preserving a compact assigned call before general expression wrappers
 		// can split the call's own argument list.
-		wrap_long_assignment_call_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
+		preserve_assignment_call_with_fewer_than_two_arguments(tokens, renderedTokens, leadingWhitespace, options, currentLineWidth) ??
 		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
 		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, document, options, tabSize, currentLineWidth) ??
