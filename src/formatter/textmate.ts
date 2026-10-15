@@ -1952,9 +1952,9 @@ function wrap_long_comparison_expression(
 	const expressionPrefix =
 		renderedTokens.slice(0, expressionStart).join("") + between(tokens, expressionStart, options);
 	const wrappedLines = [
-		leadingWhitespace + expressionPrefix + "(",
+		`${leadingWhitespace + expressionPrefix}(`,
 		...segments.map((segment) => continuationIndent + segment),
-		leadingWhitespace + ")",
+		`${leadingWhitespace})`,
 	];
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
