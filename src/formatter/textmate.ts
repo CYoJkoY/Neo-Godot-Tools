@@ -1948,27 +1948,39 @@ function has_supported_variable_declaration_prefix(
 	tokens: Token[],
 	variableIndex: number,
 	matchingClosers: Map<number, number>,
+	prefixIndex = tokens[0]?.value === "static" ? 1 : 0,
 ): boolean {
-	let prefixIndex = tokens[0]?.value === "static" ? 1 : 0;
-	while (prefixIndex < variableIndex) {
-		const prefixValue = tokens[prefixIndex]?.value ?? "";
-		if (prefixValue === "@") {
-			const annotationName = tokens[prefixIndex + 1]?.value ?? "";
-			if (!/^[A-Za-z_]\w*$/.test(annotationName)) return false;
-			prefixIndex += 2;
-		} else if (prefixValue.startsWith("@")) {
-			prefixIndex += 1;
-		} else {
-			return false;
-		}
+	if (prefixIndex === variableIndex) return true;
+	if (prefixIndex > variableIndex) return false;
 
-		if (tokens[prefixIndex]?.value === "(") {
-			const closingIndex = matchingClosers.get(prefixIndex);
-			if (closingIndex === undefined || closingIndex >= variableIndex) return false;
-			prefixIndex = closingIndex + 1;
-		}
+	const prefixValue = tokens[prefixIndex]?.value ?? "";
+	if (prefixValue !== "@" && !prefixValue.startsWith("@")) return false;
+	const annotationNameIndex = prefixValue === "@" ? prefixIndex + 1 : prefixIndex;
+	if (
+		prefixValue === "@" &&
+		!/^[A-Za-z_]\w*$/.test(tokens[annotationNameIndex]?.value ?? "")
+	) {
+		return false;
 	}
-	return prefixIndex === variableIndex;
+
+	const annotationEndIndex = prefixValue === "@" ? prefixIndex + 2 : prefixIndex + 1;
+	if (tokens[annotationEndIndex]?.value !== "(") {
+		return has_supported_variable_declaration_prefix(
+			tokens,
+			variableIndex,
+			matchingClosers,
+			annotationEndIndex,
+		);
+	}
+
+	const closingIndex = matchingClosers.get(annotationEndIndex);
+	if (closingIndex === undefined || closingIndex >= variableIndex) return false;
+	return has_supported_variable_declaration_prefix(
+		tokens,
+		variableIndex,
+		matchingClosers,
+		closingIndex + 1,
+	);
 }
 
 function find_inline_suite_boundary(
