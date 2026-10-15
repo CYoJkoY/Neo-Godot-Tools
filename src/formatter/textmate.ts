@@ -2477,7 +2477,7 @@ function collapse_multiline_single_string_call(
 	if (argumentLine.trimEnd().endsWith(",")) return undefined;
 
 	const indentation = openingMatch[1];
-	const collapsedText = indentation + openingMatch[2] + "(" + argumentMatch[1] + ")";
+	const collapsedText = `${indentation + openingMatch[2]}(${argumentMatch[1]})`;
 	return { endLine: closingLineNumber, text: collapsedText };
 }
 
