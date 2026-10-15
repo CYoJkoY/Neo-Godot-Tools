@@ -401,72 +401,165 @@ function wrap_long_function_call(
 		return undefined;
 	}
 
-	const boundaryScan = scan_token_boundaries(tokens);
-	if (!boundaryScan.valid) return undefined;
-	const matchingClosers = new Map(
-		[...boundaryScan.matchingClosers.entries()].filter(
-			([openIndex]) => tokens[openIndex]?.value === "(",
-		),
-	);
+	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
 	const configuredIndentLevel = options.continuationIndentLevel;
 	const continuationIndentLevel =
 		typeof configuredIndentLevel === "number" && Number.isFinite(configuredIndentLevel)
 			? Math.max(1, Math.min(4, Math.round(configuredIndentLevel)))
 			: 2;
-	const indentationUnit = get_indentation_unit(document, leadingWhitespace);
-	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const wrappedLines = wrap_function_call_range(
+		tokens,
+		renderedTokens,
+		0,
+		tokens.length,
+		leadingWhitespace,
+		"",
+		maxLineLength,
+		indentationUnit,
+		continuationIndentLevel,
+	);
+	return wrappedLines?.join("\n");
+}
 
-	for (const [openIndex, closeIndex] of [...matchingClosers.entries()].sort((leftPair, rightPair) => leftPair[0] - rightPair[0])) {
-		const callableToken = tokens[openIndex - 1];
-		const isCallable =
-			callableToken !== undefined &&
-			!callableToken.string &&
-			((callableToken.identifier === true &&
-				(callableToken.type !== "keyword" || ["assert", "yield"].includes(callableToken.value))) ||
-				[")", "]"].includes(callableToken.value));
-		if (!isCallable) continue;
 
-		const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
-		const commaIndexes = argumentScan.topLevelIndexes.filter(
-			(tokenIndex) => tokens[tokenIndex].value === ",",
+/**
+ * Wraps one validated call within a token range, recursively laying out long nested arguments.
+ * All slices use the source token indexes so operators, delimiters, and suffixes stay ordered.
+ */
+function wrap_function_call_range(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const boundaryScan = scan_token_boundaries(tokens, rangeStart, rangeEnd);
+	if (!boundaryScan.valid) return undefined;
+
+	return [...boundaryScan.matchingClosers.entries()]
+		.filter(
+			([openIndex, closeIndex]) =>
+				openIndex >= rangeStart &&
+				closeIndex < rangeEnd &&
+				tokens[openIndex]?.value === "(",
+		)
+		.sort((leftPair, rightPair) => leftPair[0] - rightPair[0])
+		.reduce<string[] | undefined>(
+			(wrappedLines, [openIndex, closeIndex]) =>
+				wrappedLines ??
+				wrap_function_call_candidate(
+					tokens,
+					renderedTokens,
+					rangeStart,
+					rangeEnd,
+					openIndex,
+					closeIndex,
+					leadingWhitespace,
+					trailingSuffix,
+					maxLineLength,
+					indentationUnit,
+					continuationIndentLevel,
+				),
+			undefined,
 		);
-		if (!argumentScan.valid || commaIndexes.length === 0) continue;
+}
 
-		const argumentSegments: string[] = [];
-		let segmentStart = openIndex + 1;
-		let segmentsValid = true;
-		for (const commaIndex of commaIndexes) {
-			const argumentText = renderedTokens.slice(segmentStart, commaIndex).join("").trim();
-			if (!argumentText) {
-				segmentsValid = false;
-				break;
-			}
-			argumentSegments.push(argumentText);
-			segmentStart = commaIndex + 1;
-		}
-		if (!segmentsValid) continue;
-		const finalArgument = renderedTokens.slice(segmentStart, closeIndex).join("").trim();
-		if (!finalArgument) continue;
-		argumentSegments.push(finalArgument);
 
-		const prefix = renderedTokens.slice(0, openIndex + 1).join("");
-		const suffix = renderedTokens.slice(closeIndex + 1).join("");
-		const firstLine = leadingWhitespace + prefix;
-		const wrappedLines = [
-			firstLine,
-			...argumentSegments.map((argumentText, argumentIndex) => {
-				const isLastArgument = argumentIndex === argumentSegments.length - 1;
-				return `${continuationIndent}${argumentText}${isLastArgument ? `)${suffix}` : ","}`;
-			}),
-		];
+/** Render one candidate call and recursively wrap only argument lines that need it. */
+function wrap_function_call_candidate(
+	tokens: Token[],
+	renderedTokens: string[],
+	rangeStart: number,
+	rangeEnd: number,
+	openIndex: number,
+	closeIndex: number,
+	leadingWhitespace: string,
+	trailingSuffix: string,
+	maxLineLength: number,
+	indentationUnit: string,
+	continuationIndentLevel: number,
+): string[] | undefined {
+	const callableToken = tokens[openIndex - 1];
+	const isCallable =
+		callableToken !== undefined &&
+		!callableToken.string &&
+		((callableToken.identifier === true &&
+			(callableToken.type !== "keyword" || ["assert", "yield"].includes(callableToken.value))) ||
+			[")", "]"].includes(callableToken.value));
+	if (!isCallable) return undefined;
 
-		// Keep the transform idempotent: if any generated line is still too long,
-		// leave this call unchanged rather than requiring another formatting pass.
-		if (wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) continue;
-		return wrappedLines.join("\n");
+	const argumentScan = scan_token_boundaries(tokens, openIndex + 1, closeIndex);
+	if (!argumentScan.valid) return undefined;
+	const commaIndexes = argumentScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ",",
+	);
+	if (commaIndexes.length === 0) return undefined;
+
+	const argumentRanges = [...commaIndexes, closeIndex].map((endIndex, argumentIndex) => ({
+		startIndex: argumentIndex === 0 ? openIndex + 1 : commaIndexes[argumentIndex - 1] + 1,
+		endIndex,
+		isLastArgument: argumentIndex === commaIndexes.length,
+	}));
+	if (
+		argumentRanges.some(
+			({ startIndex, endIndex }) =>
+				renderedTokens.slice(startIndex, endIndex).join("").trim().length === 0,
+		)
+	) {
+		return undefined;
 	}
 
-	return undefined;
+	const prefix = renderedTokens.slice(rangeStart, openIndex + 1).join("");
+	const suffix = renderedTokens.slice(closeIndex + 1, rangeEnd).join("") + trailingSuffix;
+	const firstLine = leadingWhitespace + prefix;
+	if (firstLine.length > maxLineLength) return undefined;
+
+	const continuationIndent = leadingWhitespace + indentationUnit.repeat(continuationIndentLevel);
+	const argumentLines = argumentRanges.reduce(
+		(state, argumentRange) => {
+			if (!state.valid) return state;
+
+			const argumentText = renderedTokens
+				.slice(argumentRange.startIndex, argumentRange.endIndex)
+				.join("")
+				.trim();
+			const separator = argumentRange.isLastArgument ? `)${suffix}` : ",";
+			const singleLine = continuationIndent + argumentText + separator;
+			if (singleLine.length <= maxLineLength) {
+				state.lines.push(singleLine);
+				return state;
+			}
+
+			const nestedLines = wrap_function_call_range(
+				tokens,
+				renderedTokens,
+				argumentRange.startIndex,
+				argumentRange.endIndex,
+				continuationIndent,
+				separator,
+				maxLineLength,
+				indentationUnit,
+				continuationIndentLevel,
+			);
+			if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+				state.valid = false;
+				return state;
+			}
+			state.lines.push(...nestedLines);
+			return state;
+		},
+		{ valid: true, lines: [] as string[] },
+	);
+	if (!argumentLines.valid) return undefined;
+
+	const wrappedLines = [firstLine, ...argumentLines.lines];
+	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
+		? undefined
+		: wrappedLines;
 }
 
 
