@@ -2452,6 +2452,35 @@ function wrap_long_ternary_expression(
 		: wrappedLines.join("\n");
 }
 
+/**
+ * Collapse an already-wrapped simple call whose only argument is a string literal.
+ * This narrow normalization handles calls such as preload("res://scene.tscn")
+ * without flattening comments, nested expressions, or genuinely multiline arguments.
+ */
+function collapse_multiline_single_string_call(
+	document: TextDocument,
+	lineNumber: number,
+	leadingWhitespace: string,
+): { endLine: number; text: string } | undefined {
+	const openingLine = document.lineAt(lineNumber).text;
+	const openingMatch = openingLine.match(/^([ \t]*)(.*?\b[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\(\s*$/);
+	if (!openingMatch || openingMatch[1] !== leadingWhitespace) return undefined;
+
+	const argumentLineNumber = lineNumber + 1;
+	const closingLineNumber = lineNumber + 2;
+	if (closingLineNumber >= document.lineCount) return undefined;
+
+	const argumentLine = document.lineAt(argumentLineNumber).text;
+	const closingLine = document.lineAt(closingLineNumber).text;
+	const argumentMatch = argumentLine.match(/^[ \t]*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')[ \t]*,?[ \t]*$/);
+	if (!argumentMatch || !/^[ \t]*\)[ \t]*$/.test(closingLine)) return undefined;
+	if (argumentLine.trimEnd().endsWith(",")) return undefined;
+
+	const indentation = openingMatch[1];
+	const collapsedText = `${indentation + openingMatch[2]}(${argumentMatch[1]})`;
+	return { endLine: closingLineNumber, text: collapsedText };
+}
+
 /** Synchronous entry point retained for callers that have already loaded the grammar. */
 export function format_document(document: TextDocument, _options?: FormatterOptions): TextEdit[] {
 	const activeGrammar = grammar;
@@ -2481,6 +2510,12 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		multilineStringState.delimiter = advance_multiline_string_delimiter(line, lineTokens, multilineStringState.delimiter);
 		if (lineStartedInsideMultilineString) {
 			// Whitespace and indentation in multiline string continuations are literal data.
+			continue;
+		}
+		const collapsedCall = collapse_multiline_single_string_call(document, lineNum, line.text.slice(0, line.firstNonWhitespaceCharacterIndex));
+		if (collapsedCall) {
+			edits.push(TextEdit.replace(new vscode.Range(lineNum, 0, collapsedCall.endLine, document.lineAt(collapsedCall.endLine).text.length), collapsedCall.text));
+			lineNum = collapsedCall.endLine;
 			continue;
 		}
 
