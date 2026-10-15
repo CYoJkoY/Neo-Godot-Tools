@@ -1546,6 +1546,205 @@ function wrap_long_collection_literal(
 	)?.join("\n");
 }
 
+/**
+ * Locate an inline statement body separated from a GDScript block header by its structural colon.
+ * This intentionally operates only on top-level token boundaries: colons inside strings,
+ * parameter lists, typed loop variables, and collection literals are not suite separators.
+ */
+const blockHeaderKeywords = new Set([
+	"if",
+	"elif",
+	"else",
+	"for",
+	"while",
+	"match",
+	"func",
+	"class",
+	"get",
+	"set",
+]);
+
+function find_inline_suite_boundary(
+	tokens: Token[],
+	isMatchCaseLine: boolean,
+): { colonIndex: number; isMatchHeader: boolean } | undefined {
+	if (tokens.length < 2 || tokens[0]?.string) return undefined;
+
+	const firstValue = tokens[0]?.value ?? "";
+	const headerKeywordIndex = firstValue === "static" && tokens[1]?.value === "func" ? 1 : 0;
+	const headerKeyword = tokens[headerKeywordIndex]?.value ?? "";
+	const isBlockHeader = blockHeaderKeywords.has(headerKeyword);
+	const hasPotentialPropertyAccessor =
+		firstValue === "var" &&
+		tokens.some(
+			(token, tokenIndex) =>
+				token.value === ":" && ["get", "set"].includes(tokens[tokenIndex + 1]?.value ?? ""),
+		);
+	if (!isBlockHeader && !isMatchCaseLine && !hasPotentialPropertyAccessor) return undefined;
+
+	const boundaryScan = scan_token_boundaries(tokens);
+	if (!boundaryScan.valid) return undefined;
+
+	const topLevelColons = boundaryScan.topLevelIndexes.filter(
+		(tokenIndex) => tokens[tokenIndex].value === ":",
+	);
+	if (topLevelColons.length === 0) return undefined;
+
+	if (hasPotentialPropertyAccessor) {
+		const declarationColon = topLevelColons.find(
+			(colonIndex) =>
+				["get", "set"].includes(tokens[colonIndex + 1]?.value ?? "") &&
+				topLevelColons.some((candidate) => candidate > colonIndex + 1),
+		);
+		if (declarationColon !== undefined) {
+			return { colonIndex: declarationColon, isMatchHeader: false };
+		}
+	}
+	if (!isBlockHeader && !isMatchCaseLine) return undefined;
+
+	// The first top-level colon ends a block header. For loops are the exception:
+	// a typed iteration variable may have its own top-level type colon before "in".
+	const forInIndex =
+		headerKeyword === "for"
+			? boundaryScan.topLevelIndexes.find(
+					(tokenIndex) => tokenIndex > headerKeywordIndex && tokens[tokenIndex].value === "in",
+				)
+			: undefined;
+	const colonIndex =
+		headerKeyword === "for"
+			? forInIndex === undefined
+				? -1
+				: (topLevelColons.find((candidate) => candidate > forInIndex) ?? -1)
+			: topLevelColons[0];
+	if (colonIndex < 0) return undefined;
+
+	return { colonIndex, isMatchHeader: isBlockHeader && headerKeyword === "match" };
+}
+
+/**
+ * Describe inline block headers so following physical lines can retain their logical indentation.
+ * A final open header needs extra indentation because earlier headers from the same source line
+ * become distinct lines after formatting.
+ */
+function get_inline_block_chain(
+	tokens: Token[],
+	isMatchCaseLine = false,
+	headerCount = 0,
+	matchHeaderDepth?: number,
+): { headerCount: number; endsWithOpenSuite: boolean; matchHeaderDepth?: number } {
+	const firstValue = tokens[0]?.value ?? "";
+	const headerKeywordIndex = firstValue === "static" && tokens[1]?.value === "func" ? 1 : 0;
+	const headerKeyword = tokens[headerKeywordIndex]?.value ?? "";
+	const hasPotentialPropertyAccessor =
+		firstValue === "var" &&
+		tokens.some(
+			(token, tokenIndex) =>
+				token.value === ":" && ["get", "set"].includes(tokens[tokenIndex + 1]?.value ?? ""),
+		);
+	const isPotentialBlockHeader = blockHeaderKeywords.has(headerKeyword) || hasPotentialPropertyAccessor;
+	if (!isPotentialBlockHeader && !isMatchCaseLine) {
+		return { headerCount, endsWithOpenSuite: false, matchHeaderDepth };
+	}
+
+	const boundary = find_inline_suite_boundary(tokens, isMatchCaseLine);
+	if (!boundary) return { headerCount, endsWithOpenSuite: false, matchHeaderDepth };
+
+	const nextMatchHeaderDepth =
+		headerKeyword === "match" && matchHeaderDepth === undefined ? headerCount : matchHeaderDepth;
+	const nextHeaderCount = headerCount + 1;
+	const bodyTokens = tokens.slice(boundary.colonIndex + 1);
+	const hasBodyStatement = bodyTokens.some((token) => token.type !== "comment");
+	if (!hasBodyStatement) {
+		return {
+			headerCount: nextHeaderCount,
+			endsWithOpenSuite: true,
+			matchHeaderDepth: nextMatchHeaderDepth,
+		};
+	}
+
+	if (!boundary.isMatchHeader && !blockHeaderKeywords.has(bodyTokens[0]?.value ?? "")) {
+		return {
+			headerCount: nextHeaderCount,
+			endsWithOpenSuite: false,
+			matchHeaderDepth: nextMatchHeaderDepth,
+		};
+	}
+
+	return get_inline_block_chain(
+		bodyTokens,
+		boundary.isMatchHeader,
+		nextHeaderCount,
+		nextMatchHeaderDepth,
+	);
+}
+
+/**
+ * Format a logical line through the common layout pipeline. Inline block suites are
+ * split into a header and an indented body first, then both pieces use the same rules.
+ * Lambda expressions remain intact because they do not start with a block declaration.
+ */
+function format_token_line(
+	tokens: Token[],
+	renderedTokens: string[],
+	leadingWhitespace: string,
+	currentLine: string,
+	document: TextDocument,
+	options: FormatterOptions,
+	isMatchCaseLine = false,
+): string {
+	const suiteBoundary = find_inline_suite_boundary(tokens, isMatchCaseLine);
+	if (
+		suiteBoundary &&
+		tokens.slice(suiteBoundary.colonIndex + 1).some((token) => token.type !== "comment")
+	) {
+		const { colonIndex, isMatchHeader } = suiteBoundary;
+		const headerTokens = tokens.slice(0, colonIndex + 1);
+		const headerRenderedTokens = renderedTokens.slice(0, colonIndex + 1);
+		const bodyTokens = tokens.slice(colonIndex + 1);
+		const bodyRenderedTokens = renderedTokens.slice(colonIndex + 1);
+		if (bodyRenderedTokens.length > 0) {
+			bodyRenderedTokens[0] = bodyRenderedTokens[0].trimStart();
+		}
+
+		const headerLine = leadingWhitespace + headerRenderedTokens.join("");
+		const formattedHeader = format_token_line(
+			headerTokens,
+			headerRenderedTokens,
+			leadingWhitespace,
+			headerLine,
+			document,
+			options,
+		);
+		const indentationUnit = get_indentation_unit(document, leadingWhitespace);
+		const bodyIndentation = leadingWhitespace + indentationUnit;
+		const bodyLine = bodyIndentation + bodyRenderedTokens.join("");
+		const formattedBody = format_token_line(
+			bodyTokens,
+			bodyRenderedTokens,
+			bodyIndentation,
+			bodyLine,
+			document,
+			options,
+			isMatchHeader,
+		);
+		return `${formattedHeader}\n${formattedBody}`;
+	}
+
+	return (
+		format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options) ??
+		wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, currentLine, document, options) ??
+		currentLine
+	);
+}
+
 export async function format_document_async(document: TextDocument, options?: FormatterOptions): Promise<TextEdit[]> {
 	await ensureGrammar();
 	return format_document(document, options);
@@ -1671,6 +1870,12 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 	let onlyEmptyLinesSoFar = true;
 	let emptyLineCount = 0;
 	let inLambdaBody = false;
+	const matchContexts: { indentation: string; caseIndentation?: string }[] = [];
+	const inlineIndentContexts: {
+		baseIndentation: string;
+		extraLevels: number;
+		indentationUnit: string;
+	}[] = [];
 	for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
 		const line = document.lineAt(lineNum);
 
@@ -1720,7 +1925,44 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		}
 
 		// TODO: detect whitespace type and automatically convert
-		const leadingWhitespace = line.text.slice(0, line.firstNonWhitespaceCharacterIndex);
+		const sourceLeadingWhitespace = line.text.slice(0, line.firstNonWhitespaceCharacterIndex);
+		const innermostInlineIndentContextIndex = inlineIndentContexts.reduce(
+			(index, context, contextIndex) =>
+				sourceLeadingWhitespace.length > context.baseIndentation.length &&
+				sourceLeadingWhitespace.startsWith(context.baseIndentation)
+					? contextIndex
+					: index,
+			-1,
+		);
+		inlineIndentContexts.splice(innermostInlineIndentContextIndex + 1);
+		const leadingWhitespace =
+			sourceLeadingWhitespace +
+			inlineIndentContexts.reduce(
+				(indentation, context) =>
+					indentation + context.indentationUnit.repeat(context.extraLevels),
+				"",
+			);
+		const innermostMatchContextIndex = matchContexts.reduce(
+			(index, matchContext, contextIndex) =>
+				leadingWhitespace.length > matchContext.indentation.length &&
+				leadingWhitespace.startsWith(matchContext.indentation)
+					? contextIndex
+					: index,
+			-1,
+		);
+		matchContexts.splice(innermostMatchContextIndex + 1);
+		const activeMatchContext = matchContexts[matchContexts.length - 1];
+		let isMatchCaseLine = false;
+		if (
+			activeMatchContext &&
+			leadingWhitespace.length > activeMatchContext.indentation.length &&
+			leadingWhitespace.startsWith(activeMatchContext.indentation)
+		) {
+			if (!activeMatchContext.caseIndentation) {
+				activeMatchContext.caseIndentation = leadingWhitespace;
+			}
+			isMatchCaseLine = activeMatchContext.caseIndentation === leadingWhitespace;
+		}
 		let firstToken = 0;
 		const first = lineTokens.tokens[0];
 		if (first && line.text.slice(first.startIndex, first.endIndex).trim() === "") firstToken = 1;
@@ -1784,18 +2026,31 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 		}
 
 		const nextLine = leadingWhitespace + renderedTokens.join("");
-		const formattedLine =
-			format_inline_enum_declaration(tokens, renderedTokens, leadingWhitespace, document, options) ??
-			wrap_long_function_declaration(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_boolean_condition(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_ternary_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_boolean_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			nextLine;
+		const formattedLine = format_token_line(
+			tokens,
+			renderedTokens,
+			leadingWhitespace,
+			nextLine,
+			document,
+			options,
+			isMatchCaseLine,
+		);
+
+		const inlineBlockChain = get_inline_block_chain(tokens, isMatchCaseLine);
+		if (inlineBlockChain.endsWithOpenSuite && inlineBlockChain.headerCount > 1) {
+			inlineIndentContexts.push({
+				baseIndentation: sourceLeadingWhitespace,
+				extraLevels: inlineBlockChain.headerCount - 1,
+				indentationUnit: get_indentation_unit(document, sourceLeadingWhitespace),
+			});
+		}
+		if (inlineBlockChain.endsWithOpenSuite && inlineBlockChain.matchHeaderDepth !== undefined) {
+			matchContexts.push({
+				indentation:
+					leadingWhitespace +
+					get_indentation_unit(document, leadingWhitespace).repeat(inlineBlockChain.matchHeaderDepth),
+			});
+		}
 
 		// Returning edits for unchanged lines costs allocations and slows VS Code's
 		// edit application on large scripts. Keep only actual replacements.
