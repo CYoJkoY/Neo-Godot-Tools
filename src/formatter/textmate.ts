@@ -507,22 +507,10 @@ function wrap_long_boolean_term_expression(
 			indentationUnit,
 			continuationIndentLevel,
 		);
-		if (nestedLines && nestedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)) {
-			groups.push(nestedLines);
-			return groups;
+		if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
+			return undefined;
 		}
-
-		const expressionLines = wrap_long_boolean_term_expression(
-			tokens,
-			renderedTokens,
-			termRange,
-			continuationIndent,
-			maxLineLength,
-			indentationUnit,
-			continuationIndentLevel,
-		);
-		if (!expressionLines) return undefined;
-		groups.push(expressionLines);
+		groups.push(nestedLines);
 		return groups;
 	}, []);
 	if (!wrappedSegments) return undefined;
@@ -608,10 +596,22 @@ function wrap_long_boolean_condition(
 			indentationUnit,
 			continuationIndentLevel,
 		);
-		if (!nestedLines || nestedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)) {
-			return undefined;
+		if (nestedLines && nestedLines.every((wrappedLine) => wrappedLine.length <= maxLineLength)) {
+			groups.push(nestedLines);
+			return groups;
 		}
-		groups.push(nestedLines);
+
+		const expressionLines = wrap_long_boolean_term_expression(
+			tokens,
+			renderedTokens,
+			termRange,
+			continuationIndent,
+			maxLineLength,
+			indentationUnit,
+			continuationIndentLevel,
+		);
+		if (!expressionLines) return undefined;
+		groups.push(expressionLines);
 		return groups;
 	}, []);
 
