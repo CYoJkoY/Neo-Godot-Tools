@@ -1661,7 +1661,7 @@ export function format_document(document: TextDocument, _options?: FormatterOpti
 			wrap_long_comparison_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_function_call(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_collection_literal(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
-			wrap_long_arithmetic_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
+			wrap_long_binary_operator_expression(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			wrap_long_method_chain(tokens, renderedTokens, leadingWhitespace, nextLine, document, options) ??
 			nextLine;
 
@@ -1845,10 +1845,10 @@ function wrap_long_function_declaration(
 
 
 /**
- * Wrap long arithmetic expressions in assignments and return statements.
- * Preserve unary signs and skip ambiguous operator combinations.
+ * Wrap long binary arithmetic, bitwise, and shift expressions in assignments and return statements.
+ * Preserve unary operators and skip ambiguous operator combinations.
  */
-function wrap_long_arithmetic_expression(
+function wrap_long_binary_operator_expression(
 	tokens: Token[],
 	renderedTokens: string[],
 	leadingWhitespace: string,
@@ -1903,10 +1903,10 @@ function wrap_long_arithmetic_expression(
 	const assignmentIndexes = topLevelIndexes.filter((tokenIndex) =>
 		assignmentOperators.has(tokens[tokenIndex].value),
 	);
-	const arithmeticOperatorValues = new Set(["+", "-", "*", "/", "%", "**"]);
-	const arithmeticOperatorIndexes = topLevelIndexes.filter((tokenIndex) => {
+	const binaryOperatorValues = new Set(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>"]);
+	const binaryOperatorIndexes = topLevelIndexes.filter((tokenIndex) => {
 		const currentToken = tokens[tokenIndex];
-		if (!arithmeticOperatorValues.has(currentToken.value)) return false;
+		if (!binaryOperatorValues.has(currentToken.value)) return false;
 
 		const previousToken = tokens[tokenIndex - 1];
 		return (
@@ -1925,7 +1925,7 @@ function wrap_long_arithmetic_expression(
 	if (firstValue === "return" && assignmentIndexes.length > 0) return undefined;
 	if (firstValue !== "return" && assignmentIndexes.length !== 1) return undefined;
 	const expressionStart = firstValue === "return" ? 1 : assignmentIndexes[0] + 1;
-	const splitIndexes = arithmeticOperatorIndexes.filter((splitIndex) => splitIndex >= expressionStart);
+	const splitIndexes = binaryOperatorIndexes.filter((splitIndex) => splitIndex >= expressionStart);
 	if (expressionStart <= 0 || splitIndexes.length === 0 || expressionStart >= splitIndexes[0]) {
 		return undefined;
 	}
