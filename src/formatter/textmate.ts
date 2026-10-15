@@ -716,6 +716,43 @@ function wrap_long_assignment_call_expression(
 	if (!matchingCall) return undefined;
 
 	const [openIndex, closeIndex] = matchingCall;
+	const unsupportedExpressionOperators = new Set([
+		"and",
+		"as",
+		"else",
+		"if",
+		"in",
+		"is",
+		"not",
+		"or",
+		"!=",
+		"<",
+		"<=",
+		"==",
+		">",
+		">=",
+		"+",
+		"-",
+		"*",
+		"/",
+		"%",
+		"**",
+		"&",
+		"|",
+		"^",
+		"<<",
+		">>",
+	]);
+	if (
+		boundaryScan.topLevelIndexes.some(
+			(tokenIndex) =>
+				tokenIndex >= expressionStart &&
+				tokenIndex < openIndex &&
+				unsupportedExpressionOperators.has(tokens[tokenIndex].value),
+		)
+	) {
+		return undefined;
+	}
 	const callableToken = tokens[openIndex - 1];
 	const isCallable =
 		callableToken !== undefined &&
