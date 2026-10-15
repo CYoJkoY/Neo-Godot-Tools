@@ -1850,7 +1850,7 @@ function wrap_long_arithmetic_expression(
 
 	return wrappedLines.some((wrappedLine) => wrappedLine.length > maxLineLength)
 		? undefined
-		: wrappedLines.join("\\n");
+		: wrappedLines.join("\n");
 }
 
 /**
