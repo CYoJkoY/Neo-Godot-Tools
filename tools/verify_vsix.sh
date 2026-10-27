@@ -20,17 +20,21 @@ listing="$(unzip -Z1 "$vsix_path")"
 
 require_entry() {
   local entry="$1"
-  if ! printf '%s\n' "$listing" | grep -Fxq "$entry"; then
-    echo "Missing required entry: $entry" >&2
-    exit 1
-  fi
+  local candidate
+  while IFS= read -r candidate; do
+    if [ "$candidate" = "$entry" ]; then
+      return 0
+    fi
+  done <<< "$listing"
+  echo "Missing required entry: $entry" >&2
+  exit 1
 }
 
 reject_entry() {
   local description="$1"
   local pattern="$2"
   local matches
-  matches="$(printf '%s\n' "$listing" | grep -E "$pattern" || true)"
+  matches="$(printf '%s\n' "$listing" | grep -E -e "$pattern" || true)"
   if [ -n "$matches" ]; then
     echo "Unexpected $description inside the VSIX:" >&2
     printf '%s\n' "$matches" >&2
@@ -50,7 +54,20 @@ reject_entry "backend package metadata" '^extension/backend/build\.zig\.zon$'
 # vsce stores the file mode the binary has on the packaging host. A Windows
 # checkout has no executable bit, so a VSIX packaged there carries mode 0666 and
 # the Linux binary fails to start after install. Releases are packaged on Linux.
-python3 - "$vsix_path" <<'PY'
+python_interpreter=""
+for candidate in python3 python; do
+  if command -v "$candidate" > /dev/null 2>&1 && "$candidate" -c 'import zipfile' > /dev/null 2>&1; then
+    python_interpreter="$candidate"
+    break
+  fi
+done
+
+if [ -z "$python_interpreter" ]; then
+  echo "A working python3 interpreter is required to inspect VSIX entry modes." >&2
+  exit 1
+fi
+
+"$python_interpreter" - "$vsix_path" <<'PY'
 import sys
 import zipfile
 
