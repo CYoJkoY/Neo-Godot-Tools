@@ -58,9 +58,9 @@ Godot development tools for Visual Studio Code with local-first GDScript intelli
 | Godot 3 | **3.6.2** is a documented compatibility target; engine-in-the-loop checks are opt-in |
 | Godot 4 | **4.5.1** and **4.7** are documented compatibility targets; engine-in-the-loop checks are opt-in |
 | Visual Studio Code | `^1.96.0` |
-| Standard GitHub Actions CI | Ubuntu (`ubuntu-latest`) only; no Windows runner matrix |
+| Standard GitHub Actions CI | Ubuntu (`ubuntu-latest`), plus a Windows (`windows-latest`) Zig backend job |
 
-The standard CI workflow checks TypeScript compilation, unit and release tooling, coding standards, formatter snapshots, and VSIX packaging. The checked-in CI and release workflows do not automatically invoke the Godot engine-in-the-loop runner (`npm run test:engine`), so the Godot versions above should not be interpreted as an automatically exercised engine-version matrix.
+The standard CI workflow checks TypeScript compilation, unit and release tooling, coding standards, formatter snapshots, and VSIX packaging. It also builds the Zig 0.17.0 analysis sidecar for Windows and Linux x64, runs its unit tests, and requires the lexer differential suite to run against the native binary. The checked-in CI and release workflows do not automatically invoke the Godot engine-in-the-loop runner (`npm run test:engine`), so the Godot versions above should not be interpreted as an automatically exercised engine-version matrix.
 
 Godot 3 releases older than 3.6 remain outside the project's documented compatibility target. Other Godot 4 releases may work, but are not individually covered by an automated engine-in-the-loop matrix.
 
@@ -179,6 +179,7 @@ Detailed design and development documents are available in [`docs/`](docs/):
 - [Development roadmap](docs/development-roadmap.md)
 - [Semantic architecture](docs/semantic-architecture.md)
 - [LSP architecture](docs/lsp-architecture.md)
+- [Zig backend architecture](docs/zig-backend-architecture.md)
 - [Semantic benchmarking](docs/semantic-benchmarking.md)
 - [Performance profiling](docs/performance-profiling.md)
 - [LSP call audit](docs/lsp-call-audit.md)
