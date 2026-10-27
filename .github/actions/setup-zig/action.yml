@@ -1,0 +1,84 @@
+name: Setup Zig
+description: Install the pinned Zig 0.17.0 toolchain from ziglang.org and verify its SHA-256.
+
+inputs:
+  version:
+    description: Exact Zig release to install. Only versions with a recorded checksum are supported.
+    required: false
+    default: "0.17.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Zig on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ "${{ runner.arch }}" != "X64" ]; then
+          echo "Unsupported runner architecture: ${{ runner.arch }}."
+          exit 1
+        fi
+        if [ "$ZIG_VERSION" != "0.17.0" ]; then
+          echo "Zig $ZIG_VERSION is not pinned for this action; only 0.17.0 is supported."
+          exit 1
+        fi
+        archive="${{ runner.temp }}/zig-x86_64-linux-0.17.0.tar.xz"
+        install_dir="${{ runner.temp }}/zig"
+        curl --fail --silent --show-error --location --retry 3 --output "$archive" \
+          "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+        echo "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026  $archive" \
+          | sha256sum --check --strict
+        mkdir -p "$install_dir"
+        tar --extract --xz --strip-components=1 --file "$archive" --directory "$install_dir"
+        rm -f "$archive"
+        echo "$install_dir" >> "$GITHUB_PATH"
+
+    - name: Install Zig on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        if ("${{ runner.arch }}" -ne "X64") {
+          throw "Unsupported runner architecture: ${{ runner.arch }}."
+        }
+        if ($env:ZIG_VERSION -ne "0.17.0") {
+          throw "Zig $env:ZIG_VERSION is not pinned for this action; only 0.17.0 is supported."
+        }
+        $archive = Join-Path ${{ runner.temp }} "zig-x86_64-windows-0.17.0.zip"
+        $staging = Join-Path ${{ runner.temp }} "zig-extract"
+        $installDir = Join-Path ${{ runner.temp }} "zig"
+        curl.exe --fail --silent --show-error --location --retry 3 --output $archive "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip"
+        if ($LASTEXITCODE -ne 0) { throw "Downloading Zig failed with exit code $LASTEXITCODE." }
+        $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        $expected = "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428"
+        if ($actual -ne $expected) {
+          throw "Zig archive checksum mismatch. Expected $expected but received $actual."
+        }
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+        if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
+        Expand-Archive -LiteralPath $archive -DestinationPath $staging
+        $topLevel = @(Get-ChildItem -LiteralPath $staging -Force)
+        if ($topLevel.Count -ne 1 -or -not $topLevel[0].PSIsContainer) {
+          throw "Expected exactly one directory in the Zig archive, found $($topLevel.Count) entries."
+        }
+        Move-Item -LiteralPath $topLevel[0].FullName -Destination $installDir
+        Remove-Item -LiteralPath $archive, $staging -Recurse -Force
+        Add-Content -LiteralPath $env:GITHUB_PATH -Value $installDir
+
+    - name: Verify the Zig version
+      shell: bash
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        installed="$(zig version)"
+        echo "zig version: $installed"
+        if [ "$installed" != "$ZIG_VERSION" ]; then
+          echo "Expected Zig $ZIG_VERSION but found $installed."
+          exit 1
+        fi

@@ -27,7 +27,26 @@ jobs:
             exit 1
           fi
 
+      - name: Install Zig
+        uses: ./.github/actions/setup-zig
+
+      - name: Build native sidecar binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:backend
+          cd backend
+          zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe
+          chmod +x zig-out/bin/neo-godot-backend
+          ls -l zig-out/bin
+
+      - name: Zig unit tests
+        run: cd backend && zig build test --summary all
+
       - name: Unit and release tooling tests
+        env:
+          NEO_GODOT_TOOLS_ZIG_BACKEND: ${{ github.workspace }}/backend/zig-out/bin/neo-godot-backend
+          NEO_GODOT_TOOLS_REQUIRE_ZIG_BACKEND: "1"
         run: |
           npm run test:unit
           npm run test:release
@@ -40,8 +59,9 @@ jobs:
           npm run lint
           npm run compile
           npm run test:formatter:headless
-          npx @vscode/vsce@latest package --out neo-godot-tools.vsix
+          npx @vscode/vsce@2.32.0 package --out neo-godot-tools.vsix
           test -s neo-godot-tools.vsix
+          bash tools/verify_vsix.sh neo-godot-tools.vsix
 
       - name: Upload extension VSIX
         uses: actions/upload-artifact@v6
@@ -49,3 +69,36 @@ jobs:
           name: neo-godot-tools
           path: neo-godot-tools.vsix
           if-no-files-found: error
+
+  backend-windows:
+    name: Zig backend on Windows
+    runs-on: windows-latest
+    env:
+      NEO_GODOT_TOOLS_ZIG_BACKEND: ${{ github.workspace }}\backend\zig-out\bin\neo-godot-backend.exe
+      NEO_GODOT_TOOLS_REQUIRE_ZIG_BACKEND: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Zig
+        uses: ./.github/actions/setup-zig
+
+      - name: Build native sidecar binary
+        run: npm run build:backend
+
+      - name: Zig unit tests
+        run: cd backend; zig build test --summary all
+
+      - name: Compile differential tests
+        run: npx tsc -p tsconfig.test.json
+
+      - name: Run differential tests against the native binary
+        run: node --test out-test/src/backend/zig_backend.test.js

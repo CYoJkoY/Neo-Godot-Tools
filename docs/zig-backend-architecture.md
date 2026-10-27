@@ -1,0 +1,385 @@
+# Zig Backend Architecture
+
+Status: implemented for the bootstrap slice. The Zig 0.17.0 sidecar serves `health`, `lex` and
+`shutdown`, and its Windows and Linux x64 binaries ship inside the VSIX. Every VS Code provider still
+runs on the existing TypeScript implementation.
+
+This document is the contract for moving the GDScript analysis core into a native Zig 0.17.0 process.
+It defines the process lifecycle, the wire protocol, the offset model, the failure semantics and the
+migration order. Anything not stated here is out of scope for the current phase.
+
+## Scope and non-goals
+
+The extension keeps a thin TypeScript adapter because VS Code APIs (providers, webviews, debugger
+sessions, configuration, extension lifecycle) are a JavaScript surface. Zig owns the algorithms that
+walk GDScript source: lexing, parsing, semantic indexing, queries and the formatter.
+
+The first slice deliberately does not change user-visible behaviour. No provider calls the sidecar, no
+configuration key is added, no default changes, and the Godot language server remains the fallback for
+semantics the local model cannot establish safely. The TypeScript lexer stays in place as the reference
+implementation and as the fallback path.
+
+Explicitly out of scope for the bootstrap slice:
+
+- provider integration, semantic indexing, formatter, scene and resource parsing, debug protocol and
+  the Godot LSP bridge;
+- persistent state, caches on disk, or background project scans;
+- code signing, Marketplace signing, and packaged builds for platforms other than Windows x64 and
+  Linux x64;
+- multi-workspace hosting. The design target is one sidecar per workspace folder to keep the failure
+  domain small; the current adapter owns one process per adapter instance and does not pool processes
+  across workspaces.
+
+## Why a sidecar
+
+The analysis core is CPU-bound and allocation-heavy. Running it in the extension host ties every parse
+to the single JavaScript thread that also serves the editor UI, and a crash takes the extension down
+with it. A separate process gives the core its own thread, its own arena allocators and a hard failure
+boundary: if the sidecar dies, the adapter restarts it and the TypeScript path answers until the new
+process is healthy.
+
+The sidecar is a local child process, never a network service. It binds no port, opens no socket and
+expects no inbound connection.
+
+## Process model
+
+```text
+VS Code extension host (TypeScript)
+        |
+        |  stdin  : Content-Length framed JSON-RPC request
+        |  stdout : Content-Length framed JSON-RPC response
+        |  stderr : human-readable diagnostics only
+        v
+neo-godot-backend (Zig 0.17.0, one process per adapter instance)
+```
+
+One long-lived process per adapter instance. The adapter starts it lazily on the first request, keeps
+it for the lifetime of the adapter, and stops it on extension deactivation. The design target is one
+process per workspace folder; adapters are not pooled across workspaces yet. The process is spawned
+with `stdio: ["pipe", "pipe", "pipe"]` so the extension host controls all three streams.
+
+Rules that follow from the transport:
+
+- stdout carries protocol frames and nothing else. A stray `print` corrupts the stream, so the backend
+  never logs to stdout; diagnostics go to stderr and are surfaced through the extension output
+  channel.
+- stdin EOF means the adapter is gone; the backend exits with code 0 without emitting an error frame.
+- stderr is best-effort. The adapter drains it so a chatty child cannot block on a full pipe, but the
+  protocol contract never depends on it.
+
+### Lifecycle
+
+1. The adapter resolves the executable, spawns it and attaches stream readers.
+2. The adapter sends `health` and waits with a bounded timeout. Any response that does not advertise a
+   compatible `protocolVersion` marks the backend unusable for this session.
+3. Requests are multiplexed by id. The adapter may have many in flight; the backend answers in
+   completion order.
+4. `$/cancelRequest` is a notification. The bootstrap backend accepts it and ignores it; the adapter
+   still drops the pending promise locally so a cancelled request never resolves a provider.
+5. On deactivation the adapter sends `shutdown`, waits briefly for the response, then sends `exit`
+   semantics by closing stdin. If the process has not exited after a short grace period it is killed.
+6. If the process exits unexpectedly, every pending request rejects with a single `backend exited`
+   error, the adapter marks the backend unavailable, and the next request attempts one respawn.
+
+Restarts are bounded: a crash loop that exceeds the retry budget disables the sidecar for the rest of
+the session and leaves the TypeScript path in charge. The adapter never spawns from inside a tight
+retry loop without a delay.
+
+### Version handshake
+
+`health` is the only mandatory method. It returns:
+
+```json
+{
+  "protocolVersion": 1,
+  "backendVersion": "0.1.0",
+  "zigVersion": "0.17.0",
+  "capabilities": ["lex"]
+}
+```
+
+The adapter treats `protocolVersion` as exact-match for now: mixing 1 with 2 is a protocol error, not a
+negotiation. `capabilities` lets a newer backend advertise methods the adapter may call conditionally,
+so adding a method does not require a protocol bump. `zigVersion` is informational; the compiler that
+built the binary is recorded in CI, not inferred at runtime.
+
+## Framing
+
+Messages use the language-server header format: ASCII headers, a blank line, then a UTF-8 JSON body.
+
+```text
+Content-Length: 42\r\n
+\r\n
+{"jsonrpc":"2.0","id":1,"method":"health"}
+```
+
+Rules:
+
+- `Content-Length` is required and byte-exact. It counts body bytes, not characters.
+- Header names are matched case-insensitively. Unknown headers are ignored for forward compatibility.
+- Both `\r\n` and `\n` terminate header lines and the blank separator line; writers always emit `\r\n`.
+- A frame body may be at most 16 MiB (`16 * 1024 * 1024`). A larger `Content-Length` is a framing
+  error: emit one structured error and close.
+- A missing or non-numeric `Content-Length`, or a header block over 8 KiB, is a framing error. There is
+  no way to resynchronise a stream whose length is unknown, so the process exits.
+- A framing error is reported as JSON-RPC parse error `-32700` with `id: null`, then the process exits.
+- Multiple frames may arrive in one read and one frame may span many reads; the reader must not assume
+  that a read boundary aligns with a frame boundary.
+- Each response is written and flushed before the reader blocks again. Batching would add latency for
+  no throughput gain on small messages.
+
+## Message shape
+
+Requests follow JSON-RPC 2.0. The `jsonrpc` field is emitted as `"2.0"` on every message and accepted on
+input; a missing version is tolerated for local adapters but never produced by us.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"lex","params":{"sourceBase64":"...","encoding":"utf16le"}}
+```
+
+Success:
+
+```json
+{"jsonrpc":"2.0","id":7,"result":{"tokens":[]}}
+```
+
+Error:
+
+```json
+{"jsonrpc":"2.0","id":7,"error":{"code":-32602,"message":"invalid params","data":{"detail":"unknown encoding"}}}
+```
+
+Error codes are the JSON-RPC set:
+
+| Code | Meaning |
+| --- | --- |
+| `-32700` | parse error: body is not JSON |
+| `-32600` | invalid request: wrong shape, missing method, bad id type |
+| `-32601` | unknown method |
+| `-32602` | invalid params: missing field, wrong type, bad base64, unknown encoding |
+| `-32603` | internal error: allocation failure or an unexpected backend fault |
+
+An error carries the request id when the id could be read; a parse error with no recoverable id uses
+`null`. Notifications (no `id`) are never answered, including when they fail.
+
+### Request ids
+
+Ids are strings or numbers as produced by the adapter; the backend echoes them verbatim. The adapter
+generates monotonically increasing integers, so number ids are the normal case and string ids exist
+only because the protocol permits them. Ids are scoped to a connection; a respawn invalidates every
+pending id.
+
+## UTF-16 offset contract
+
+VS Code positions are UTF-16 code units, not code points and not bytes. The backend must produce the
+same numbers as JavaScript `String.prototype.length` and `slice`. Two consequences shape the wire
+format:
+
+1. Source text crosses the boundary as base64 of UTF-16LE code units. Passing UTF-8 would force a
+   conversion that can silently change offsets for non-BMP text and isolated surrogates.
+2. Token values come back the same way (`valueBase64`), so the adapter can rebuild the exact JavaScript
+   string, including lone surrogates, without a lossy JSON decode.
+
+The JSON envelope is never used to carry GDScript text or token values directly. Metadata such as
+methods, ids and error codes is plain ASCII JSON.
+
+Every offset in a token (`start`, `end`, `character`) counts UTF-16 code units. `line` is zero-based and
+is not affected by CRLF: a CRLF pair is one newline token and advances the line by one.
+
+Surrogate pairs occupy two code units. The lexer never decodes them; it copies code units, which is why
+the Zig implementation stores the decoded source as `[]const u16` and mirrors the JavaScript slicing
+rules exactly.
+
+## The `lex` method
+
+`lex` is a differential-tested reimplementation of `src/analyzer/lexer.ts`. Its contract is the token
+stream that the existing parser consumes, including quirks that the parser relies on. It is not a
+cleaner lexer and must not "fix" observable token shapes.
+
+Params:
+
+```json
+{"sourceBase64":"<base64 of UTF-16LE code units>","encoding":"utf16le"}
+```
+
+Result:
+
+```json
+{"tokens":[{"kind":"identifier","valueBase64":"...","start":0,"end":4,"line":0,"character":0,"indent":0}]}
+```
+
+Kind is one of `identifier`, `number`, `string`, `operator`, `punctuation`, `newline`, `eof`.
+
+Behavioural requirements, all inherited from the TypeScript lexer:
+
+- identifiers start with `_`, `A-Z` or `a-z` and continue with those plus digits;
+- numbers start with a digit and continue with identifier characters or `.`;
+- `#` starts a comment that runs to the next CR or LF and produces no token;
+- CRLF and bare LF/CR each produce one `newline` token valued `"\n"`;
+- leading spaces and tabs on a line advance both `indent` and `character`; other whitespace advances
+  only `character`;
+- three-character operators are tried before two-character ones;
+- `\` inside a string escapes the next code unit, including a quote or a newline;
+- an unescaped CR or LF ends a string without consuming it;
+- an unknown code unit is consumed silently;
+- the final token is `eof` with an empty value and `start == end == source length`;
+- the whitespace `indent` of the current line is copied to every token, and to `eof`.
+
+The last point has a sharp edge worth stating: a backslash at the very end of a string consumes two code
+units, so `end` and `character` can run past the source length. The token value is still clipped to the
+source. The Zig implementation reproduces the numeric overshoot because the TypeScript parser asserts on
+token positions and the two implementations must agree before any provider switch.
+
+## Cancellation
+
+`$/cancelRequest` carries `{"id": <target>}`. In the bootstrap slice, `lex` is synchronous and short, so
+the backend acknowledges the notification by doing nothing. The adapter removes the pending entry and
+stops waiting; the late response is dropped by id, which keeps the connection usable.
+
+When longer methods arrive, cancellation becomes cooperative: the server keeps a cancel flag per
+in-flight request, checks it between work units, and answers `-32800` (request cancelled). That code is
+reserved now so the client can already handle it.
+
+## Snapshots and versioning
+
+Nothing semantic is persisted in this slice. When document snapshots arrive, the rule is:
+
+- the adapter sends the full text plus a monotonically increasing document version for the file;
+- the backend keeps an in-memory snapshot keyed by version and rejects a stale write instead of
+  applying it;
+- queries name the version they were resolved against, so a provider can discard a result computed for
+  an older buffer;
+- snapshots are dropped on shutdown and are never written to disk.
+
+This matches the existing TypeScript index, which already guards against stale asynchronous reads by
+preferring newer in-memory state.
+
+## Godot LSP fallback
+
+The Godot language server is a separate TCP dependency and stays in TypeScript for now. Routing it
+through the sidecar would add a process hop to every fallback request while the fallback still needs
+VS Code cancellation semantics. The adapter keeps the existing `LanguageService` fallback behaviour
+unchanged.
+
+## Security and trust
+
+The backend is spawned from an extension-controlled path, not from `$PATH`, and it never evaluates
+GDScript. It parses text. Frame length limits bound memory per message; the sidecar has no file system
+access requirement in this slice and no network access.
+
+The packaged binary is resolved relative to the extension install directory, with development-only
+fallback candidates that point at the build output. An environment override
+(`NEO_GODOT_TOOLS_ZIG_BACKEND`) exists for development and CI only; an untrusted workspace setting must
+never choose the executable path.
+
+## Packaging and release matrix
+
+The binaries are built from source in CI and by `npm run build:backend` locally. They are not committed.
+
+| Platform | Target | Artifact |
+| --- | --- | --- |
+| Windows x64 | `x86_64-windows` | `backend/zig-out/bin/neo-godot-backend.exe` |
+| Linux x64 | `x86_64-linux` | `backend/zig-out/bin/neo-godot-backend` |
+
+Unsupported platforms fall back to the TypeScript implementation; the extension must not fail to
+activate because a binary is missing. Both x64 binaries ship in one VSIX so the same package covers
+Windows and Linux. `.vscodeignore` whitelists only
+`backend/zig-out/bin/neo-godot-backend` and `backend/zig-out/bin/neo-godot-backend.exe`, and
+`tools/verify_vsix.sh` rejects backend sources, build metadata, compiler caches, debug symbols and a
+non-executable Linux binary. CI builds both targets before packaging; the release workflow rebuilds
+them before it packages the VSIX.
+
+The release VSIX is packaged on Linux. `@vscode/vsce` passes no mode of its own to the zip writer, which
+falls back to the file mode on disk. A Windows checkout has no executable bit for a Linux binary, so an
+archive packaged there records `0666` and the sidecar cannot start after install. The CI and release
+workflows therefore build on Ubuntu, run `chmod +x` on `zig-out/bin/neo-godot-backend`, and verify the
+resulting entry with `tools/verify_vsix.sh`. A VSIX built on Windows is a local debugging artifact only.
+
+## Rollback
+
+The sidecar is additive. Removing the spawn, or setting the feature off, returns the extension to the
+TypeScript lexer with no data migration, because the backend owns no durable state. Each migration step
+is separately revertible: a bad parser step can be reverted without touching the protocol layer.
+
+## Differential testing
+
+Equivalence is proven against the TypeScript implementation, not against expectations written twice.
+
+`src/backend/zig_backend.test.ts` spawns the real binary and compares `lex` output with `lexGDScript` on:
+
+- ordinary declarations and indented bodies;
+- LF, CRLF and mixed line endings, including trailing newlines;
+- tabs versus spaces and mixed indentation;
+- non-ASCII comments and identifiers outside the ASCII ranges;
+- non-BMP characters and lone surrogate pairs in strings and comments;
+- escape sequences, unterminated strings and a trailing backslash;
+- three-character and two-character operators, plus unknown characters;
+- empty input and whitespace-only input.
+
+The comparison is structural: every field of every token must match, so a change in `indent`, `line` or
+`character` fails the build. Tests `skip` when the binary is absent so a plain `npm run test:unit` works
+on a fresh checkout; CI runs a separate enforced step after building the binary, where a missing binary
+is a failure rather than a skip.
+
+Zig unit tests cover the lexer in isolation and the framing layer with in-memory readers. They run
+through `src/tests.zig`, which imports every module so the `test` blocks are reachable; testing
+`src/main.zig` directly would run zero tests.
+
+## Performance gates
+
+The sidecar only earns its place if it beats the current path without hurting latency.
+
+- Lexing p50 for a 1 MiB script must be at least as fast as the TypeScript lexer on the same machine.
+- End-to-end round-trip overhead for a small request must stay under 1 ms p50 locally once the process
+  is warm; process startup is measured separately and is amortised by the long-lived process.
+- A frame copy budget: source crosses the boundary once as base64 and is decoded once. No additional
+  full-text copies per token.
+- No unbounded growth: pending requests and per-document snapshots are bounded, and cancellation frees
+  a pending entry immediately.
+
+Numbers are recorded with the existing benchmark tooling when providers start using the sidecar. The
+bootstrap slice makes no user-visible performance claim.
+
+## Migration order
+
+Each step lands only after the previous one is differentially verified and can be reverted on its own.
+
+```text
+1. protocol and process management   <- shipped
+2. lexer                            <- shipped
+3. parser and AST                   <- next
+4. semantic index and queries
+5. provider integration
+6. formatter
+7. scene and resource parsing
+8. debug protocol
+9. Godot LSP bridge
+```
+
+Provider integration is step 5, not step 3, because a native parser is only useful once the index and
+queries agree with it. Until then the sidecar answers `lex` for tests and health checks only.
+
+## Repository layout
+
+```text
+backend/
+  build.zig          native build graph and test step
+  build.zig.zon      package metadata, minimum Zig version
+  src/main.zig       entry point, stdio wiring
+  src/protocol.zig   framing and JSON-RPC message handling
+  src/server.zig     request dispatch for health, lex, shutdown
+  src/lexer.zig      UTF-16 GDScript tokenizer
+  src/tests.zig      test root that imports every module for `zig build test`
+src/backend/
+  zig_backend.ts     spawn, framing, request/response adapter
+  zig_backend.test.ts differential tests against lexGDScript
+```
+
+## Verification of this document
+
+Every statement about Zig APIs above was checked against the 0.17.0 standard library sources shipped
+with the pinned toolchain (`std.process.Init`, `std.Io.Reader`/`Writer` streaming APIs, `std.json`,
+`std.base64`). If a later Zig release renames these, the version pin is what keeps the document true;
+upgrading is a deliberate change with a new hash and a re-run of the differential suite.

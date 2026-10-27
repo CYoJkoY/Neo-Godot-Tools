@@ -3,6 +3,7 @@
 ## Development requirements
 
 - [npm](https://www.npmjs.com/get-npm)
+- [Zig](https://ziglang.org/download/) **0.17.0** for building and testing the native analysis sidecar
 - [fgvm](https://fgvm.dev) — Godot version manager for engine-in-the-loop tests
 - A Godot installation, managed by fgvm or installed manually
 
@@ -31,11 +32,30 @@ Download dependencies:
 npm install
 ```
 
+Build the native analysis sidecar:
+
+```bash
+npm run build:backend
+```
+
+The VSIX ships both `backend/zig-out/bin/neo-godot-backend` (Linux x64) and
+`backend/zig-out/bin/neo-godot-backend.exe` (Windows x64). CI builds both targets on Ubuntu. On a
+single host, build the host target first and cross-compile the other one before packaging, for example
+`cd backend && zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe` on Linux or
+`cd backend && zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe` on Windows.
+
 Package a VSIX:
 
 ```bash
 npm run package
 ```
+
+Package the release VSIX on Linux. `@vscode/vsce` inherits the file mode from disk, so a VSIX built on
+Windows records mode `0666` for the Linux binary and that binary cannot start after install. CI and the
+release workflow build on Ubuntu, mark the binary executable before packaging, and run
+`bash tools/verify_vsix.sh <vsix>` to reject a package that is missing a binary, ships build
+intermediates, or stores a non-executable Linux binary. A VSIX built on Windows is only useful for
+inspecting extension contents locally.
 
 When developing the extension, open the repository in Visual Studio Code and use the `Run Extension` launch configuration. It launches a separate Extension Host with the extension loaded.
 
@@ -58,6 +78,12 @@ npm run test:formatter:headless
 ```
 
 This command compiles the existing host-test sources into the ignored `out-test-host/` directory and runs only the existing formatter snapshot suite. It does not add test cases or require a Godot binary.
+
+The Zig lexer differential suite spawns the native sidecar and compares every token field against the
+TypeScript lexer. It skips when the binary is absent, so `npm run test:unit` still works on a fresh
+checkout. Set `NEO_GODOT_TOOLS_REQUIRE_ZIG_BACKEND=1` together with
+`NEO_GODOT_TOOLS_ZIG_BACKEND=<absolute path>` to make a missing or stale binary fail the suite; CI
+always runs in that mode.
 
 ### Engine-in-the-loop tests
 

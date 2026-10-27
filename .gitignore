@@ -12,3 +12,5 @@ workspace.code-workspace
 lode/
 test_projects/*/.vscode/settings.json
 desktop.ini
+backend/.zig-cache/
+backend/zig-out/

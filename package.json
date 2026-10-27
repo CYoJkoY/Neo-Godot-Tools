@@ -34,6 +34,7 @@
 		"format": "biome format --write --changed src",
 		"compile": "tsc -p ./",
 		"lint": "biome lint src tools",
+		"build:backend": "cd backend && zig build -Doptimize=ReleaseSafe",
 		"check:standards": "ts-node tools/check_standards.ts",
 		"watch": "tsc -watch -p ./",
 		"package": "vsce package",
