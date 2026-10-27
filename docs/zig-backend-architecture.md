@@ -108,7 +108,7 @@ built the binary is recorded in CI, not inferred at runtime.
 Messages use the language-server header format: ASCII headers, a blank line, then a UTF-8 JSON body.
 
 ```text
-Content-Length: 143\r\n
+Content-Length: 42\r\n
 \r\n
 {"jsonrpc":"2.0","id":1,"method":"health"}
 ```
@@ -323,7 +323,9 @@ The comparison is structural: every field of every token must match, so a change
 on a fresh checkout; CI runs a separate enforced step after building the binary, where a missing binary
 is a failure rather than a skip.
 
-Zig unit tests cover the lexer in isolation and the framing layer with in-memory readers.
+Zig unit tests cover the lexer in isolation and the framing layer with in-memory readers. They run
+through `src/tests.zig`, which imports every module so the `test` blocks are reachable; testing
+`src/main.zig` directly would run zero tests.
 
 ## Performance gates
 
@@ -369,6 +371,7 @@ backend/
   src/protocol.zig   framing and JSON-RPC message handling
   src/server.zig     request dispatch for health, lex, shutdown
   src/lexer.zig      UTF-16 GDScript tokenizer
+  src/tests.zig      test root that imports every module for `zig build test`
 src/backend/
   zig_backend.ts     spawn, framing, request/response adapter
   zig_backend.test.ts differential tests against lexGDScript

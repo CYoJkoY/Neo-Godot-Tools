@@ -21,6 +21,7 @@ const SHUTDOWN_GRACE_MS = 1000;
 const STDERR_TAIL_LIMIT = 8192;
 const MAX_RESPONSE_HEADER_BYTES = 8 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 256 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 const BACKEND_EXECUTABLE_NAME = "neo-godot-backend";
 const EXECUTABLE_ENVIRONMENT_KEY = "NEO_GODOT_TOOLS_ZIG_BACKEND";
 const REQUIRE_BACKEND_ENVIRONMENT_KEY = "NEO_GODOT_TOOLS_REQUIRE_ZIG_BACKEND";
@@ -75,7 +76,8 @@ interface ProcessListeners {
 interface BackendProcess {
 	readonly child: ChildProcessWithoutNullStreams;
 	finalized: boolean;
-	stdoutBuffer: Buffer;
+	stdoutChunks: Buffer[];
+	stdoutBytes: number;
 	stderrTail: Buffer;
 	frame: ResponseFrameState;
 	listeners: ProcessListeners | undefined;
@@ -207,11 +209,83 @@ const createFrameState = (): ResponseFrameState => ({
 const createProcessState = (child: ChildProcessWithoutNullStreams): BackendProcess => ({
 	child,
 	finalized: false,
-	stdoutBuffer: Buffer.alloc(0),
+	stdoutChunks: [],
+	stdoutBytes: 0,
 	stderrTail: Buffer.alloc(0),
 	frame: createFrameState(),
 	listeners: undefined,
 });
+
+const appendStdout = (state: BackendProcess, chunk: Buffer): void => {
+	if (chunk.length === 0) return;
+	state.stdoutChunks.push(chunk);
+	state.stdoutBytes += chunk.length;
+};
+
+const resetStdout = (state: BackendProcess): void => {
+	state.stdoutChunks = [];
+	state.stdoutBytes = 0;
+};
+
+interface StdoutPrefix {
+	readonly parts: readonly Buffer[];
+	readonly rest: Buffer[];
+}
+
+/**
+ * Splits the leading `count` bytes off the retained chunks without copying
+ * anything past that prefix.
+ */
+const collectStdoutPrefix = (chunks: readonly Buffer[], count: number): StdoutPrefix => {
+	const split = chunks.reduce<{ parts: Buffer[]; rest: Buffer[]; remaining: number }>(
+		(accumulator, chunk) => {
+			if (accumulator.remaining === 0) {
+				accumulator.rest.push(chunk);
+				return accumulator;
+			}
+			if (chunk.length <= accumulator.remaining) {
+				accumulator.parts.push(chunk);
+				accumulator.remaining -= chunk.length;
+				return accumulator;
+			}
+			accumulator.parts.push(chunk.subarray(0, accumulator.remaining));
+			accumulator.rest.push(chunk.subarray(accumulator.remaining));
+			accumulator.remaining = 0;
+			return accumulator;
+		},
+		{ parts: [], rest: [], remaining: count },
+	);
+	return { parts: split.parts, rest: split.rest };
+};
+
+/** Removes and returns exactly `count` leading bytes, or undefined when they have not arrived yet. */
+const takeStdout = (state: BackendProcess, count: number): Buffer | undefined => {
+	if (count === 0) return Buffer.alloc(0);
+	if (state.stdoutBytes < count) return undefined;
+	const { parts, rest } = collectStdoutPrefix(state.stdoutChunks, count);
+	const prefix = parts.length === 1 ? parts[0] : Buffer.concat(parts, count);
+	state.stdoutChunks = rest;
+	state.stdoutBytes -= count;
+	return prefix;
+};
+
+interface LineFeedScan {
+	readonly found: boolean;
+	readonly offset: number;
+}
+
+/** Finds the first LF among retained chunks, stopping once the header size limit is passed. */
+const findLineFeed = (chunks: readonly Buffer[], headerBytes: number): LineFeedScan =>
+	chunks.reduce<LineFeedScan>(
+		(scan, chunk) => {
+			const withinLimit = scan.offset + headerBytes <= MAX_RESPONSE_HEADER_BYTES;
+			if (scan.found || !withinLimit) return scan;
+			const local = chunk.indexOf(LINE_FEED);
+			if (local !== -1) return { found: true, offset: scan.offset + local };
+			return { found: false, offset: scan.offset + chunk.length };
+		},
+		{ found: false, offset: 0 },
+	);
 
 const appendStderrTail = (tail: Buffer, chunk: Buffer): Buffer => {
 	if (chunk.length >= STDERR_TAIL_LIMIT) return Buffer.from(chunk.subarray(chunk.length - STDERR_TAIL_LIMIT));
@@ -345,6 +419,13 @@ const sendRequestOnProcess = (
 	const serialized = JSON.stringify(request);
 	if (serialized === undefined) return Promise.reject(new Error("Unable to serialize the Zig backend request."));
 	const body = Buffer.from(serialized, "utf8");
+	if (body.length > MAX_REQUEST_BODY_BYTES) {
+		return Promise.reject(
+			new Error(
+				`Zig backend request body is ${body.length} bytes and exceeds the ${MAX_REQUEST_BODY_BYTES} byte limit.`,
+			),
+		);
+	}
 
 	return new Promise<unknown>((resolve, reject) => {
 		const timer = { handle: undefined as ReturnType<typeof setTimeout> | undefined };
@@ -533,30 +614,31 @@ const drainResponseFrames = (lifecycle: Lifecycle, state: BackendProcess): strin
 	if (state.frame.awaitingBody) {
 		const length = state.frame.contentLength;
 		if (length === undefined) return "Zig backend response is missing Content-Length.";
-		if (state.stdoutBuffer.length < length) return undefined;
-		const body = state.stdoutBuffer.subarray(0, length);
-		state.stdoutBuffer = state.stdoutBuffer.subarray(length);
+		const body = takeStdout(state, length);
+		if (body === undefined) return undefined;
 		state.frame = createFrameState();
 		const bodyError = handleResponseBody(lifecycle, body);
 		if (bodyError !== undefined) return bodyError;
 		return drainResponseFrames(lifecycle, state);
 	}
 
-	const lineBreak = state.stdoutBuffer.indexOf(LINE_FEED);
-	if (lineBreak === -1) {
-		if (state.frame.headerBytes + state.stdoutBuffer.length > MAX_RESPONSE_HEADER_BYTES) {
+	const scan = findLineFeed(state.stdoutChunks, state.frame.headerBytes);
+	if (!scan.found) {
+		if (state.frame.headerBytes + state.stdoutBytes > MAX_RESPONSE_HEADER_BYTES) {
 			return "Zig backend response headers exceed the size limit.";
 		}
 		return undefined;
 	}
 
+	const lineBreak = scan.offset;
 	const headerBytes = state.frame.headerBytes + lineBreak + 1;
 	if (headerBytes > MAX_RESPONSE_HEADER_BYTES) return "Zig backend response headers exceed the size limit.";
 	state.frame.headerBytes = headerBytes;
-	const rawLine = state.stdoutBuffer.subarray(0, lineBreak);
+	const rawHeaderLine = takeStdout(state, lineBreak + 1);
+	if (rawHeaderLine === undefined) return "Zig backend response header bytes were not retained.";
+	const rawLine = rawHeaderLine.subarray(0, lineBreak);
 	const line =
 		rawLine.length > 0 && rawLine[rawLine.length - 1] === CARRIAGE_RETURN ? rawLine.subarray(0, -1) : rawLine;
-	state.stdoutBuffer = state.stdoutBuffer.subarray(lineBreak + 1);
 
 	if (line.length === 0) {
 		const length = state.frame.contentLength;
@@ -612,7 +694,7 @@ const finalizeProcess = (lifecycle: Lifecycle, state: BackendProcess, error: Err
 	state.finalized = true;
 	detachProcess(state);
 	if (lifecycle.child === state) lifecycle.child = undefined;
-	state.stdoutBuffer = Buffer.alloc(0);
+	resetStdout(state);
 	state.stderrTail = Buffer.alloc(0);
 	state.frame = createFrameState();
 	rejectAllPending(lifecycle, error);
@@ -640,7 +722,7 @@ const terminateProcess = (
 const attachProcess = (lifecycle: Lifecycle, options: ZigBackendOptions, state: BackendProcess): void => {
 	const onStdout = (chunk: Buffer): void => {
 		if (state.finalized) return;
-		state.stdoutBuffer = Buffer.concat([state.stdoutBuffer, chunk]);
+		appendStdout(state, chunk);
 		const error = drainResponseFrames(lifecycle, state);
 		if (error === undefined) return;
 		terminateProcess(lifecycle, options, state, error, true);

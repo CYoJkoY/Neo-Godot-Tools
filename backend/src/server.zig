@@ -45,7 +45,9 @@ pub fn run(allocator: Allocator, reader: *std.Io.Reader, writer: *std.Io.Writer)
         defer allocator.free(body);
 
         const result = protocol.handleBody(allocator, body) catch {
-            const failure = protocol.buildInternalError(allocator) catch {
+            // `handleBody` reports allocation failures itself once it has the
+            // parsed id; this fallback only covers that report failing too.
+            const failure = protocol.buildInternalError(allocator, .null) catch {
                 std.debug.print("neo-godot-backend: request failed and the error frame could not be built\n", .{});
                 return;
             };
@@ -72,8 +74,8 @@ test "run exits quietly on clean eof" {
 
 test "run answers health and keeps reading" {
     var reader = std.Io.Reader.fixed(
-        "Content-Length: 33\r\n\r\n{\"id\":1,\"method\":\"health\"}\n" ++
-            "Content-Length: 33\r\n\r\n{\"id\":2,\"method\":\"health\"}\n",
+        "Content-Length: 27\r\n\r\n{\"id\":1,\"method\":\"health\"}\n" ++
+            "Content-Length: 27\r\n\r\n{\"id\":2,\"method\":\"health\"}\n",
     );
     var storage: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&storage);
@@ -103,8 +105,8 @@ test "run reports a framing error and stops" {
 
 test "run answers shutdown and stops" {
     var reader = std.Io.Reader.fixed(
-        "Content-Length: 35\r\n\r\n{\"id\":3,\"method\":\"shutdown\"}\n" ++
-            "Content-Length: 33\r\n\r\n{\"id\":4,\"method\":\"health\"}\n",
+        "Content-Length: 29\r\n\r\n{\"id\":3,\"method\":\"shutdown\"}\n" ++
+            "Content-Length: 27\r\n\r\n{\"id\":4,\"method\":\"health\"}\n",
     );
     var storage: [512]u8 = undefined;
     var writer = std.Io.Writer.fixed(&storage);

@@ -131,6 +131,20 @@ test("answers concurrent requests without crossing results", { skip: binarySkip 
 	});
 });
 
+test("rejects an oversized lex request locally and keeps the backend alive", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	await assert.rejects(adapter.lex("a".repeat(7 * 1024 * 1024)), /exceeds the 16777216 byte limit/);
+	assert.deepEqual(await adapter.lex("var x = 1\n"), lexGDScript("var x = 1\n"));
+	await adapter.shutdown();
+});
+
+test("reassembles frames that arrive across many stdout chunks", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	const source = Array.from({ length: 4000 }, (_, index) => `var value_${index} = "text ${index}"`).join("\n");
+	assert.deepEqual(await adapter.lex(source), lexGDScript(source));
+	await adapter.shutdown();
+});
+
 test("shuts down cleanly and rejects lex after shutdown", { skip: binarySkip }, async () => {
 	const adapter = createZigBackend();
 	assert.deepEqual(await adapter.lex("var x = 1\n"), lexGDScript("var x = 1\n"));

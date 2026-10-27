@@ -311,11 +311,11 @@ test "declaration, indentation and crlf" {
         .{ .kind = .operator, .start = 7, .end = 9, .line = 0, .character = 7, .indent = 1 },
         .{ .kind = .number, .start = 10, .end = 11, .line = 0, .character = 10, .indent = 1 },
         .{ .kind = .newline, .start = 11, .end = 13, .line = 0, .character = 11, .indent = 1 },
-        .{ .kind = .newline, .start = 20, .end = 21, .line = 1, .character = 7, .indent = 2 },
-        .{ .kind = .identifier, .start = 24, .end = 25, .line = 2, .character = 3, .indent = 3 },
-        .{ .kind = .punctuation, .start = 26, .end = 27, .line = 2, .character = 5, .indent = 3 },
-        .{ .kind = .number, .start = 28, .end = 29, .line = 2, .character = 7, .indent = 3 },
-        .{ .kind = .eof, .start = 29, .end = 29, .line = 2, .character = 8, .indent = 3 },
+        .{ .kind = .newline, .start = 21, .end = 22, .line = 1, .character = 8, .indent = 2 },
+        .{ .kind = .identifier, .start = 25, .end = 26, .line = 2, .character = 3, .indent = 3 },
+        .{ .kind = .punctuation, .start = 27, .end = 28, .line = 2, .character = 5, .indent = 3 },
+        .{ .kind = .number, .start = 29, .end = 30, .line = 2, .character = 7, .indent = 3 },
+        .{ .kind = .eof, .start = 30, .end = 30, .line = 2, .character = 8, .indent = 3 },
     };
     try expectTokens(&source, &expected);
 }
@@ -323,12 +323,12 @@ test "declaration, indentation and crlf" {
 test "string escapes and unterminated strings" {
     const source = units("\"a\\\"b\" 'c\nd' \"tail\\");
     const expected = [_]Token{
-        .{ .kind = .string, .start = 0, .end = 7, .line = 0, .character = 0, .indent = 0 },
-        .{ .kind = .string, .start = 8, .end = 11, .line = 0, .character = 8, .indent = 0 },
-        .{ .kind = .newline, .start = 11, .end = 12, .line = 0, .character = 11, .indent = 0 },
-        .{ .kind = .identifier, .start = 12, .end = 13, .line = 1, .character = 0, .indent = 0 },
-        .{ .kind = .string, .start = 14, .end = 22, .line = 1, .character = 2, .indent = 0 },
-        .{ .kind = .eof, .start = 22, .end = 22, .line = 1, .character = 10, .indent = 0 },
+        .{ .kind = .string, .start = 0, .end = 6, .line = 0, .character = 0, .indent = 0 },
+        .{ .kind = .string, .start = 7, .end = 9, .line = 0, .character = 7, .indent = 0 },
+        .{ .kind = .newline, .start = 9, .end = 10, .line = 0, .character = 9, .indent = 0 },
+        .{ .kind = .identifier, .start = 10, .end = 11, .line = 1, .character = 0, .indent = 0 },
+        .{ .kind = .string, .start = 11, .end = 20, .line = 1, .character = 1, .indent = 0 },
+        .{ .kind = .eof, .start = 19, .end = 19, .line = 1, .character = 10, .indent = 0 },
     };
     try expectTokens(&source, &expected);
 }
@@ -337,7 +337,9 @@ test "numbers and three character operators" {
     const source = units("1.2.3 4e+5 0x10 a...b -> ...");
     const expected = [_]Token{
         .{ .kind = .number, .start = 0, .end = 5, .line = 0, .character = 0, .indent = 0 },
-        .{ .kind = .number, .start = 6, .end = 10, .line = 0, .character = 6, .indent = 0 },
+        .{ .kind = .number, .start = 6, .end = 8, .line = 0, .character = 6, .indent = 0 },
+        .{ .kind = .punctuation, .start = 8, .end = 9, .line = 0, .character = 8, .indent = 0 },
+        .{ .kind = .number, .start = 9, .end = 10, .line = 0, .character = 9, .indent = 0 },
         .{ .kind = .number, .start = 11, .end = 15, .line = 0, .character = 11, .indent = 0 },
         .{ .kind = .identifier, .start = 16, .end = 17, .line = 0, .character = 16, .indent = 0 },
         .{ .kind = .operator, .start = 17, .end = 20, .line = 0, .character = 17, .indent = 0 },

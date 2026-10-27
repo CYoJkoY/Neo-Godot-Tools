@@ -218,10 +218,11 @@ pub fn buildFramingError(allocator: Allocator, detail: []const u8) Allocator.Err
 }
 
 /// Reports an allocation failure that happened while handling a request. The
-/// request id is unrecoverable at this point because building or parsing the
-/// response already ran out of memory, so the error uses `id: null`.
-pub fn buildInternalError(allocator: Allocator) Allocator.Error![]u8 {
-    return buildError(allocator, .null, .internal, "allocation failure") catch |err| mapBuilderError(err);
+/// caller passes the id parsed before the failure so the client can match the
+/// error to the pending request. Callers that only have the raw body use
+/// `.null`, which the client treats as unattributed.
+pub fn buildInternalError(allocator: Allocator, id: RequestId) Allocator.Error![]u8 {
+    return buildError(allocator, id, .internal, "allocation failure") catch |err| mapBuilderError(err);
 }
 
 fn buildHealth(allocator: Allocator, id: RequestId) BuilderError![]u8 {
@@ -439,7 +440,7 @@ fn isSingleJsonDocument(arena: Allocator, body: []const u8) !bool {
     return trailing == .end_of_document;
 }
 
-fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator) BuilderError!Result {
+fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator, id_out: *?RequestId) BuilderError!Result {
     const valid_document = isSingleJsonDocument(arena, body) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -454,10 +455,16 @@ fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator) Bui
         else => return .{ .response = try buildError(allocator, .null, .parse, "body is not valid JSON") },
     };
 
-    return switch (parsed) {
-        .object => |object| handleObject(allocator, object, arena),
-        else => .{ .response = try buildError(allocator, .null, .invalid_request, "request must be an object") },
-    };
+    switch (parsed) {
+        .object => |object| {
+            id_out.* = switch (parseId(object)) {
+                .present => |value| value,
+                .missing, .invalid => null,
+            };
+            return handleObject(allocator, object, arena);
+        },
+        else => return .{ .response = try buildError(allocator, .null, .invalid_request, "request must be an object") },
+    }
 }
 
 /// Handles one frame body. Parse failures produce a `-32700` response and keep
@@ -465,11 +472,18 @@ fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator) Bui
 pub fn handleBody(allocator: Allocator, body: []const u8) Allocator.Error!Result {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
-    return handleBodyInner(allocator, body, arena_state.allocator()) catch |err| mapBuilderError(err);
+    var request_id: ?RequestId = null;
+    return handleBodyInner(allocator, body, arena_state.allocator(), &request_id) catch |err| switch (err) {
+        error.OutOfMemory, error.WriteFailed => {
+            const id = request_id orelse RequestId.null;
+            const failure = buildInternalError(allocator, id) catch |build_err| return mapBuilderError(build_err);
+            return .{ .response = failure };
+        },
+    };
 }
 
 pub fn buildFrame(allocator: Allocator, body: []const u8) Allocator.Error![]u8 {
-    var allocating: std.Io.Writer.Allocating = .initCapacity(allocator, body.len + 64) catch return error.OutOfMemory;
+    var allocating: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, body.len + 64);
     errdefer allocating.deinit();
     const writer = &allocating.writer;
     writer.print("Content-Length: {d}\r\n\r\n", .{body.len}) catch return error.OutOfMemory;
@@ -532,9 +546,9 @@ fn expectFrameError(reader: *std.Io.Reader, expected: FrameError) !void {
 
 test "frames accept crlf, lf and mixed line endings" {
     var reader = std.Io.Reader.fixed(
-        "Content-Length: 2\r\n\r\n{}\n" ++
-            "Content-Length: 3\n\n[]\n" ++
-            "CONTENT-LENGTH: 2\r\n\r\n{}\n",
+        "Content-Length: 2\r\n\r\n{}" ++
+            "Content-Length: 2\n\n[]" ++
+            "CONTENT-LENGTH: 2\r\n\r\n{}",
     );
     try expectFrameOk(&reader, "{}");
     try expectFrameOk(&reader, "[]");
@@ -635,4 +649,11 @@ test "framing error body uses null id and parse code" {
     defer std.testing.allocator.free(body);
     try std.testing.expect(std.mem.indexOf(u8, body, "-32700") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"id\":null") != null);
+}
+
+test "internal error echoes the request id" {
+    const body = try buildInternalError(std.testing.allocator, .{ .string = "req-1" });
+    defer std.testing.allocator.free(body);
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32603") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"id\":\"req-1\"") != null);
 }
