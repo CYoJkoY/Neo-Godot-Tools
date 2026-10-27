@@ -48,6 +48,22 @@ jobs:
       - name: Compile
         run: npm run compile
 
+      - name: Install Zig
+        uses: ./.github/actions/setup-zig
+
+      - name: Build native sidecar binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:backend
+          cd backend
+          zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe
+          chmod +x zig-out/bin/neo-godot-backend
+          ls -l zig-out/bin
+
+      - name: Zig unit tests
+        run: cd backend && zig build test --summary all
+
       - name: Validate release tag
         id: release
         run: npx ts-node tools/release.ts "$GITHUB_REF_NAME"
@@ -62,13 +78,14 @@ jobs:
           npm run changelog -- --ref "$GITHUB_REF_NAME" --tag "$GITHUB_REF_NAME" --notes-file out/release-notes.md
 
       - name: Package VSIX
-        run: npx @vscode/vsce@latest package --out "${{ steps.release.outputs.asset }}"
+        run: npx @vscode/vsce@2.32.0 package --out "${{ steps.release.outputs.asset }}"
 
       - name: Validate VSIX
         run: |
           test -s "${{ steps.release.outputs.asset }}"
           unzip -t "${{ steps.release.outputs.asset }}"
-          npx @vscode/vsce@latest ls --tree
+          bash tools/verify_vsix.sh "${{ steps.release.outputs.asset }}"
+          npx @vscode/vsce@2.32.0 ls --tree
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v6

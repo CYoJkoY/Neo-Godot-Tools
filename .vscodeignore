@@ -13,3 +13,5 @@
 !CHANGELOG.md
 !LICENSE
 !ThirdPartyNotices.txt
+!backend/zig-out/bin/neo-godot-backend
+!backend/zig-out/bin/neo-godot-backend.exe
