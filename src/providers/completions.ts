@@ -28,7 +28,7 @@ export function createCompletionItemProvider(
 			if (token.isCancellationRequested) return undefined;
 			if (document.languageId !== "gdscript")
 				return fallback.provide(document, position, completionContext, token);
-			const local = options.languageService.getCompletions(document, position, token);
+			const local = await options.languageService.getCompletionsAsync(document, position, token);
 			if (local) return local;
 			if (token.isCancellationRequested) return undefined;
 			return fallback.provide(document, position, completionContext, token);

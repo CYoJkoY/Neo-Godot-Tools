@@ -13,6 +13,7 @@ import { SignatureHelpFallback } from "./fallback/signature_help";
 import { FormattingProvider } from "./formatter";
 import { LanguageService } from "./language/service";
 import { languageProfiler } from "./performance/profiler";
+import { createZigSymbolMirror, indexedSymbolFiles } from "./index/zig_symbol_mirror";
 import { ClientConnectionManager } from "./lsp";
 import type {
 	GDCompletionItemProvider,
@@ -98,6 +99,13 @@ export function activate(context: vscode.ExtensionContext) {
 		new DefinitionFallback(),
 		new ReferencesFallback(),
 		new RenameFallback(),
+	);
+	const languageService = globals.languageService;
+	// The sidecar mirror only accelerates workspace symbol lookups; every other
+	// feature keeps using the TypeScript indexes and stays available when the
+	// native binary is missing.
+	languageService.attachSymbolMirror(
+		createZigSymbolMirror({ snapshot: () => indexedSymbolFiles(languageService.files) }),
 	);
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });

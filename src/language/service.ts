@@ -16,6 +16,7 @@ import {
 } from "../index";
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
+import type { ZigSymbolMirror } from "../index/zig_symbol_mirror";
 import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
 import { getGDScriptBuiltin } from "./semantic/gdscript_builtins";
 import { SemanticQueryEngine } from "./semantic/query_engine";
@@ -91,6 +92,7 @@ export class LanguageService implements vscode.Disposable {
 	readonly semantic = new SemanticQueryEngine(this.files, this.symbols, this.bindings, this.types);
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly updateScheduler: UpdateScheduler;
+	private symbolMirror: ZigSymbolMirror | undefined;
 	private scanGeneration = 0;
 	private disposed = false;
 
@@ -117,6 +119,8 @@ export class LanguageService implements vscode.Disposable {
 		this.disposed = true;
 		this.scanGeneration++;
 		this.updateScheduler.dispose();
+		this.symbolMirror?.dispose();
+		this.symbolMirror = undefined;
 		for (const disposable of this.disposables) disposable.dispose();
 		this.files.clear();
 		this.symbols.clear();
@@ -132,6 +136,25 @@ export class LanguageService implements vscode.Disposable {
 	}
 	getWorkspaceSymbols(query: string): IndexedSymbol[] {
 		return this.symbols.workspaceSymbols(query);
+	}
+
+	/**
+	 * Attaches the native mirror once the extension host owns the indexes. The
+	 * mirror rebuilds itself from `files` on its first flush, so an attach that
+	 * happens after the workspace scan started still mirrors every file.
+	 */
+	attachSymbolMirror(mirror: ZigSymbolMirror): void {
+		this.symbolMirror = mirror;
+	}
+
+	hasSymbolMirror(): boolean {
+		return this.symbolMirror !== undefined;
+	}
+
+	/** Workspace symbols in index order; native ordering when the mirror applies. */
+	async getWorkspaceSymbolsAsync(query: string): Promise<readonly IndexedSymbol[]> {
+		const mirrored = await this.symbolMirror?.workspaceSymbols(query);
+		return mirrored ?? this.symbols.workspaceSymbols(query);
 	}
 
 	async getDefinition(
@@ -244,6 +267,40 @@ export class LanguageService implements vscode.Disposable {
 		const result = languageProfiler.measure("semantic.completion", () =>
 			this.semantic.getCompletions(document.uri.toString(), { offset: document.offsetAt(position) }),
 		);
+		return this.completionList(document, position, token, result);
+	}
+
+	/**
+	 * Completion list that keeps the workspace symbol lookup in the sidecar when
+	 * the mirror applies. Member completions never touch the workspace table and
+	 * stay on the synchronous path, so dot completions keep their latency.
+	 */
+	async getCompletionsAsync(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token?: vscode.CancellationToken,
+	): Promise<vscode.CompletionList | undefined> {
+		if (token?.isCancellationRequested) return undefined;
+		if (!this.symbolMirror || !isGlobalCompletionContext(document, position))
+			return this.getCompletions(document, position, token);
+		const offset = document.offsetAt(position);
+		const word = wordRange(document, position);
+		const prefix = word ? document.getText(word) : "";
+		const workspaceSymbols = await this.symbolMirror.workspaceSymbols(prefix);
+		if (token?.isCancellationRequested) return undefined;
+		// A mirror that cannot answer must not change what the editor shows, so
+		// the synchronous index produces the same list it always did.
+		if (workspaceSymbols === undefined) return this.getCompletions(document, position, token);
+		const result = this.semantic.getCompletionsWithWorkspace(document.uri.toString(), { offset }, workspaceSymbols);
+		return this.completionList(document, position, token, result);
+	}
+
+	private completionList(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		token: vscode.CancellationToken | undefined,
+		result: ReturnType<SemanticQueryEngine["getCompletions"]>,
+	): vscode.CompletionList | undefined {
 		if (token?.isCancellationRequested) return undefined;
 		const items =
 			result.value?.map((item, index) => {
@@ -476,6 +533,9 @@ export class LanguageService implements vscode.Disposable {
 		if (change.kind === "unchanged") return;
 
 		if (change.kind === "api_changed" || change.kind === "file_added") this.symbols.update(uri);
+		// The mirror also carries the symbol ranges it hands back, so a body edit
+		// that shifts declarations has to replace its copy of the file as well.
+		this.symbolMirror?.upsert(uri, file.symbols);
 		if (change.kind === "body_changed" || change.kind === "api_changed" || change.kind === "file_added") {
 			this.references.update(uri);
 			this.bindings.update(uri);
@@ -499,6 +559,7 @@ export class LanguageService implements vscode.Disposable {
 		this.bindings.remove(key);
 		this.references.remove(key);
 		this.symbols.remove(key);
+		this.symbolMirror?.remove(key);
 		this.files.remove(key);
 	}
 

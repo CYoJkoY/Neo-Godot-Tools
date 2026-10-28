@@ -164,6 +164,20 @@ export class SemanticQueryEngine {
 		return result;
 	}
 
+	/**
+	 * Completion list built from an already ordered workspace symbol table.
+	 * The synchronous cache stays authoritative: a mirrored query must not
+	 * populate it, because the caller's table can lag behind this index by one
+	 * flush and a later synchronous request would then read stale symbols.
+	 */
+	getCompletionsWithWorkspace(
+		uri: string,
+		position: SemanticPosition,
+		workspaceSymbols: readonly IndexedSymbol[],
+	): ResolutionResult<readonly SemanticCompletionItem[]> {
+		return this.resolveCompletions(uri, position, workspaceSymbols);
+	}
+
 	getType(uri: string, position: SemanticPosition, expression?: string): ResolutionResult<ResolvedType> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
@@ -324,6 +338,7 @@ export class SemanticQueryEngine {
 	private resolveCompletions(
 		uri: string,
 		position: SemanticPosition,
+		workspaceSymbols?: readonly IndexedSymbol[],
 	): ResolutionResult<readonly SemanticCompletionItem[]> {
 		const file = this.files.get(uri);
 		if (!file) return { confidence: "unknown" };
@@ -349,23 +364,14 @@ export class SemanticQueryEngine {
 			.filter((binding) => binding.name.startsWith(completionPrefix))
 			.map((binding, index) => completionFromSymbol(symbolFromBinding(binding), index));
 		const localNames = new Set(localItems.map((item) => item.name));
-		const workspaceItems = this.symbols
-			.workspaceSymbols(completionPrefix)
+		const workspaceItems = (workspaceSymbols ?? this.symbols.workspaceSymbols(completionPrefix))
 			// Members of named enums are only valid after `EnumName.`.
 			.filter((symbol) => !(symbol.kind === "enum_member" && symbol.containerName))
 			.filter((symbol) => !localNames.has(symbol.name))
-			.sort(
-				(left, right) =>
-					left.name.localeCompare(right.name) ||
-					left.uri.localeCompare(right.uri) ||
-					left.range.start.offset - right.range.start.offset,
-			)
 			.map((symbol, index) => completionFromSymbol(symbol, localItems.length + index));
+		const workspaceNames = new Set(workspaceItems.map((item) => item.name));
 		const builtinItems = resolveBuiltinSymbols(completionPrefix)
-			.filter(
-				({ builtin }) =>
-					!localNames.has(builtin.name) && !workspaceItems.some((item) => item.name === builtin.name),
-			)
+			.filter(({ builtin }) => !localNames.has(builtin.name) && !workspaceNames.has(builtin.name))
 			.map(({ symbol }, index) =>
 				completionFromSymbol(symbol, localItems.length + workspaceItems.length + index),
 			);

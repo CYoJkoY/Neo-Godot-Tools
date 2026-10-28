@@ -1,26 +1,6 @@
 import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
 
-function symbolSignature(symbol: IndexedSymbol): string {
-	return JSON.stringify({
-		name: symbol.name,
-		kind: symbol.kind,
-		uri: symbol.uri,
-		start: symbol.range.start.offset,
-		end: symbol.range.end.offset,
-		containerName: symbol.containerName,
-		returnType: symbol.returnType,
-		type: symbol.type,
-		parameters: symbol.parameters,
-		static: symbol.static,
-		documentation: symbol.documentation,
-	});
-}
-
-function collectionSignature(symbols: readonly IndexedSymbol[]): string {
-	return symbols.map(symbolSignature).sort().join("|");
-}
-
 export interface SymbolIndex {
 	/** Re-reads the symbols of one indexed file. */
 	update(uri: string): void;
@@ -37,6 +17,13 @@ export interface SymbolIndex {
 export function createSymbolIndex(files: FileIndex): SymbolIndex {
 	const byName = new Map<string, IndexedSymbol[]>();
 	const byUri = new Map<string, IndexedSymbol[]>();
+	// Cache validation only needs to know whether any symbol changed. A
+	// monotonic revision is cheaper than serializing and sorting every symbol.
+	const state = { revision: 0 };
+
+	const bumpRevision = (): void => {
+		state.revision += 1;
+	};
 
 	const addByName = (symbol: IndexedSymbol): void => {
 		const entries = byName.get(symbol.name) ?? [];
@@ -59,6 +46,7 @@ export function createSymbolIndex(files: FileIndex): SymbolIndex {
 		if (!symbols) return;
 		byUri.delete(uri);
 		symbols.map((symbol) => dropByName(symbol, uri));
+		bumpRevision();
 	};
 
 	const update = (uri: string): void => {
@@ -68,6 +56,7 @@ export function createSymbolIndex(files: FileIndex): SymbolIndex {
 		const symbols = [...file.symbols];
 		byUri.set(uri, symbols);
 		symbols.map(addByName);
+		bumpRevision();
 	};
 
 	const workspaceSymbols = (query = ""): IndexedSymbol[] => {
@@ -89,13 +78,14 @@ export function createSymbolIndex(files: FileIndex): SymbolIndex {
 		update,
 		remove,
 		find,
-		signature: (name) => collectionSignature(find(name)),
+		signature: () => String(state.revision),
 		findInFile: (uri, name) => byUri.get(uri)?.find((symbol) => symbol.name === name),
 		workspaceSymbols,
-		workspaceSignature: (query = "") => collectionSignature(workspaceSymbols(query)),
+		workspaceSignature: () => String(state.revision),
 		clear: () => {
 			byName.clear();
 			byUri.clear();
+			bumpRevision();
 		},
 	};
 }
