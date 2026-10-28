@@ -2,13 +2,25 @@
 
 <!-- generated-release-notes:start -->
 
-### 2.14.4 — 2026-10-16 (pending)
+### 3.0.0 — 2026-10-28 (pending)
+
+Changes since [v2.14.4](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.4...v3.0.0).
+
+#### Changed
+
+- \[Issue-199\] feat(backend): add Zig sidecar lexer and packaged native binaries ([#200](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/200))
+
+### 2.14.4 — 2026-10-16
 
 Changes since [v2.14.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.3...v2.14.4).
 
 #### Fixed
 
 - **formatter:** collapse multiline single-argument string calls ([#198](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/198))
+
+#### Documentation
+
+- **changelog:** update changelog ([4d48edc](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/4d48edc00ea16bb938a5c1c445997ea3988b49c2))
 
 ### 2.14.3 — 2026-10-16
 
