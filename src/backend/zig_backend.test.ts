@@ -168,6 +168,76 @@ test("pre-aborted requests reject without starting the backend", { skip: binaryS
 	await adapter.shutdown();
 });
 
+test("advertises the symbol capability only after the handshake", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	assert.deepEqual(adapter.capabilities, { lex: false, symbols: false });
+	await assert.rejects(adapter.ingestSymbols(1, []), /symbols capability/);
+	await adapter.lex("var x = 1\n");
+	assert.deepEqual(adapter.capabilities, { lex: true, symbols: true });
+	await adapter.shutdown();
+});
+
+test("ingest returns ids in input order and queries them in workspace order", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	await adapter.lex("");
+	const result = await adapter.ingestSymbols(3, [
+		{
+			uri: "file:///a.gd",
+			symbols: [
+				{ name: "script_10", start: 10, end: 19 },
+				{ name: "script_2", start: 20, end: 28 },
+			],
+		},
+		{ uri: "file:///b.gd", symbols: [{ name: "getValue", start: 5, end: 13 }] },
+	]);
+	assert.equal(result.revision, 3);
+	assert.deepEqual(
+		result.files.map((file) => ({ uri: file.uri, ids: [...file.ids] })),
+		[
+			{ uri: "file:///a.gd", ids: [1, 2] },
+			{ uri: "file:///b.gd", ids: [3] },
+		],
+	);
+	assert.deepEqual([...(await adapter.querySymbols(3, "script"))], [1, 2]);
+	assert.deepEqual([...(await adapter.querySymbols(3, "value"))], [3]);
+	assert.deepEqual([...(await adapter.querySymbols(3, ""))], [3, 1, 2]);
+	assert.deepEqual(await adapter.digestSymbols(), { revision: 3, files: 2, symbols: 3 });
+	await adapter.shutdown();
+});
+
+test("rejects a stale revision after remove and clear", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	await adapter.lex("");
+	await adapter.ingestSymbols(1, [
+		{ uri: "file:///a.gd", symbols: [{ name: "alpha", start: 0, end: 5 }] },
+		{ uri: "file:///b.gd", symbols: [{ name: "beta", start: 0, end: 4 }] },
+	]);
+	assert.equal(await adapter.removeSymbols(2, "file:///a.gd"), 2);
+	assert.deepEqual(await adapter.digestSymbols(), { revision: 2, files: 1, symbols: 1 });
+	await assert.rejects(adapter.querySymbols(1, ""), /stale revision/);
+	// Removing an unknown file is still a revision advance, exactly like the store.
+	assert.equal(await adapter.removeSymbols(3, "file:///missing.gd"), 3);
+	assert.equal(await adapter.clearSymbols(4), 4);
+	assert.deepEqual(await adapter.digestSymbols(), { revision: 4, files: 0, symbols: 0 });
+	await adapter.shutdown();
+});
+
+test("rejects non ascii symbol names and uris", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	await adapter.lex("");
+	await assert.rejects(
+		adapter.ingestSymbols(1, [{ uri: "file:///\u00e9.gd", symbols: [{ name: "alpha", start: 0, end: 5 }] }]),
+		/printable ascii/,
+	);
+	await assert.rejects(
+		adapter.ingestSymbols(1, [{ uri: "file:///a.gd", symbols: [{ name: "\u4f60\u597d", start: 0, end: 2 }] }]),
+		/printable ascii/,
+	);
+	await adapter.ingestSymbols(2, [{ uri: "file:///a.gd", symbols: [{ name: "alpha", start: 0, end: 5 }] }]);
+	await assert.rejects(adapter.querySymbols(2, "\u4f60"), /printable ascii/);
+	await adapter.shutdown();
+});
+
 test("resolves an absolute executable override", () => {
 	const executable = "/opt/neo/neo-godot-backend";
 	const result = resolveZigBackendExecutable(

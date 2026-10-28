@@ -8,6 +8,7 @@ const Io = std.Io;
 
 const protocol = @import("protocol.zig");
 const server = @import("server.zig");
+const symbols = @import("symbol_index.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -20,5 +21,9 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file_writer: Io.File.Writer = .initStreaming(.stdout(), io, &stdout_buffer);
 
     std.debug.print("neo-godot-backend {s} (zig {s}) ready\n", .{ protocol.backend_version, protocol.zig_version });
-    try server.run(allocator, &stdin_reader.interface, &stdout_file_writer.interface);
+
+    var store = symbols.Store.init(allocator);
+    defer store.deinit();
+
+    try server.runWithStore(allocator, &stdin_reader.interface, &stdout_file_writer.interface, &store);
 }

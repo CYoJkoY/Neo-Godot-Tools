@@ -10,10 +10,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const lexer = @import("lexer.zig");
+const symbols = @import("symbol_index.zig");
 
-pub const backend_version = "0.1.0";
+pub const backend_version = "0.2.0";
 pub const zig_version = "0.17.0";
 pub const protocol_version: i64 = 1;
+
+const symbol_method_prefix = "symbols/";
 
 pub const max_body_bytes: usize = 16 * 1024 * 1024;
 pub const max_header_bytes: usize = 8 * 1024;
@@ -225,7 +228,7 @@ pub fn buildInternalError(allocator: Allocator, id: RequestId) Allocator.Error![
     return buildError(allocator, id, .internal, "allocation failure") catch |err| mapBuilderError(err);
 }
 
-fn buildHealth(allocator: Allocator, id: RequestId) BuilderError![]u8 {
+fn buildHealth(allocator: Allocator, id: RequestId, has_store: bool) BuilderError![]u8 {
     var allocating: std.Io.Writer.Allocating = .init(allocator);
     errdefer allocating.deinit();
     var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
@@ -245,6 +248,7 @@ fn buildHealth(allocator: Allocator, id: RequestId) BuilderError![]u8 {
     try stringify.objectField("capabilities");
     try stringify.beginArray();
     try stringify.write("lex");
+    if (has_store) try stringify.write("symbols");
     try stringify.endArray();
     try stringify.endObject();
     try stringify.endObject();
@@ -355,6 +359,270 @@ fn buildLexResult(allocator: Allocator, id: RequestId, params: std.json.Value, a
 
 const ParsedId = union(enum) { missing: void, invalid: void, present: RequestId };
 
+fn writeEnvelopeStart(stringify: *std.json.Stringify, id: RequestId) BuilderError!void {
+    try stringify.beginObject();
+    try stringify.objectField("jsonrpc");
+    try stringify.write("2.0");
+    try stringify.objectField("id");
+    try writeId(stringify, id);
+    try stringify.objectField("result");
+}
+
+fn readObjectField(object: std.json.ObjectMap, key: []const u8) ?std.json.ObjectMap {
+    const value = object.get(key) orelse return null;
+    return switch (value) {
+        .object => |map| map,
+        else => null,
+    };
+}
+
+fn readArrayField(object: std.json.ObjectMap, key: []const u8) ?std.json.Array {
+    const value = object.get(key) orelse return null;
+    return switch (value) {
+        .array => |list| list,
+        else => null,
+    };
+}
+
+fn readStringField(object: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = object.get(key) orelse return null;
+    return switch (value) {
+        .string => |text| text,
+        else => null,
+    };
+}
+
+/// Reads a non-negative integer that arrived either as a parsed integer or as a
+/// number string, because the body parser disables number parsing.
+fn readUnsignedField(object: std.json.ObjectMap, key: []const u8) ?u64 {
+    const value = object.get(key) orelse return null;
+    const digits = switch (value) {
+        .integer => |number| return if (number >= 0) @intCast(number) else null,
+        .number_string => |text| text,
+        else => return null,
+    };
+    if (digits.len == 0) return null;
+    var result: u64 = 0;
+    for (digits) |byte| {
+        if (byte < '0' or byte > '9') return null;
+        result = std.math.mul(u64, result, 10) catch return null;
+        result = std.math.add(u64, result, byte - '0') catch return null;
+    }
+    return result;
+}
+
+fn readRevision(object: std.json.ObjectMap) ?i64 {
+    const value = readUnsignedField(object, "revision") orelse return null;
+    return std.math.cast(i64, value);
+}
+
+fn buildRevisionResult(allocator: Allocator, id: RequestId, revision: i64) BuilderError![]u8 {
+    var allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer allocating.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
+    try writeEnvelopeStart(&stringify, id);
+    try stringify.beginObject();
+    try stringify.objectField("revision");
+    try stringify.print("{d}", .{revision});
+    try stringify.endObject();
+    try stringify.endObject();
+    return allocating.toOwnedSlice();
+}
+
+const IngestParseError = error{ InvalidParams, OutOfMemory };
+
+fn buildDigestResult(allocator: Allocator, id: RequestId, digest: symbols.Digest) BuilderError![]u8 {
+    var allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer allocating.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
+    try writeEnvelopeStart(&stringify, id);
+    try stringify.beginObject();
+    try stringify.objectField("revision");
+    try stringify.print("{d}", .{digest.revision});
+    try stringify.objectField("files");
+    try stringify.print("{d}", .{digest.files});
+    try stringify.objectField("symbols");
+    try stringify.print("{d}", .{digest.symbols});
+    try stringify.endObject();
+    try stringify.endObject();
+    return allocating.toOwnedSlice();
+}
+
+const IngestParams = struct {
+    revision: i64,
+    files: []symbols.FileInput,
+};
+
+fn parseSymbolInput(value: std.json.Value) IngestParseError!symbols.SymbolInput {
+    const object = switch (value) {
+        .object => |map| map,
+        else => return error.InvalidParams,
+    };
+    const name = readStringField(object, "name") orelse return error.InvalidParams;
+    const start = readUnsignedField(object, "start") orelse return error.InvalidParams;
+    const end = readUnsignedField(object, "end") orelse return error.InvalidParams;
+    if (end < start) return error.InvalidParams;
+    return .{ .name = name, .start = start, .end = end };
+}
+
+fn parseIngestParams(arena: Allocator, params: std.json.Value) IngestParseError!IngestParams {
+    const object = switch (params) {
+        .object => |map| map,
+        else => return error.InvalidParams,
+    };
+    const revision = readRevision(object) orelse return error.InvalidParams;
+    const encoded_files = readArrayField(object, "files") orelse return error.InvalidParams;
+    const files = try arena.alloc(symbols.FileInput, encoded_files.items.len);
+    for (encoded_files.items, 0..) |entry, file_index| {
+        const file_object = switch (entry) {
+            .object => |map| map,
+            else => return error.InvalidParams,
+        };
+        const uri = readStringField(file_object, "uri") orelse return error.InvalidParams;
+        const encoded_symbols = readArrayField(file_object, "symbols") orelse return error.InvalidParams;
+        const file_symbols = try arena.alloc(symbols.SymbolInput, encoded_symbols.items.len);
+        for (encoded_symbols.items, 0..) |symbol, symbol_index| {
+            file_symbols[symbol_index] = try parseSymbolInput(symbol);
+        }
+        files[file_index] = .{ .uri = uri, .symbols = file_symbols };
+    }
+    return .{ .revision = revision, .files = files };
+}
+
+fn encodeIds(arena: Allocator, ids: []const u32) error{OutOfMemory}![]const u8 {
+    if (ids.len == 0) return "";
+    const bytes = try arena.alloc(u8, ids.len * 4);
+    for (ids, 0..) |id, index| std.mem.writeInt(u32, bytes[index * 4 ..][0..4], id, .little);
+    const encoded_length = std.base64.standard.Encoder.calcSize(bytes.len);
+    const encoded = try arena.alloc(u8, encoded_length);
+    return std.base64.standard.Encoder.encode(encoded, bytes);
+}
+
+fn storeErrorDetail(err: symbols.StoreError) []const u8 {
+    return switch (err) {
+        error.OutOfMemory => "out of memory",
+        error.InvalidInput => "symbol names and uris must be printable ascii",
+        error.RevisionMismatch => "stale revision",
+    };
+}
+
+fn buildIngestResult(
+    allocator: Allocator,
+    id: RequestId,
+    params: std.json.Value,
+    arena: Allocator,
+    store: *symbols.Store,
+) BuilderError![]u8 {
+    const parsed = parseIngestParams(arena, params) catch |err| switch (err) {
+        error.InvalidParams => return buildError(allocator, id, .invalid_params, "malformed ingest params"),
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    store.ingest(parsed.revision, parsed.files) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return buildError(allocator, id, .invalid_params, storeErrorDetail(err));
+    };
+
+    var allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer allocating.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
+    try writeEnvelopeStart(&stringify, id);
+    try stringify.beginObject();
+    try stringify.objectField("revision");
+    try stringify.print("{d}", .{store.currentRevision()});
+    try stringify.objectField("files");
+    try stringify.beginArray();
+    for (parsed.files) |file| {
+        try stringify.beginObject();
+        try stringify.objectField("uri");
+        try stringify.write(file.uri);
+        try stringify.objectField("idsBase64");
+        try stringify.write(encodeIds(arena, store.fileIds(file.uri) orelse &.{}) catch return error.OutOfMemory);
+        try stringify.endObject();
+    }
+    try stringify.endArray();
+    try stringify.endObject();
+    try stringify.endObject();
+    return allocating.toOwnedSlice();
+}
+
+fn buildRemoveResult(
+    allocator: Allocator,
+    id: RequestId,
+    params: std.json.Value,
+    store: *symbols.Store,
+) BuilderError![]u8 {
+    const object = switch (params) {
+        .object => |map| map,
+        else => return buildError(allocator, id, .invalid_params, "params must be an object"),
+    };
+    const revision = readRevision(object) orelse
+        return buildError(allocator, id, .invalid_params, "missing revision");
+    const uri = readStringField(object, "uri") orelse
+        return buildError(allocator, id, .invalid_params, "missing uri");
+    store.remove(revision, uri) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return buildError(allocator, id, .invalid_params, storeErrorDetail(err));
+    };
+    return buildRevisionResult(allocator, id, store.currentRevision());
+}
+
+fn buildQueryResult(
+    allocator: Allocator,
+    id: RequestId,
+    params: std.json.Value,
+    arena: Allocator,
+    store: *symbols.Store,
+) BuilderError![]u8 {
+    const object = switch (params) {
+        .object => |map| map,
+        else => return buildError(allocator, id, .invalid_params, "params must be an object"),
+    };
+    const revision = readRevision(object) orelse
+        return buildError(allocator, id, .invalid_params, "missing revision");
+    const needle = readStringField(object, "query") orelse
+        return buildError(allocator, id, .invalid_params, "missing query");
+
+    var ids: std.ArrayList(u32) = .empty;
+    defer ids.deinit(allocator);
+    store.query(allocator, revision, needle, &ids) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return buildError(allocator, id, .invalid_params, storeErrorDetail(err));
+    };
+    const encoded = encodeIds(arena, ids.items) catch return error.OutOfMemory;
+
+    var allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer allocating.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
+    try writeEnvelopeStart(&stringify, id);
+    try stringify.beginObject();
+    try stringify.objectField("revision");
+    try stringify.print("{d}", .{store.currentRevision()});
+    try stringify.objectField("idsBase64");
+    try stringify.write(encoded);
+    try stringify.endObject();
+    try stringify.endObject();
+    return allocating.toOwnedSlice();
+}
+
+fn buildClearResult(
+    allocator: Allocator,
+    id: RequestId,
+    params: std.json.Value,
+    store: *symbols.Store,
+) BuilderError![]u8 {
+    const object = switch (params) {
+        .object => |map| map,
+        else => return buildError(allocator, id, .invalid_params, "params must be an object"),
+    };
+    const revision = readRevision(object) orelse
+        return buildError(allocator, id, .invalid_params, "missing revision");
+    store.clear(revision) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return buildError(allocator, id, .invalid_params, storeErrorDetail(err));
+    };
+    return buildRevisionResult(allocator, id, store.currentRevision());
+}
+
 /// Bodies are parsed with `parse_numbers = false`, so JSON numbers arrive as
 /// arena-owned `number_string` slices and can be echoed without re-formatting.
 fn parseId(object: std.json.ObjectMap) ParsedId {
@@ -366,7 +634,12 @@ fn parseId(object: std.json.ObjectMap) ParsedId {
     };
 }
 
-fn handleObject(allocator: Allocator, object: std.json.ObjectMap, arena: Allocator) BuilderError!Result {
+fn handleObject(
+    allocator: Allocator,
+    object: std.json.ObjectMap,
+    arena: Allocator,
+    store: ?*symbols.Store,
+) BuilderError!Result {
     const parsed_id = parseId(object);
     const id = switch (parsed_id) {
         .missing => null,
@@ -403,12 +676,35 @@ fn handleObject(allocator: Allocator, object: std.json.ObjectMap, arena: Allocat
     if (is_notification) return .{ .response = null };
 
     if (std.mem.eql(u8, method, "health")) {
-        return .{ .response = try buildHealth(allocator, request_id) };
+        return .{ .response = try buildHealth(allocator, request_id, store != null) };
     }
     if (std.mem.eql(u8, method, "lex")) {
         const params = object.get("params") orelse
             return .{ .response = try buildError(allocator, request_id, .invalid_params, "missing params") };
         return .{ .response = try buildLexResult(allocator, request_id, params, arena) };
+    }
+    if (std.mem.startsWith(u8, method, symbol_method_prefix)) {
+        const active_store = store orelse
+            return .{ .response = try buildError(allocator, request_id, .unknown_method, "symbols are unavailable") };
+        const method_name = method[symbol_method_prefix.len..];
+        if (std.mem.eql(u8, method_name, "digest")) {
+            return .{ .response = try buildDigestResult(allocator, request_id, active_store.digest()) };
+        }
+        const params = object.get("params") orelse
+            return .{ .response = try buildError(allocator, request_id, .invalid_params, "missing params") };
+        if (std.mem.eql(u8, method_name, "ingest")) {
+            return .{ .response = try buildIngestResult(allocator, request_id, params, arena, active_store) };
+        }
+        if (std.mem.eql(u8, method_name, "remove")) {
+            return .{ .response = try buildRemoveResult(allocator, request_id, params, active_store) };
+        }
+        if (std.mem.eql(u8, method_name, "query")) {
+            return .{ .response = try buildQueryResult(allocator, request_id, params, arena, active_store) };
+        }
+        if (std.mem.eql(u8, method_name, "clear")) {
+            return .{ .response = try buildClearResult(allocator, request_id, params, active_store) };
+        }
+        return .{ .response = try buildError(allocator, request_id, .unknown_method, "unknown method") };
     }
     if (std.mem.eql(u8, method, "shutdown")) {
         return .{ .response = try buildNullResult(allocator, request_id), .shutdown = true };
@@ -440,7 +736,13 @@ fn isSingleJsonDocument(arena: Allocator, body: []const u8) !bool {
     return trailing == .end_of_document;
 }
 
-fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator, id_out: *?RequestId) BuilderError!Result {
+fn handleBodyInner(
+    allocator: Allocator,
+    body: []const u8,
+    arena: Allocator,
+    id_out: *?RequestId,
+    store: ?*symbols.Store,
+) BuilderError!Result {
     const valid_document = isSingleJsonDocument(arena, body) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -461,7 +763,7 @@ fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator, id_
                 .present => |value| value,
                 .missing, .invalid => null,
             };
-            return handleObject(allocator, object, arena);
+            return handleObject(allocator, object, arena, store);
         },
         else => return .{ .response = try buildError(allocator, .null, .invalid_request, "request must be an object") },
     }
@@ -470,10 +772,17 @@ fn handleBodyInner(allocator: Allocator, body: []const u8, arena: Allocator, id_
 /// Handles one frame body. Parse failures produce a `-32700` response and keep
 /// the connection usable because the frame boundary is already known.
 pub fn handleBody(allocator: Allocator, body: []const u8) Allocator.Error!Result {
+    return handleBodyWithStore(allocator, body, null);
+}
+
+/// Handles one frame body with an optional workspace symbol store. The store is
+/// the only mutable state the request path can reach; without it the response
+/// stream is byte identical to `handleBody`.
+pub fn handleBodyWithStore(allocator: Allocator, body: []const u8, store: ?*symbols.Store) Allocator.Error!Result {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     var request_id: ?RequestId = null;
-    return handleBodyInner(allocator, body, arena_state.allocator(), &request_id) catch |err| switch (err) {
+    return handleBodyInner(allocator, body, arena_state.allocator(), &request_id, store) catch |err| switch (err) {
         error.OutOfMemory, error.WriteFailed => {
             const id = request_id orelse RequestId.null;
             const failure = buildInternalError(allocator, id) catch |build_err| return mapBuilderError(build_err);
@@ -656,4 +965,141 @@ test "internal error echoes the request id" {
     defer std.testing.allocator.free(body);
     try std.testing.expect(std.mem.indexOf(u8, body, "-32603") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"id\":\"req-1\"") != null);
+}
+
+fn symbolResponse(store: *symbols.Store, body: []const u8) ![]u8 {
+    const result = try handleBodyWithStore(std.testing.allocator, body, store);
+    return result.response orelse error.TestUnexpectedResult;
+}
+
+const ingest_fixture =
+    "{\"id\":1,\"method\":\"symbols/ingest\",\"params\":{\"revision\":3,\"files\":[" ++
+    "{\"uri\":\"file:///b.gd\",\"symbols\":[{\"name\":\"script_2\",\"start\":20,\"end\":28}]}," ++
+    "{\"uri\":\"file:///a.gd\",\"symbols\":[{\"name\":\"script_10\",\"start\":10,\"end\":19}," ++
+    "{\"name\":\"getValue\",\"start\":30,\"end\":38}]}]}}";
+
+test "symbols ingest returns ids in input order and queries in workspace order" {
+    var store = symbols.Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const ingest = try symbolResponse(&store, ingest_fixture);
+    defer std.testing.allocator.free(ingest);
+    try std.testing.expect(std.mem.indexOf(u8, ingest, "\"revision\":3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ingest, "\"uri\":\"file:///b.gd\",\"idsBase64\":\"AQAAAA==\"") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, ingest, "\"uri\":\"file:///a.gd\",\"idsBase64\":\"AgAAAAMAAAA=\"") != null,
+    );
+
+    const query = try symbolResponse(
+        &store,
+        "{\"id\":2,\"method\":\"symbols/query\",\"params\":{\"revision\":3,\"query\":\"script\"}}",
+    );
+    defer std.testing.allocator.free(query);
+    try std.testing.expect(std.mem.indexOf(u8, query, "\"idsBase64\":\"AgAAAAEAAAA=\"") != null);
+
+    const empty = try symbolResponse(
+        &store,
+        "{\"id\":3,\"method\":\"symbols/query\",\"params\":{\"revision\":3,\"query\":\"\"}}",
+    );
+    defer std.testing.allocator.free(empty);
+    // Workspace order is getValue (3), script_10 (2), script_2 (1).
+    try std.testing.expect(std.mem.indexOf(u8, empty, "\"idsBase64\":\"AwAAAAIAAAABAAAA\"") != null);
+}
+
+test "symbols digest remove and clear track the store" {
+    var store = symbols.Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const ingest = try symbolResponse(&store, ingest_fixture);
+    std.testing.allocator.free(ingest);
+
+    const digest = try symbolResponse(&store, "{\"id\":4,\"method\":\"symbols/digest\"}");
+    defer std.testing.allocator.free(digest);
+    try std.testing.expect(std.mem.indexOf(u8, digest, "\"revision\":3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, digest, "\"files\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, digest, "\"symbols\":3") != null);
+
+    const removed = try symbolResponse(
+        &store,
+        "{\"id\":5,\"method\":\"symbols/remove\",\"params\":{\"revision\":4,\"uri\":\"file:///b.gd\"}}",
+    );
+    defer std.testing.allocator.free(removed);
+    try std.testing.expect(std.mem.indexOf(u8, removed, "\"revision\":4") != null);
+    const after_remove = try symbolResponse(&store, "{\"id\":6,\"method\":\"symbols/digest\"}");
+    defer std.testing.allocator.free(after_remove);
+    try std.testing.expect(std.mem.indexOf(u8, after_remove, "\"files\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after_remove, "\"symbols\":2") != null);
+
+    const cleared = try symbolResponse(
+        &store,
+        "{\"id\":7,\"method\":\"symbols/clear\",\"params\":{\"revision\":5}}",
+    );
+    defer std.testing.allocator.free(cleared);
+    try std.testing.expect(std.mem.indexOf(u8, cleared, "\"revision\":5") != null);
+    const after_clear = try symbolResponse(&store, "{\"id\":8,\"method\":\"symbols/digest\"}");
+    defer std.testing.allocator.free(after_clear);
+    try std.testing.expect(std.mem.indexOf(u8, after_clear, "\"files\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after_clear, "\"symbols\":0") != null);
+}
+
+test "symbols rejects stale revisions malformed params and non ascii input" {
+    var store = symbols.Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const ingest = try symbolResponse(&store, ingest_fixture);
+    std.testing.allocator.free(ingest);
+
+    const stale = try symbolResponse(
+        &store,
+        "{\"id\":9,\"method\":\"symbols/query\",\"params\":{\"revision\":2,\"query\":\"a\"}}",
+    );
+    defer std.testing.allocator.free(stale);
+    try std.testing.expect(std.mem.indexOf(u8, stale, "-32602") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stale, "stale revision") != null);
+
+    const malformed = try symbolResponse(
+        &store,
+        "{\"id\":10,\"method\":\"symbols/ingest\",\"params\":{\"revision\":3}}",
+    );
+    defer std.testing.allocator.free(malformed);
+    try std.testing.expect(std.mem.indexOf(u8, malformed, "malformed ingest params") != null);
+
+    const non_ascii = try symbolResponse(
+        &store,
+        "{\"id\":11,\"method\":\"symbols/ingest\",\"params\":{\"revision\":4,\"files\":[" ++
+            "{\"uri\":\"file:///c.gd\",\"symbols\":[{\"name\":\"\xe4\xbd\xa0\",\"start\":0,\"end\":1}]}]}}",
+    );
+    defer std.testing.allocator.free(non_ascii);
+    try std.testing.expect(std.mem.indexOf(u8, non_ascii, "-32602") != null);
+    try std.testing.expect(std.mem.indexOf(u8, non_ascii, "printable ascii") != null);
+}
+
+test "symbols methods are unavailable without a store" {
+    const result = try handleBody(
+        std.testing.allocator,
+        "{\"id\":12,\"method\":\"symbols/query\",\"params\":{\"revision\":0,\"query\":\"a\"}}",
+    );
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32601") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "symbols are unavailable") != null);
+}
+
+test "health advertises symbols only with a store" {
+    var store = symbols.Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const stateless = try handleBody(std.testing.allocator, "{\"id\":13,\"method\":\"health\"}");
+    defer if (stateless.response) |body| std.testing.allocator.free(body);
+    const stateless_body = stateless.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, stateless_body, "\"capabilities\":[\"lex\"]") != null);
+
+    const with_store = try handleBodyWithStore(
+        std.testing.allocator,
+        "{\"id\":14,\"method\":\"health\"}",
+        &store,
+    );
+    defer if (with_store.response) |body| std.testing.allocator.free(body);
+    const with_store_body = with_store.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, with_store_body, "\"capabilities\":[\"lex\",\"symbols\"]") != null);
 }
