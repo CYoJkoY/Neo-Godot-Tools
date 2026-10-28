@@ -2,7 +2,7 @@
 	"name": "neo-godot-tools",
 	"displayName": "Neo Godot Tools",
 	"icon": "icon.png",
-	"version": "2.14.4",
+	"version": "3.0.0",
 	"description": "Godot development tools for VS Code with local-first GDScript intelligence, documentation, debugging, and Godot LSP integration.",
 	"repository": {
 		"type": "git",
