@@ -36,8 +36,50 @@ export interface ZigBackendTokenOptions {
 	readonly signal?: AbortSignal;
 }
 
+export interface ZigBackendSymbolInput {
+	readonly name: string;
+	readonly start: number;
+	readonly end: number;
+}
+
+export interface ZigBackendFileSymbols {
+	readonly uri: string;
+	readonly symbols: readonly ZigBackendSymbolInput[];
+}
+
+export interface ZigBackendIngestedFile {
+	readonly uri: string;
+	readonly ids: Uint32Array;
+}
+
+export interface ZigBackendIngestResult {
+	readonly revision: number;
+	readonly files: readonly ZigBackendIngestedFile[];
+}
+
+export interface ZigBackendDigest {
+	readonly revision: number;
+	readonly files: number;
+	readonly symbols: number;
+}
+
+export interface ZigBackendCapabilities {
+	readonly lex: boolean;
+	readonly symbols: boolean;
+}
+
 export interface ZigBackend {
 	lex(source: string, options?: ZigBackendTokenOptions): Promise<GDScriptToken[]>;
+	readonly capabilities: ZigBackendCapabilities;
+	ingestSymbols(
+		revision: number,
+		files: readonly ZigBackendFileSymbols[],
+		options?: ZigBackendTokenOptions,
+	): Promise<ZigBackendIngestResult>;
+	removeSymbols(revision: number, uri: string, options?: ZigBackendTokenOptions): Promise<number>;
+	querySymbols(revision: number, query: string, options?: ZigBackendTokenOptions): Promise<Uint32Array>;
+	digestSymbols(options?: ZigBackendTokenOptions): Promise<ZigBackendDigest>;
+	clearSymbols(revision: number, options?: ZigBackendTokenOptions): Promise<number>;
 	shutdown(): Promise<void>;
 }
 
@@ -95,6 +137,8 @@ interface Lifecycle {
 	shutdownPromise: Promise<void> | undefined;
 	shutdownResolve: (() => void) | undefined;
 	shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+	capabilities: { lex: boolean; symbols: boolean };
+	capabilitiesKnown: boolean;
 }
 
 type SpawnResult =
@@ -537,6 +581,66 @@ const requestLex = (
 	});
 };
 
+const decodeIds = (encoded: unknown): Uint32Array | undefined => {
+	if (typeof encoded !== "string") return undefined;
+	if (encoded.length === 0) return new Uint32Array(0);
+	const bytes = Buffer.from(encoded, "base64");
+	if (bytes.length % 4 !== 0) return undefined;
+	return Uint32Array.from({ length: bytes.length / 4 }, (_value, index) => bytes.readUInt32LE(index * 4));
+};
+
+const parseIngestedFile = (expected: string, entry: unknown): ZigBackendIngestedFile | undefined => {
+	if (!isRecord(entry)) return undefined;
+	if (entry["uri"] !== expected) return undefined;
+	const ids = decodeIds(entry["idsBase64"]);
+	if (ids === undefined) return undefined;
+	return { uri: expected, ids };
+};
+
+const parseIngestResult = (
+	expectedUris: readonly string[],
+	value: unknown,
+): ZigBackendIngestResult | undefined => {
+	if (!isRecord(value)) return undefined;
+	const revision = readOffset(value, "revision");
+	if (revision === undefined) return undefined;
+	const encodedFiles = value["files"];
+	if (!Array.isArray(encodedFiles)) return undefined;
+	if (encodedFiles.length !== expectedUris.length) return undefined;
+	const files = encodedFiles.map((entry, index) => parseIngestedFile(expectedUris[index], entry));
+	if (files.includes(undefined)) return undefined;
+	return { revision, files: files.filter(isDefined) };
+};
+
+const parseRevisionResult = (value: unknown): number | undefined => {
+	if (!isRecord(value)) return undefined;
+	return readOffset(value, "revision");
+};
+
+const parseDigestResult = (value: unknown): ZigBackendDigest | undefined => {
+	if (!isRecord(value)) return undefined;
+	const revision = readOffset(value, "revision");
+	const files = readOffset(value, "files");
+	const symbols = readOffset(value, "symbols");
+	if (revision === undefined || files === undefined || symbols === undefined) return undefined;
+	return { revision, files, symbols };
+};
+
+const requestSymbols = <T>(
+	lifecycle: Lifecycle,
+	state: BackendProcess,
+	method: string,
+	params: Readonly<Record<string, unknown>> | undefined,
+	signal: AbortSignal | undefined,
+	malformed: string,
+	parse: (value: unknown) => T | undefined,
+): Promise<T> =>
+	sendRequestOnProcess(lifecycle, state, `symbols/${method}`, params, undefined, signal).then((result) => {
+		const parsed = parse(result);
+		if (parsed !== undefined) return parsed;
+		return Promise.reject(new Error(malformed));
+	});
+
 const isCompatibleHealth = (value: unknown): boolean => {
 	if (!isRecord(value)) return false;
 	if (value["protocolVersion"] !== PROTOCOL_VERSION) return false;
@@ -545,10 +649,22 @@ const isCompatibleHealth = (value: unknown): boolean => {
 	return capabilities.some((entry: unknown) => entry === "lex");
 };
 
+const recordCapabilities = (lifecycle: Lifecycle, health: unknown): void => {
+	if (!isRecord(health)) return;
+	const declared = health["capabilities"];
+	if (!Array.isArray(declared)) return;
+	const supports = (name: string): boolean => declared.some((entry: unknown) => entry === name);
+	lifecycle.capabilities = { lex: supports("lex"), symbols: supports("symbols") };
+	lifecycle.capabilitiesKnown = true;
+};
+
 const completeHandshake = (lifecycle: Lifecycle, state: BackendProcess): Promise<Error | undefined> =>
 	sendRequestOnProcess(lifecycle, state, "health", undefined, HEALTH_TIMEOUT_MS, undefined).then(
 		(health) => {
-			if (isCompatibleHealth(health)) return undefined;
+			if (isCompatibleHealth(health)) {
+				recordCapabilities(lifecycle, health);
+				return undefined;
+			}
 			return new Error(`Zig backend failed the protocol ${PROTOCOL_VERSION} health check with lex capability.`);
 		},
 		(error: unknown) => asError(error),
@@ -693,10 +809,17 @@ const finalizeProcess = (lifecycle: Lifecycle, state: BackendProcess, error: Err
 	if (state.finalized) return;
 	state.finalized = true;
 	detachProcess(state);
-	if (lifecycle.child === state) lifecycle.child = undefined;
+	const wasActive = lifecycle.child === state;
+	if (wasActive) lifecycle.child = undefined;
 	resetStdout(state);
 	state.stderrTail = Buffer.alloc(0);
 	state.frame = createFrameState();
+	// Capabilities describe the process that answered the handshake; a restart
+	// reports a fresh set once its own health check completes.
+	if (wasActive) {
+		lifecycle.capabilities = { lex: false, symbols: false };
+		lifecycle.capabilitiesKnown = false;
+	}
 	rejectAllPending(lifecycle, error);
 	completeShutdown(lifecycle);
 };
@@ -858,7 +981,26 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		shutdownPromise: undefined,
 		shutdownResolve: undefined,
 		shutdownTimer: undefined,
+		capabilities: { lex: false, symbols: false },
+		capabilitiesKnown: false,
 	};
+
+	const withProcess = <T>(
+		signal: AbortSignal | undefined,
+		run: (state: BackendProcess) => Promise<T>,
+	): Promise<T> => {
+		if (signal?.aborted === true) return Promise.reject(createAbortError());
+		return ensureProcess(lifecycle, options).then(() => {
+			if (lifecycle.disposed) return Promise.reject(createShutdownError());
+			const state = lifecycle.child;
+			if (state === undefined) return Promise.reject(new Error("Zig backend process is not available."));
+			return run(state);
+		});
+	};
+
+	/** Health advertises `symbols` only for builds that carry the native store. */
+	const symbolsUnavailable = (): Promise<never> =>
+		Promise.reject(new Error("Zig backend does not advertise the symbols capability."));
 
 	const lex = (source: string, tokenOptions: ZigBackendTokenOptions = {}): Promise<GDScriptToken[]> => {
 		const signal = tokenOptions.signal;
@@ -869,6 +1011,103 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 			if (state === undefined) return Promise.reject(new Error("Zig backend process is not available."));
 			return requestLex(lifecycle, state, source, signal);
 		});
+	};
+
+	const ingestSymbols = (
+		revision: number,
+		files: readonly ZigBackendFileSymbols[],
+		tokenOptions: ZigBackendTokenOptions = {},
+	): Promise<ZigBackendIngestResult> => {
+		if (!lifecycle.capabilities.symbols) return symbolsUnavailable();
+		return withProcess(tokenOptions.signal, (state) => {
+			const expectedUris = files.map((file) => file.uri);
+			return requestSymbols(
+				lifecycle,
+				state,
+				"ingest",
+				{ revision, files },
+				tokenOptions.signal,
+				"Zig backend returned a malformed symbol ingest result.",
+				(value: unknown) => parseIngestResult(expectedUris, value),
+			);
+		});
+	};
+
+	const removeSymbols = (
+		revision: number,
+		uri: string,
+		tokenOptions: ZigBackendTokenOptions = {},
+	): Promise<number> => {
+		if (!lifecycle.capabilities.symbols) return symbolsUnavailable();
+		return withProcess(tokenOptions.signal, (state) =>
+			requestSymbols(
+				lifecycle,
+				state,
+				"remove",
+				{ revision, uri },
+				tokenOptions.signal,
+				"Zig backend returned a malformed symbol remove result.",
+				parseRevisionResult,
+			),
+		);
+	};
+
+	const parseQueryIds = (value: unknown): Uint32Array | undefined => {
+		if (!isRecord(value)) return undefined;
+		if (readOffset(value, "revision") === undefined) return undefined;
+		return decodeIds(value["idsBase64"]);
+	};
+
+	const querySymbols = (
+		revision: number,
+		query: string,
+		tokenOptions: ZigBackendTokenOptions = {},
+	): Promise<Uint32Array> => {
+		if (!lifecycle.capabilities.symbols) return symbolsUnavailable();
+		return withProcess(tokenOptions.signal, (state) =>
+			requestSymbols(
+				lifecycle,
+				state,
+				"query",
+				{ revision, query },
+				tokenOptions.signal,
+				"Zig backend returned a malformed symbol query result.",
+				parseQueryIds,
+			),
+		);
+	};
+
+	const digestSymbols = (tokenOptions: ZigBackendTokenOptions = {}): Promise<ZigBackendDigest> => {
+		if (!lifecycle.capabilities.symbols) return symbolsUnavailable();
+		return withProcess(tokenOptions.signal, (state) =>
+			requestSymbols(
+				lifecycle,
+				state,
+				"digest",
+				undefined,
+				tokenOptions.signal,
+				"Zig backend returned a malformed symbol digest result.",
+				parseDigestResult,
+			),
+		);
+	};
+
+	const clearSymbols = (
+		revision: number,
+		tokenOptions: ZigBackendTokenOptions = {},
+	): Promise<number> => {
+		if (!lifecycle.capabilities.symbols) return symbolsUnavailable();
+		return withProcess(tokenOptions.signal, (state) =>
+			requestSymbols(
+				lifecycle,
+				state,
+				"clear",
+				{ revision },
+				tokenOptions.signal,
+				"Zig backend returned a malformed symbol clear result.",
+				parseRevisionResult,
+			),
+		);
 	};
 
 	const shutdown = (): Promise<void> => {
@@ -901,7 +1140,18 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		return promise;
 	};
 
-	return { lex, shutdown };
+	return {
+		lex,
+		get capabilities(): ZigBackendCapabilities {
+			return { ...lifecycle.capabilities };
+		},
+		ingestSymbols,
+		removeSymbols,
+		querySymbols,
+		digestSymbols,
+		clearSymbols,
+		shutdown,
+	};
 };
 
 export const zigBackendRequiresBuiltBinary = (environment: Readonly<Record<string, string | undefined>>): boolean =>

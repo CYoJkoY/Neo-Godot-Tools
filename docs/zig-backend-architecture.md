@@ -1,8 +1,9 @@
 # Zig Backend Architecture
 
-Status: implemented for the bootstrap slice. The Zig 0.17.0 sidecar serves `health`, `lex` and
-`shutdown`, and its Windows and Linux x64 binaries ship inside the VSIX. Every VS Code provider still
-runs on the existing TypeScript implementation.
+Status: implemented for the bootstrap slice and the workspace symbol mirror. The Zig 0.17.0 sidecar
+serves `health`, `lex`, `shutdown` and the `symbols/*` family, and its Windows and Linux x64 binaries
+ship inside the VSIX. Workspace symbol queries and global completions now answer from the sidecar when
+it is available; every other provider still runs on the existing TypeScript implementation.
 
 This document is the contract for moving the GDScript analysis core into a native Zig 0.17.0 process.
 It defines the process lifecycle, the wire protocol, the offset model, the failure semantics and the
@@ -14,15 +15,16 @@ The extension keeps a thin TypeScript adapter because VS Code APIs (providers, w
 sessions, configuration, extension lifecycle) are a JavaScript surface. Zig owns the algorithms that
 walk GDScript source: lexing, parsing, semantic indexing, queries and the formatter.
 
-The first slice deliberately does not change user-visible behaviour. No provider calls the sidecar, no
-configuration key is added, no default changes, and the Godot language server remains the fallback for
-semantics the local model cannot establish safely. The TypeScript lexer stays in place as the reference
-implementation and as the fallback path.
+The first slice deliberately did not change user-visible behaviour. The symbol mirror keeps that
+property: no configuration key is added, no default changes, the returned symbol order is the same
+order the TypeScript index produced, and the Godot language server remains the fallback for semantics
+the local model cannot establish safely. The TypeScript lexer and the TypeScript symbol index stay in
+place as the reference implementation and as the fallback path.
 
-Explicitly out of scope for the bootstrap slice:
+Explicitly out of scope for the current phase:
 
-- provider integration, semantic indexing, formatter, scene and resource parsing, debug protocol and
-  the Godot LSP bridge;
+- the native parser, the native semantic index for every query, the formatter, scene and resource
+  parsing, debug protocol and the Godot LSP bridge;
 - persistent state, caches on disk, or background project scans;
 - code signing, Marketplace signing, and packaged builds for platforms other than Windows x64 and
   Linux x64;
@@ -92,9 +94,9 @@ retry loop without a delay.
 ```json
 {
   "protocolVersion": 1,
-  "backendVersion": "0.1.0",
+  "backendVersion": "0.2.0",
   "zigVersion": "0.17.0",
-  "capabilities": ["lex"]
+  "capabilities": ["lex", "symbols"]
 }
 ```
 
@@ -102,6 +104,12 @@ The adapter treats `protocolVersion` as exact-match for now: mixing 1 with 2 is 
 negotiation. `capabilities` lets a newer backend advertise methods the adapter may call conditionally,
 so adding a method does not require a protocol bump. `zigVersion` is informational; the compiler that
 built the binary is recorded in CI, not inferred at runtime.
+
+`symbols` is advertised only by a process that owns a workspace symbol store, which is every process
+spawned by `src/main.zig`. The capability list stays `["lex"]` for a stateless server, so a test or an
+embedder that runs the request path without a store cannot be told to call `symbols/*`. Capabilities
+are recorded during the handshake and cleared when that process exits, so a restarted sidecar is
+re-interrogated instead of inheriting the previous answer.
 
 ## Framing
 
@@ -232,11 +240,118 @@ units, so `end` and `character` can run past the source length. The token value 
 source. The Zig implementation reproduces the numeric overshoot because the TypeScript parser asserts on
 token positions and the two implementations must agree before any provider switch.
 
+## The `symbols` family
+
+`symbols/*` is the first provider integration. The sidecar keeps a compact copy of the workspace symbol
+table so a query returns an ordered id vector instead of symbol objects, and the extension host never
+flattens, filters and sorts the whole index on its own thread.
+
+`src/index/symbol_index.ts` stays authoritative. It owns the `IndexedSymbol` objects, the provider
+payloads and the observable order. The native store only answers "which ids match, in what order"; the
+TypeScript mirror maps those ids back to the objects the index already holds.
+
+### Methods
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `symbols/digest` | none | `{"revision":N,"files":F,"symbols":S}` |
+| `symbols/ingest` | `{"revision":N,"files":[{"uri":"...","symbols":[{"name":"...","start":0,"end":5}]}]}` | `{"revision":N,"files":[{"uri":"...","idsBase64":"..."}]}` |
+| `symbols/remove` | `{"revision":N,"uri":"..."}` | `{"revision":N}` |
+| `symbols/query` | `{"revision":N,"query":"..."}` | `{"revision":N,"idsBase64":"..."}` |
+| `symbols/clear` | `{"revision":N}` | `{"revision":N}` |
+
+`ingest` replaces every symbol of each named file and leaves other files alone. Ids in the result are
+listed in input order, so the caller can pair the i-th id with the i-th symbol it sent without a second
+key on the wire. An empty `symbols` array removes that file's symbols while keeping the file known.
+
+Ids are stored as unsigned 32-bit integers and cross the boundary as standard base64 of little-endian
+u32 words. The adapter decodes them into a `Uint32Array`, which is compact enough to compare and index
+without allocating one object per symbol.
+
+### Revisions
+
+The store carries one revision per sidecar process. Every mutation (`ingest`, `remove`, `clear`) must
+send a revision strictly greater than the revision the store currently holds, and a query must name the
+current revision exactly. A mutation that does not advance returns `-32602` with `"stale revision"` and
+leaves the table untouched; a query against an older or newer revision fails the same way.
+
+The revision exists because the store is shared by every client connected to one sidecar process: two
+clients both counting from zero would let a table rebuilt for one workspace overwrite a newer one. The
+mirror therefore reads `symbols/digest` before it rebuilds and starts from
+`max(server revision, tracked revision) + 1`, retries once from a fresh resync when a mutation loses a
+race, and drops a query result whose revision changed while the request was in flight.
+
+### Input restrictions
+
+`uri` and `name` must be printable ASCII (`0x20` to `0x7e`). A control byte or a non-ASCII byte is
+rejected with `-32602` and the table is left alone. This keeps the native comparator exact: ASCII case
+folding and the punctuation table below cover the whole input domain, so no locale data can change the
+order inside the store.
+
+### Ordering
+
+`workspaceSymbols(query)` in the TypeScript index sorts with `Intl.Collator`, and that order is visible
+in the Quick Pick list and in the completion list. The native comparator reproduces it for printable
+ASCII:
+
+1. punctuation ordered as `` _-,;:!?.'"()[]{}@*/\&#%`^+<=>|~$ ``, then `0`-`9`, then letters with both
+   cases sharing one primary rank;
+2. shorter prefix first when one string is a prefix of the other;
+3. lowercase before uppercase at the first differing position;
+4. the remaining code unit order.
+
+Ties on name fall back to `uri`, then `start`, then the id, which makes the order total. Matching is a
+case-insensitive substring test on the ASCII-folded name; an empty query matches every symbol.
+
+ICU data differs between hosts, so `src/index/ascii_collation.ts` compares the host `Intl.Collator`
+with the native comparator on a probe set before the fast path is enabled. A host that disagrees, for
+example `tr-TR` where `I` and `i` do not match, keeps the TypeScript path for the session. The probe
+runs once and is cached.
+
+### Mirror lifecycle
+
+`src/index/zig_symbol_mirror.ts` sits between `LanguageService` and the sidecar:
+
+- it observes `upsert`, `remove` and `clear` from the language service and debounces one flush per 16 ms;
+- a flush packs files into requests of at most 2048 files and about 8 MiB of estimated JSON, measured as
+  48 bytes plus the name length per symbol and 32 bytes plus the uri length per file, which is an upper
+  bound for printable ASCII;
+- more than 64 individual removals trigger one resync instead of one request per uri;
+- a resync reads the digest, clears the table at a newer revision, ingests every file in batches and
+  then verifies `files` and `symbols` against the snapshot before marking the copy synchronized;
+- an edit that arrives while a request is in flight keeps its newer stamp and is sent again next round,
+  and a single file larger than one request disables the mirror instead of truncating it;
+- the mirror stores the symbols `SymbolIndex` captured, so a body edit that shifts a declaration leaves
+  the mirrored range unchanged until the next API change, which is what the index answers with.
+
+The mirror answers `undefined` whenever it cannot prove the native table matches the index: binary
+missing, capability absent, host collation disagreeing, non-ASCII name or uri, oversized file, a failed
+flush, or a query that exceeded the 150 ms budget. Every caller then uses the synchronous TypeScript
+index, which is what produced the answer before this change.
+
+Cached query results are only served while no upsert or removal is pending, because the native table
+lags the index by up to one flush. The cache holds 128 entries and is cleared on every table change, so
+it cannot grow with the size of the workspace.
+
+### Consumers
+
+- `WorkspaceSymbolProvider` returns a promise only when a mirror is attached; without one it still
+  answers synchronously from the index.
+- Global completion (`prefix` without a preceding `.` or `(`) queries the mirror for the current word and
+  passes the ordered table into `SemanticQueryEngine.getCompletionsWithWorkspace`. Member completions skip
+  the mirror entirely. A count check on workspace names replaces the previous linear `some` scan per
+  builtin.
+
+The completion path deliberately does not write the semantic cache from a mirrored result. That cache is
+keyed by the synchronous index state, and a table one flush behind would poison it for later requests.
+
 ## Cancellation
 
-`$/cancelRequest` carries `{"id": <target>}`. In the bootstrap slice, `lex` is synchronous and short, so
-the backend acknowledges the notification by doing nothing. The adapter removes the pending entry and
-stops waiting; the late response is dropped by id, which keeps the connection usable.
+`$/cancelRequest` carries `{"id": <target>}`. `lex` and every `symbols/*` call are synchronous and
+short, so the backend acknowledges the notification by doing nothing. The adapter removes the pending
+entry and stops waiting; the late response is dropped by id, which keeps the connection usable. The
+mirror adds its own budget on top: a query gives the flush 150 ms and falls back to the TypeScript index
+when that expires, so a stuck sidecar delays one keystroke at most.
 
 When longer methods arrive, cancellation becomes cooperative: the server keeps a cancel flag per
 in-flight request, checks it between work units, and answers `-32800` (request cancelled). That code is
@@ -244,7 +359,9 @@ reserved now so the client can already handle it.
 
 ## Snapshots and versioning
 
-Nothing semantic is persisted in this slice. When document snapshots arrive, the rule is:
+Nothing semantic is persisted in this slice; the symbol table lives in the sidecar's process memory and
+is lost on exit. It is rebuilt from the TypeScript snapshot after a restart. When document snapshots
+arrive as source text, the rule is:
 
 - the adapter sends the full text plus a monotonically increasing document version for the file;
 - the backend keeps an in-memory snapshot keyed by version and rejects a stale write instead of
@@ -300,8 +417,11 @@ resulting entry with `tools/verify_vsix.sh`. A VSIX built on Windows is a local 
 ## Rollback
 
 The sidecar is additive. Removing the spawn, or setting the feature off, returns the extension to the
-TypeScript lexer with no data migration, because the backend owns no durable state. Each migration step
-is separately revertible: a bad parser step can be reverted without touching the protocol layer.
+TypeScript lexer and the TypeScript symbol index with no data migration, because the backend owns no
+durable state. The mirror can also be detached on its own: `LanguageService.getWorkspaceSymbolsAsync`
+returns the index answer when no mirror is attached, and the workspace symbol provider goes back to
+answering synchronously. Each migration step is separately revertible, so a bad parser step can be
+reverted without touching the protocol layer or the symbol contract.
 
 ## Differential testing
 
@@ -323,7 +443,16 @@ The comparison is structural: every field of every token must match, so a change
 on a fresh checkout; CI runs a separate enforced step after building the binary, where a missing binary
 is a failure rather than a skip.
 
-Zig unit tests cover the lexer in isolation and the framing layer with in-memory readers. They run
+`src/index/zig_symbol_mirror.test.ts` tests the mirror twice. A stub backend covers the refusal paths:
+missing capability, a sidecar that will not start, a digest that does not match the snapshot, a flush
+that exceeds the budget, and a non-ASCII name that arrives after the table was built. With the real
+binary it also compares the native answer with `symbolIndex.workspaceSymbols` for a name set that covers
+punctuation, digits and case, checks duplicate names across files fall back to uri order, follows an
+upsert and a removal, rebuilds after `clear`, and runs two mirrors against one process to prove the stale
+revision resync works.
+
+Zig unit tests cover the lexer in isolation, the framing layer with in-memory readers, the store
+comparator and revision guard, the `symbols/*` handlers and the store-backed server loop. They run
 through `src/tests.zig`, which imports every module so the `test` blocks are reachable; testing
 `src/main.zig` directly would run zero tests.
 
@@ -336,11 +465,25 @@ The sidecar only earns its place if it beats the current path without hurting la
   is warm; process startup is measured separately and is amortised by the long-lived process.
 - A frame copy budget: source crosses the boundary once as base64 and is decoded once. No additional
   full-text copies per token.
-- No unbounded growth: pending requests and per-document snapshots are bounded, and cancellation frees
-  a pending entry immediately.
+- No unbounded growth: pending requests, per-document snapshots, the mirror's pending maps and its query
+  cache are bounded, and cancellation frees a pending entry immediately.
+- A workspace query must beat the TypeScript index once the table is synchronized, and must not slow the
+  first query of a session beyond the 150 ms budget.
 
-Numbers are recorded with the existing benchmark tooling when providers start using the sidecar. The
-bootstrap slice makes no user-visible performance claim.
+Measured on the development machine (Windows x64, ReleaseSafe build) with a generated workspace of 5,000
+files and 30,000 symbols, through the wired provider path with the mirror attached:
+
+| Measurement | TypeScript index | Zig mirror |
+| --- | --- | --- |
+| `workspaceSymbols("")`, cached | 16.4-16.8 ms p50 | 0.01-0.02 ms p50 |
+| `workspaceSymbols("get")`, cached | 2.1-2.2 ms p50 | about 0.01 ms p50 |
+| First touch over 40 distinct needles | 2.09 ms p50 / 3.06 ms p95 | 1.51 ms p50 / 2.48 ms p95 |
+| Global empty-prefix completion | 22.6-23.6 ms p50 / 25.1-27.1 ms p95 | 5.1-5.8 ms p50 / 6.6-8.3 ms p95 |
+
+Index build for that workspace takes 204-225 ms and the first native sync 158-161 ms, paid once when the
+mirror is attached. The first touch of a needle that is not cached costs one IPC round trip, measured at
+1.2-1.4 ms locally; repeated queries are served from the 128-entry cache. These numbers describe this
+machine and are not a CI gate.
 
 ## Migration order
 
@@ -349,17 +492,20 @@ Each step lands only after the previous one is differentially verified and can b
 ```text
 1. protocol and process management   <- shipped
 2. lexer                            <- shipped
-3. parser and AST                   <- next
-4. semantic index and queries
-5. provider integration
-6. formatter
-7. scene and resource parsing
-8. debug protocol
-9. Godot LSP bridge
+3. workspace symbol mirror          <- shipped
+4. parser and AST                   <- next
+5. native semantic index and queries
+6. remaining provider integration
+7. formatter
+8. scene and resource parsing
+9. debug protocol
+10. Godot LSP bridge
 ```
 
-Provider integration is step 5, not step 3, because a native parser is only useful once the index and
-queries agree with it. Until then the sidecar answers `lex` for tests and health checks only.
+The symbol mirror went first because it needs no parser: the TypeScript index already owns the symbol
+objects, so the native side only has to reproduce the ordering contract for names it receives. The
+remaining provider integration waits for the native parser and semantic index, because a partial native
+model would answer questions the TypeScript implementation currently answers correctly.
 
 ## Repository layout
 
@@ -369,12 +515,17 @@ backend/
   build.zig.zon      package metadata, minimum Zig version
   src/main.zig       entry point, stdio wiring
   src/protocol.zig   framing and JSON-RPC message handling
-  src/server.zig     request dispatch for health, lex, shutdown
+  src/server.zig     request dispatch for health, lex, symbols, shutdown
   src/lexer.zig      UTF-16 GDScript tokenizer
+  src/symbol_index.zig workspace symbol store and ASCII collation
   src/tests.zig      test root that imports every module for `zig build test`
 src/backend/
   zig_backend.ts     spawn, framing, request/response adapter
   zig_backend.test.ts differential tests against lexGDScript
+src/index/
+  ascii_collation.ts host collation probe and the shared ASCII comparator
+  zig_symbol_mirror.ts native symbol mirror and its fallback rules
+  zig_symbol_mirror.test.ts differential tests against symbol_index
 ```
 
 ## Verification of this document

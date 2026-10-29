@@ -51,3 +51,25 @@ test("SymbolIndex supports incremental updates and workspace queries", () => {
 	symbols.remove(player);
 	assert.equal(symbols.find("Player").length, 0);
 });
+
+test("SymbolIndex keeps the captured symbols of each file", () => {
+	const files = createFileIndex();
+	const symbols = createSymbolIndex(files);
+	const uri = "file:///workspace/shift.gd";
+	const source = "extends Node\n\nfunc first() -> void:\n\tpass\n\nfunc second() -> void:\n\tpass\n";
+
+	files.update(uri, source, 1);
+	symbols.update(uri);
+	const captured = symbols.fileSymbols(uri);
+	assert.deepEqual(symbols.fileUris(), [uri]);
+	assert.deepEqual(captured.map((symbol) => symbol.name), ["first", "second"]);
+	const secondOffset = captured.find((symbol) => symbol.name === "second")?.range.start.offset;
+
+	// A body edit reparses the file but leaves the capture until the next update,
+	// which is the range every workspace query answers with.
+	files.update(uri, `extends Node\n\nfunc first() -> void:\n\tpass\n\tpass\n\tpass\n\nfunc second() -> void:\n\tpass\n`, 2);
+	assert.deepEqual(symbols.fileSymbols(uri), captured);
+	assert.equal(symbols.workspaceSymbols("second").at(0)?.range.start.offset, secondOffset);
+
+	assert.deepEqual(createSymbolIndex(files).fileSymbols(uri), []);
+});
