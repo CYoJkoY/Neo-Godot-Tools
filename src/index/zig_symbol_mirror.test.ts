@@ -117,7 +117,7 @@ describe("ZigSymbolMirror", () => {
 	it("returns undefined when the symbol capability is missing", async () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
-			snapshot: () => indexedSymbolFiles(index.files),
+			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub({ capabilities: { lex: true, symbols: false } }),
 		});
 		try {
@@ -130,7 +130,7 @@ describe("ZigSymbolMirror", () => {
 	it("returns undefined when the sidecar fails to start", async () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
-			snapshot: () => indexedSymbolFiles(index.files),
+			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub({
 				capabilities: { lex: false, symbols: false },
 				lex: async () => Promise.reject(new Error("missing executable")),
@@ -147,7 +147,7 @@ describe("ZigSymbolMirror", () => {
 	it("returns undefined when the digest does not match the snapshot", async () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
-			snapshot: () => indexedSymbolFiles(index.files),
+			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub({ digestSymbols: async () => ({ revision: 1, files: 0, symbols: 0 }) }),
 		});
 		try {
@@ -160,7 +160,7 @@ describe("ZigSymbolMirror", () => {
 	it("returns undefined when a flush does not finish in time", async () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
-			snapshot: () => indexedSymbolFiles(index.files),
+			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub({ clearSymbols: () => new Promise<number>(() => undefined) }),
 		});
 		try {
@@ -175,7 +175,7 @@ describe("ZigSymbolMirror", () => {
 	it("falls back once a non ascii name is indexed", async () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
-			snapshot: () => indexedSymbolFiles(index.files),
+			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub(),
 		});
 		try {
@@ -193,13 +193,13 @@ describe("ZigSymbolMirror", () => {
 		const backend = createZigBackend();
 		after(() => backend.shutdown());
 		const mirrorFor = (index: Workspace) =>
-			createZigSymbolMirror({ snapshot: () => indexedSymbolFiles(index.files), backend });
+			createZigSymbolMirror({ snapshot: () => indexedSymbolFiles(index.symbols), backend });
 
 		it("matches the TypeScript index order for every query", async () => {
 			const index = workspace(COLLATION_SOURCES);
 			const mirror = mirrorFor(index);
 			try {
-				for (const file of indexedSymbolFiles(index.files)) mirror.upsert(file.uri, file.symbols);
+				for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
 				await awaitNative(mirror);
 				await compareQueries(index, mirror, ["", "get", "GET", "script", "S", "z", "run", "_2", "Alpha"]);
 			} finally {
@@ -216,7 +216,7 @@ describe("ZigSymbolMirror", () => {
 			const index = workspace(sources);
 			const mirror = mirrorFor(index);
 			try {
-				for (const file of indexedSymbolFiles(index.files)) mirror.upsert(file.uri, file.symbols);
+				for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
 				await awaitNative(mirror, "shared");
 				await compareQueries(index, mirror, ["shared"]);
 				const actual = await mirror.workspaceSymbols("shared");
@@ -233,7 +233,7 @@ describe("ZigSymbolMirror", () => {
 			const index = workspace(COLLATION_SOURCES);
 			const mirror = mirrorFor(index);
 			try {
-				for (const file of indexedSymbolFiles(index.files)) mirror.upsert(file.uri, file.symbols);
+				for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
 				await awaitNative(mirror);
 				await compareQueries(index, mirror, [""]);
 				const removed = "file:///project/getter.gd";
@@ -244,8 +244,30 @@ describe("ZigSymbolMirror", () => {
 				const added = "file:///project/added.gd";
 				index.files.update(added, "extends Node\n\nfunc added_call() -> void:\n\tpass\n", 1);
 				index.symbols.update(added);
-				mirror.upsert(added, index.files.get(added)?.symbols ?? []);
+				mirror.upsert(added, index.symbols.fileSymbols(added));
 				await compareQueries(index, mirror, ["added", ""]);
+			} finally {
+				mirror.dispose();
+			}
+		});
+
+		it("keeps the ranges the index captured across a body edit", async () => {
+			const index = workspace({
+				"file:///project/shift.gd": "extends Node\n\nfunc first() -> void:\n\tpass\n\nfunc second() -> void:\n\tpass\n",
+			});
+			const mirror = mirrorFor(index);
+			try {
+				for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
+				await awaitNative(mirror, "second");
+				await compareQueries(index, mirror, ["", "second"]);
+				// A body edit shifts `second` without changing the API fingerprint.
+				// The index keeps the captured ranges, so the mirror must agree.
+				index.files.update(
+					"file:///project/shift.gd",
+					"extends Node\n\nfunc first() -> void:\n\tpass\n\tpass\n\tpass\n\nfunc second() -> void:\n\tpass\n",
+					2,
+				);
+				await compareQueries(index, mirror, ["", "second"]);
 			} finally {
 				mirror.dispose();
 			}
@@ -255,7 +277,7 @@ describe("ZigSymbolMirror", () => {
 			const index = workspace(COLLATION_SOURCES);
 			const mirror = mirrorFor(index);
 			try {
-				for (const file of indexedSymbolFiles(index.files)) mirror.upsert(file.uri, file.symbols);
+				for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
 				await awaitNative(mirror);
 				await compareQueries(index, mirror, [""]);
 				mirror.clear();
@@ -271,10 +293,10 @@ describe("ZigSymbolMirror", () => {
 			const firstMirror = mirrorFor(first);
 			const secondMirror = mirrorFor(second);
 			try {
-				for (const file of indexedSymbolFiles(first.files)) firstMirror.upsert(file.uri, file.symbols);
+				for (const file of indexedSymbolFiles(first.symbols)) firstMirror.upsert(file.uri, file.symbols);
 				await awaitNative(firstMirror);
 				await compareQueries(first, firstMirror, [""]);
-				for (const file of indexedSymbolFiles(second.files)) secondMirror.upsert(file.uri, file.symbols);
+				for (const file of indexedSymbolFiles(second.symbols)) secondMirror.upsert(file.uri, file.symbols);
 				await awaitNative(secondMirror);
 				await compareQueries(second, secondMirror, [""]);
 				// The first mirror's tracked revision is stale now.

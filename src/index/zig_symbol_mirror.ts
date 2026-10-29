@@ -18,7 +18,7 @@ import {
 } from "../backend/zig_backend.js";
 import { withTimeout } from "../utils/scheduling.js";
 import { asciiCollationSupported, isPrintableAscii } from "./ascii_collation.js";
-import type { FileIndex } from "./file_index.js";
+import type { SymbolIndex } from "./symbol_index.js";
 import type { IndexedSymbol } from "./symbol.js";
 
 /**
@@ -94,9 +94,16 @@ const bindIds = (ids: Uint32Array, symbols: readonly IndexedSymbol[]): readonly 
 const isAsciiFile = (file: ZigSymbolMirrorFile): boolean =>
 	isPrintableAscii(file.uri) && file.symbols.every((symbol) => isPrintableAscii(symbol.name));
 
-/*** Snapshot of the authoritative index, used to rebuild the native copy. */
-export const indexedSymbolFiles = (files: FileIndex): readonly ZigSymbolMirrorFile[] =>
-	[...files.values()].map((file) => ({ uri: file.uri, symbols: file.symbols }));
+/**
+ * Snapshot of the authoritative symbol index, used to rebuild the native copy.
+ *
+ * The index, not the parser, decides which symbols a workspace query answers
+ * with: a body edit that shifts later declarations leaves the ranges captured
+ * by the last `update` in place until the API changes. Reading the same entries
+ * here keeps the native table, the picker and the index in one ordering.
+ */
+export const indexedSymbolFiles = (symbols: SymbolIndex): readonly ZigSymbolMirrorFile[] =>
+	symbols.fileUris().map((uri) => ({ uri, symbols: symbols.fileSymbols(uri) }));
 
 export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbolMirror {
 	const backend = options.backend ?? createZigBackend();

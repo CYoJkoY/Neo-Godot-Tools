@@ -105,7 +105,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// feature keeps using the TypeScript indexes and stays available when the
 	// native binary is missing.
 	languageService.attachSymbolMirror(
-		createZigSymbolMirror({ snapshot: () => indexedSymbolFiles(languageService.files) }),
+		createZigSymbolMirror({ snapshot: () => indexedSymbolFiles(languageService.symbols) }),
 	);
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });

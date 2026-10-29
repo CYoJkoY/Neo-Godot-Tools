@@ -532,10 +532,14 @@ export class LanguageService implements vscode.Disposable {
 		);
 		if (change.kind === "unchanged") return;
 
-		if (change.kind === "api_changed" || change.kind === "file_added") this.symbols.update(uri);
-		// The mirror also carries the symbol ranges it hands back, so a body edit
-		// that shifts declarations has to replace its copy of the file as well.
-		this.symbolMirror?.upsert(uri, file.symbols);
+		if (change.kind === "api_changed" || change.kind === "file_added") {
+			this.symbols.update(uri);
+			// The mirror feeds the same answers as the index, so it takes the
+			// entries the index just captured. Sending the freshly parsed symbols
+			// here would move ranges the index still reports from before a body
+			// edit shifted the declarations below it.
+			this.symbolMirror?.upsert(uri, this.symbols.fileSymbols(uri));
+		}
 		if (change.kind === "body_changed" || change.kind === "api_changed" || change.kind === "file_added") {
 			this.references.update(uri);
 			this.bindings.update(uri);

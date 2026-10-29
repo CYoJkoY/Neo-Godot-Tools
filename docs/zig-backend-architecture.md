@@ -320,7 +320,9 @@ runs once and is cached.
 - a resync reads the digest, clears the table at a newer revision, ingests every file in batches and
   then verifies `files` and `symbols` against the snapshot before marking the copy synchronized;
 - an edit that arrives while a request is in flight keeps its newer stamp and is sent again next round,
-  and a single file larger than one request disables the mirror instead of truncating it.
+  and a single file larger than one request disables the mirror instead of truncating it;
+- the mirror stores the symbols `SymbolIndex` captured, so a body edit that shifts a declaration leaves
+  the mirrored range unchanged until the next API change, which is what the index answers with.
 
 The mirror answers `undefined` whenever it cannot prove the native table matches the index: binary
 missing, capability absent, host collation disagreeing, non-ASCII name or uri, oversized file, a failed

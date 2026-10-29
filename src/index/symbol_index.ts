@@ -6,6 +6,13 @@ export interface SymbolIndex {
 	update(uri: string): void;
 	remove(uri: string): void;
 	find(name: string): readonly IndexedSymbol[];
+	/**
+	 * Symbols captured for one file. A body edit keeps the previous capture
+	 * until the next `update`, which is what workspace queries answer with.
+	 */
+	fileSymbols(uri: string): readonly IndexedSymbol[];
+	/** Uris of the held files, in capture order. */
+	fileUris(): readonly string[];
 	/** Stable identity of everything indexed under `name`, for cache validation. */
 	signature(name: string): string;
 	findInFile(uri: string, name: string): IndexedSymbol | undefined;
@@ -78,6 +85,8 @@ export function createSymbolIndex(files: FileIndex): SymbolIndex {
 		update,
 		remove,
 		find,
+		fileSymbols: (uri) => byUri.get(uri) ?? [],
+		fileUris: () => [...byUri.keys()],
 		signature: () => String(state.revision),
 		findInFile: (uri, name) => byUri.get(uri)?.find((symbol) => symbol.name === name),
 		workspaceSymbols,
