@@ -105,7 +105,12 @@ export function activate(context: vscode.ExtensionContext) {
 	// feature keeps using the TypeScript indexes and stays available when the
 	// native binary is missing.
 	languageService.attachSymbolMirror(
-		createZigSymbolMirror({ snapshot: () => indexedSymbolFiles(languageService.symbols) }),
+		createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(languageService.symbols),
+			// The fallback keeps every query correct, so the reason it happened is
+			// only worth the extension host log.
+			onDiagnostic: (message) => console.warn(`[Neo Godot Tools] ${message}`),
+		}),
 	);
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });

@@ -93,6 +93,59 @@ async function compareQueries(
 	}
 }
 
+/** Polls a condition that a background flush has to satisfy. */
+async function waitFor(condition: () => boolean, label: string): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (!condition()) {
+		if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+}
+
+interface MemoryBackendOptions {
+	/** Resolves before the first ingest answers, to hold it in flight. */
+	readonly gate?: Promise<void>;
+	/** Called with the uris of every ingest and the uri of every removal. */
+	readonly onIngest?: (uris: readonly string[]) => void;
+	readonly onRemove?: (uri: string) => void;
+}
+
+/** Keeps the native table in memory, so a flush can succeed without the binary. */
+function memoryBackend(options: MemoryBackendOptions = {}): ZigBackend {
+	let revision = 0;
+	let nextId = 1;
+	const idsByUri = new Map<string, Uint32Array>();
+	return backendStub({
+		ingestSymbols: async (next, files): Promise<ZigBackendIngestResult> => {
+			options.onIngest?.(files.map((file) => file.uri));
+			await options.gate;
+			for (const file of files) idsByUri.set(file.uri, new Uint32Array(file.symbols.map(() => nextId++)));
+			revision = next;
+			return {
+				revision: next,
+				files: files.map((file) => ({ uri: file.uri, ids: idsByUri.get(file.uri) ?? new Uint32Array() })),
+			};
+		},
+		removeSymbols: async (next, uri) => {
+			options.onRemove?.(uri);
+			idsByUri.delete(uri);
+			revision = next;
+			return next;
+		},
+		clearSymbols: async (next) => {
+			idsByUri.clear();
+			revision = next;
+			return next;
+		},
+		digestSymbols: async (): Promise<ZigBackendDigest> => ({
+			revision,
+			files: idsByUri.size,
+			symbols: [...idsByUri.values()].reduce((total, ids) => total + ids.length, 0),
+		}),
+		querySymbols: async () => new Uint32Array([...idsByUri.values()].flatMap((ids) => [...ids])),
+	});
+}
+
 function backendStub(overrides: Partial<ZigBackend> = {}): ZigBackend {
 	return {
 		capabilities: { lex: true, symbols: true },
@@ -184,6 +237,131 @@ describe("ZigSymbolMirror", () => {
 			]);
 			assert.equal(await mirror.workspaceSymbols(""), undefined);
 			assert.equal(await mirror.workspaceSymbols("get"), undefined);
+		} finally {
+			mirror.dispose();
+		}
+	});
+
+	it("retries a rejected handshake before disabling the mirror", async () => {
+		const index = workspace(COLLATION_SOURCES);
+		const attempts: number[] = [];
+		let symbolCapable = false;
+		const messages: string[] = [];
+		const mirror = createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(index.symbols),
+			onDiagnostic: (message) => messages.push(message),
+			backend: {
+				...memoryBackend(),
+				get capabilities() {
+					return { lex: true, symbols: symbolCapable };
+				},
+				lex: async () => {
+					attempts.push(1);
+					// The first handshake answers before the sidecar finished its
+					// upgrade, which is exactly the transient case.
+					if (attempts.length > 1) symbolCapable = true;
+					return [];
+				},
+			},
+		});
+		try {
+			for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
+			const served = await mirror.workspaceSymbols("");
+			assert.notEqual(served, undefined, "the retried handshake must serve the query");
+			assert.equal((served ?? []).length, index.symbols.workspaceSymbols("").length);
+			assert.equal(attempts.length, 2, "the handshake must be retried once");
+			assert.deepEqual(messages, []);
+		} finally {
+			mirror.dispose();
+		}
+	});
+
+	it("reports the error and stops after repeated handshake failures", async () => {
+		const index = workspace(COLLATION_SOURCES);
+		const messages: string[] = [];
+		let attempts = 0;
+		const mirror = createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(index.symbols),
+			onDiagnostic: (message) => messages.push(message),
+			backend: backendStub({
+				capabilities: { lex: true, symbols: false },
+				lex: async () => {
+					attempts += 1;
+					return Promise.reject(new Error("the sidecar exited"));
+				},
+			}),
+		});
+		try {
+			assert.equal(await mirror.workspaceSymbols(""), undefined);
+			assert.equal(attempts, 2, "the retry is bounded");
+			assert.equal(messages.length, 1);
+			assert.match(messages[0] ?? "", /the sidecar exited/);
+			// The mirror is off now, so no further handshake is attempted.
+			assert.equal(await mirror.workspaceSymbols("get"), undefined);
+			assert.equal(attempts, 2);
+		} finally {
+			mirror.dispose();
+		}
+	});
+
+	it("stops rebuilding once flushes keep failing", async () => {
+		const index = workspace(COLLATION_SOURCES);
+		const messages: string[] = [];
+		let ingests = 0;
+		const mirror = createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(index.symbols),
+			onDiagnostic: (message) => messages.push(message),
+			backend: backendStub({
+				ingestSymbols: async () => {
+					ingests += 1;
+					return Promise.reject(new Error("the sidecar is gone"));
+				},
+			}),
+		});
+		try {
+			for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
+			for (const query of ["", "get", "script", "alpha", "missing", "another"]) {
+				assert.equal(await mirror.workspaceSymbols(query), undefined);
+			}
+			// The resync ingest is the first failure; the rebuild after it is the
+			// second; the third stops the mirror, so no query past that ingests.
+			assert.equal(ingests, 3, "the mirror must stop rebuilding after three failures");
+			assert.equal(messages.length, 1);
+			assert.match(messages[0] ?? "", /failed 3 times in a row: the sidecar is gone/);
+		} finally {
+			mirror.dispose();
+		}
+	});
+
+	it("sends a removal issued while an ingest is pending", async () => {
+		const index = workspace({
+			"file:///project/kept.gd": script("Kept"),
+			"file:///project/removed.gd": script("Removed"),
+		});
+		const removed = "file:///project/removed.gd";
+		const removals: string[] = [];
+		const ingested: string[] = [];
+		const gate: { release: () => void } = { release: () => undefined };
+		const held = new Promise<void>((resolve) => {
+			gate.release = resolve;
+		});
+		const mirror = createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(index.symbols),
+			// The gate holds the first ingest open, the way a large workspace scan
+			// would, so the removal is issued while `idsByUri` is still empty.
+			backend: memoryBackend({
+				gate: held,
+				onIngest: (uris) => ingested.push(...uris),
+				onRemove: (uri) => removals.push(uri),
+			}),
+		});
+		try {
+			const query = mirror.workspaceSymbols("");
+			await waitFor(() => ingested.includes(removed), "the first native ingest");
+			mirror.remove(removed);
+			gate.release();
+			await query;
+			await waitFor(() => removals.includes(removed), "the removal of the deleted file");
 		} finally {
 			mirror.dispose();
 		}

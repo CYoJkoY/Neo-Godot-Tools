@@ -55,7 +55,29 @@ export const compareAscii = (left: string, right: string): number => {
 	return leftLower - rightLower || leftCode - rightCode;
 };
 
+const consecutivePairs = (characters: readonly string[]): readonly (readonly [string, string])[] =>
+	characters
+		.slice(0, -1)
+		.map((character, index): readonly [string, string] => [character, characters[index + 1] ?? character]);
+
+/** The last entry of the punctuation table, which sorts before the first digit. */
+const lastPunctuation = ASCII_PUNCTUATION_ORDER.charAt(ASCII_PUNCTUATION_ORDER.length - 1);
+
+/**
+ * Every consecutive pair of the punctuation table, then the boundaries that
+ * separate the punctuation, digit and letter blocks. Probing the table itself
+ * keeps it honest as it grows, instead of checking a few hand-picked pairs.
+ */
+const orderProbes: readonly (readonly [string, string])[] = [
+	...consecutivePairs(Array.from(ASCII_PUNCTUATION_ORDER)),
+	[lastPunctuation, "0"],
+	["9", "a"],
+	["z", "A"],
+];
+
+/** Boundary probes plus the identifier and case pairs the native comparator must reproduce. */
 const probePairs: readonly (readonly [string, string])[] = [
+	...orderProbes,
 	["I", "i"],
 	["script_10", "script_2"],
 	["get_value", "getValue"],

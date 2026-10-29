@@ -37,6 +37,10 @@ const MAX_CACHED_QUERIES = 128;
 const MASS_REMOVAL_FILES = 64;
 const FLUSH_DELAY_MS = 16;
 const QUERY_TIMEOUT_MS = 150;
+/** A rejected handshake usually means the sidecar restarted, so it gets a retry. */
+const MAX_READY_ATTEMPTS = 2;
+/** Consecutive failed flushes after which the mirror stops rebuilding. */
+const MAX_FLUSH_FAILURES = 3;
 
 export interface ZigSymbolMirrorFile {
 	readonly uri: string;
@@ -47,6 +51,11 @@ export interface ZigSymbolMirrorOptions {
 	/** Authoritative index contents, read when the native copy must be rebuilt. */
 	readonly snapshot: () => readonly ZigSymbolMirrorFile[];
 	readonly backend?: ZigBackend;
+	/**
+	 * Receives one message when the mirror stops accelerating queries, with the
+	 * reason and the error behind it. The TypeScript index answers from then on.
+	 */
+	readonly onDiagnostic?: (message: string) => void;
 }
 
 export interface ZigSymbolMirror {
@@ -84,6 +93,9 @@ const fileBytes = (uri: string, symbols: readonly IndexedSymbol[]): number =>
 
 const isStaleRevision = (error: unknown): boolean =>
 	error instanceof Error && error.message.includes("stale revision");
+
+const describeError = (error: unknown): string =>
+	error instanceof Error ? error.message : String(error);
 
 /** Pairs each native id with the symbol it was built from; ids and symbols align. */
 const bindIds = (ids: Uint32Array, symbols: readonly IndexedSymbol[]): readonly BoundId[] =>
@@ -126,6 +138,10 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		unavailable: false,
 		/** Every name and uri offered so far is printable ASCII. */
 		applicable: true,
+		/** Consecutive failed flushes since the last success. */
+		failures: 0,
+		/** Message of the last swallowed backend error, for the diagnostic. */
+		lastError: undefined as string | undefined,
 		disposed: false,
 	};
 
@@ -136,6 +152,43 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		state.applicable &&
 		upserts.size === 0 &&
 		removals.size === 0;
+
+	const report = (message: string): void => {
+		const handler = options.onDiagnostic;
+		if (handler === undefined) return;
+		try {
+			handler(message);
+		} catch (error: unknown) {
+			console.error("Zig symbol mirror diagnostic handler failed.", error);
+		}
+	};
+
+	/** Keeps the native error around so the diagnostic can quote it. */
+	const recordFailure = (error: unknown): void => {
+		state.lastError = describeError(error);
+	};
+
+	/** Stops using the sidecar and reports why; the index answers from now on. */
+	const disable = (reason: string): false => {
+		if (state.unavailable) return false;
+		state.unavailable = true;
+		upserts.clear();
+		removals.clear();
+		queryCache.clear();
+		report(`Zig symbol mirror is off: ${reason}`);
+		return false;
+	};
+
+	/** Same as `disable`, for contents the native store cannot represent. */
+	const suspend = (reason: string): false => {
+		if (!state.applicable) return false;
+		state.applicable = false;
+		upserts.clear();
+		removals.clear();
+		queryCache.clear();
+		report(`Zig symbol mirror is off: ${reason}`);
+		return false;
+	};
 
 	const cacheQuery = (query: string, symbols: readonly IndexedSymbol[]): readonly IndexedSymbol[] => {
 		if (queryCache.size >= MAX_CACHED_QUERIES) queryCache.clear();
@@ -178,9 +231,15 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		const request = batch.map((file) => ({ uri: file.uri, symbols: file.symbols.map(toInput) }));
 		// A failed request leaves the native copy unknown; the caller marks it
 		// unsynchronized so the next flush rebuilds from the snapshot.
-		const result = await backend.ingestSymbols(revision, request).catch(() => undefined);
+		const result = await backend.ingestSymbols(revision, request).catch((error: unknown) => {
+			recordFailure(error);
+			return undefined;
+		});
 		if (result === undefined) return false;
-		if (!applyIngest(result, batch)) return false;
+		if (!applyIngest(result, batch)) {
+			recordFailure(new Error("the sidecar returned a symbol table that does not match the request"));
+			return false;
+		}
 		state.revision = result.revision;
 		queryCache.clear();
 		return true;
@@ -217,10 +276,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	/** A single file larger than one request cannot be mirrored; fall back. */
 	const disableForOversize = (files: readonly ZigSymbolMirrorFile[]): void => {
 		if (!files.some((file) => fileBytes(file.uri, file.symbols) > MAX_REQUEST_BYTES)) return;
-		state.applicable = false;
-		upserts.clear();
-		removals.clear();
-		queryCache.clear();
+		suspend("a file does not fit in one native request");
 	};
 
 	const drainRemovals = async (): Promise<boolean> => {
@@ -228,7 +284,10 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		if (next === undefined) return true;
 		const [uri, stamp] = next;
 		const revision = state.revision + 1;
-		const applied = await backend.removeSymbols(revision, uri).catch(() => undefined);
+		const applied = await backend.removeSymbols(revision, uri).catch((error: unknown) => {
+			recordFailure(error);
+			return undefined;
+		});
 		if (applied === undefined) return false;
 		state.revision = applied;
 		forgetUri(uri);
@@ -254,30 +313,36 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	const resync = async (): Promise<boolean> => {
 		const stamp = state.stamp;
 		const snapshot = options.snapshot();
-		if (!snapshot.every(isAsciiFile)) {
-			state.applicable = false;
-			upserts.clear();
-			removals.clear();
-			queryCache.clear();
-			return false;
-		}
+		if (!snapshot.every(isAsciiFile)) return suspend("a symbol name or uri is outside printable ASCII");
 		disableForOversize(snapshot);
 		if (!state.applicable) return false;
 		// Another client may have advanced the shared table; the digest reports
 		// the revision the sidecar holds, and every mutation has to move past it.
-		const current = await backend.digestSymbols().catch(() => undefined);
+		const current = await backend.digestSymbols().catch((error: unknown) => {
+			recordFailure(error);
+			return undefined;
+		});
 		if (current === undefined) return false;
 		const revision = Math.max(current.revision, state.revision) + 1;
-		const cleared = await backend.clearSymbols(revision).catch(() => undefined);
+		const cleared = await backend.clearSymbols(revision).catch((error: unknown) => {
+			recordFailure(error);
+			return undefined;
+		});
 		if (cleared === undefined) return false;
 		state.revision = cleared;
 		symbolsById.clear();
 		idsByUri.clear();
 		queryCache.clear();
 		if (!(await ingestAll(snapshot))) return false;
-		const digest = await backend.digestSymbols().catch(() => undefined);
+		const digest = await backend.digestSymbols().catch((error: unknown) => {
+			recordFailure(error);
+			return undefined;
+		});
 		const expected = snapshot.reduce((sum, file) => sum + file.symbols.length, 0);
-		if (digest === undefined || digest.files !== snapshot.length || digest.symbols !== expected) return false;
+		if (digest === undefined || digest.files !== snapshot.length || digest.symbols !== expected) {
+			if (digest !== undefined) recordFailure(new Error("the native table does not match the index snapshot"));
+			return false;
+		}
 		state.synced = true;
 		upserts.forEach((entry, uri) => {
 			if (entry.stamp <= stamp) upserts.delete(uri);
@@ -308,21 +373,50 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	const ensureReady = (): Promise<boolean> => {
 		if (state.unavailable || state.disposed) return Promise.resolve(false);
 		if (!asciiCollationSupported()) {
-			state.unavailable = true;
-			return Promise.resolve(false);
+			return Promise.resolve(disable("the host collator disagrees with the native ASCII order"));
 		}
 		if (backend.capabilities.symbols) return Promise.resolve(true);
-		return backend.lex("").then(
-			() => {
-				if (backend.capabilities.symbols) return true;
-				state.unavailable = true;
-				return false;
-			},
-			() => {
-				state.unavailable = true;
-				return false;
-			},
-		);
+		// A rejected handshake can be a sidecar that is still restarting, so it
+		// gets a bounded retry before the mirror gives up for the session.
+		const attempt = (remaining: number): Promise<boolean> =>
+			backend.lex("").then(
+				() => {
+					if (backend.capabilities.symbols) return true;
+					if (remaining > 1) return attempt(remaining - 1);
+					return disable("the sidecar did not report the symbol capability after its handshake");
+				},
+				(error: unknown) => {
+					recordFailure(error);
+					if (remaining > 1) return attempt(remaining - 1);
+					return disable(`the sidecar handshake failed: ${describeError(error)}`);
+				},
+			);
+		return attempt(MAX_READY_ATTEMPTS);
+	};
+
+	/**
+	 * A flush can finish while edits keep arriving, and the drain stops after a
+	 * bounded number of rounds. Anything still queued gets another timer so the
+	 * next query does not have to rebuild the table from the index.
+	 */
+	const succeeded = (): true => {
+		state.failures = 0;
+		state.lastError = undefined;
+		return true;
+	};
+
+	/**
+	 * Counts consecutive failures. Past the limit the mirror stops, so a broken
+	 * sidecar cannot make every workspace symbol query rebuild the whole table.
+	 */
+	const failed = (): false => {
+		// An unusable mirror already explained itself; only real backend errors
+		// count towards the limit.
+		if (state.unavailable || !state.applicable) return false;
+		state.failures += 1;
+		if (state.failures < MAX_FLUSH_FAILURES) return false;
+		const detail = state.lastError === undefined ? "no error was reported" : state.lastError;
+		return disable(`the native symbol table failed ${state.failures} times in a row: ${detail}`);
 	};
 
 	const flush = async (): Promise<boolean> => {
@@ -338,16 +432,15 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		if (!connected) state.synced = false;
 		// A resync rebuilds the table from the authoritative index, then the
 		// files edited while it ran still have to be replayed on top of it.
-		if (!state.synced && !(await resync())) return false;
-		const applied = await applyPending();
-		if (applied) return true;
+		if (!state.synced && !(await resync())) return failed();
+		if (await applyPending()) return succeeded();
 		state.synced = false;
 		// A second client can advance the shared revision between our digest and
 		// our mutation. Rebuild once and replay the queue on the newer table.
-		if (!(await resync())) return false;
-		const retried = await applyPending();
-		if (!retried) state.synced = false;
-		return retried;
+		if (!(await resync())) return failed();
+		if (await applyPending()) return succeeded();
+		state.synced = false;
+		return failed();
 	};
 
 	const flushNow = (): Promise<boolean> => {
@@ -356,6 +449,10 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		const work = flush().then(
 			(applied) => {
 				state.inFlight = undefined;
+				// A flush can finish while edits keep arriving, and the drain stops
+				// after a bounded number of rounds. Anything still queued gets another
+				// timer so the next query reads the table instead of rebuilding it.
+				if (applied && (upserts.size > 0 || removals.size > 0)) scheduleFlush();
 				return applied;
 			},
 			() => {
@@ -414,33 +511,28 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 			if (state.applicable) scheduleFlush();
 			return;
 		}
-		state.applicable = false;
-		upserts.clear();
-		removals.clear();
-		queryCache.clear();
+		suspend("a symbol name or uri is outside printable ASCII");
 	};
 
 	const remove = (uri: string): void => {
 		if (state.disposed || state.unavailable || !state.applicable) return;
 		if (!isPrintableAscii(uri)) {
-			state.applicable = false;
-			upserts.clear();
-			removals.clear();
-			queryCache.clear();
+			suspend("a symbol name or uri is outside printable ASCII");
 			return;
 		}
 		// A file whose symbols were never flushed is gone with its pending entry;
 		// a file the native store already accepted needs an explicit removal, even
-		// when a newer edit of it is still queued.
+		// when a newer edit of it is still queued. The store is idempotent, and
+		// `idsByUri` only knows about applied ingests, so a removal racing an
+		// in-flight one still has to be sent instead of being dropped here.
 		upserts.delete(uri);
-		if (!idsByUri.has(uri) && !removals.has(uri)) return;
 		state.stamp += 1;
 		removals.set(uri, state.stamp);
 		scheduleFlush();
 	};
 
 	const clear = (): void => {
-		if (state.disposed) return;
+		if (state.disposed || state.unavailable || !state.applicable) return;
 		upserts.clear();
 		removals.clear();
 		symbolsById.clear();
