@@ -2,13 +2,25 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.0.0 — 2026-10-28 (pending)
+### 3.1.0 — 2026-10-29 (pending)
+
+Changes since [v3.0.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.0.0...v3.1.0).
+
+#### Changed
+
+- \[Issue-201\] perf(backend): mirror workspace symbols in the Zig sidecar ([#202](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/202))
+
+### 3.0.0 — 2026-10-28
 
 Changes since [v2.14.4](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v2.14.4...v3.0.0).
 
 #### Changed
 
 - \[Issue-199\] feat(backend): add Zig sidecar lexer and packaged native binaries ([#200](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/200))
+
+#### Documentation
+
+- **changelog:** update changelog ([dcbf57d](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/dcbf57d2ad83e845e5ae4b021fd88f439cdc549a))
 
 ### 2.14.4 — 2026-10-16
 
