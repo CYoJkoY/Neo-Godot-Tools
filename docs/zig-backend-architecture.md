@@ -1,9 +1,10 @@
 # Zig Backend Architecture
 
-Status: implemented for the bootstrap slice and the workspace symbol mirror. The Zig 0.17.0 sidecar
-serves `health`, `lex`, `shutdown` and the `symbols/*` family, and its Windows and Linux x64 binaries
-ship inside the VSIX. Workspace symbol queries and global completions now answer from the sidecar when
-it is available; every other provider still runs on the existing TypeScript implementation.
+Status: implemented for the bootstrap slice, the workspace symbol mirror and the native declaration
+parser. The Zig 0.17.0 sidecar serves `health`, `lex`, `parse`, `shutdown` and the `symbols/*` family,
+and its Windows and Linux x64 binaries ship inside the VSIX. Workspace symbol queries and global
+completions answer from the sidecar when it is available, and the adapter exposes `parse` as an
+opt-in call. Every provider still runs on the existing TypeScript analysis path.
 
 This document is the contract for moving the GDScript analysis core into a native Zig 0.17.0 process.
 It defines the process lifecycle, the wire protocol, the offset model, the failure semantics and the
@@ -18,13 +19,13 @@ walk GDScript source: lexing, parsing, semantic indexing, queries and the format
 The first slice deliberately did not change user-visible behaviour. The symbol mirror keeps that
 property: no configuration key is added, no default changes, the returned symbol order is the same
 order the TypeScript index produced, and the Godot language server remains the fallback for semantics
-the local model cannot establish safely. The TypeScript lexer and the TypeScript symbol index stay in
-place as the reference implementation and as the fallback path.
+the local model cannot establish safely. The TypeScript lexer, parser and symbol index stay in place
+as the reference implementation and as the fallback path.
 
 Explicitly out of scope for the current phase:
 
-- the native parser, the native semantic index for every query, the formatter, scene and resource
-  parsing, debug protocol and the Godot LSP bridge;
+- the native semantic index for every query, the formatter, scene and resource parsing, debug protocol
+  and the Godot LSP bridge;
 - persistent state, caches on disk, or background project scans;
 - code signing, Marketplace signing, and packaged builds for platforms other than Windows x64 and
   Linux x64;
@@ -94,9 +95,9 @@ retry loop without a delay.
 ```json
 {
   "protocolVersion": 1,
-  "backendVersion": "0.2.0",
+  "backendVersion": "0.3.0",
   "zigVersion": "0.17.0",
-  "capabilities": ["lex", "symbols"]
+  "capabilities": ["lex", "parse", "symbols"]
 }
 ```
 
@@ -105,11 +106,17 @@ negotiation. `capabilities` lets a newer backend advertise methods the adapter m
 so adding a method does not require a protocol bump. `zigVersion` is informational; the compiler that
 built the binary is recorded in CI, not inferred at runtime.
 
-`symbols` is advertised only by a process that owns a workspace symbol store, which is every process
-spawned by `src/main.zig`. The capability list stays `["lex"]` for a stateless server, so a test or an
-embedder that runs the request path without a store cannot be told to call `symbols/*`. Capabilities
-are recorded during the handshake and cleared when that process exits, so a restarted sidecar is
-re-interrogated instead of inheriting the previous answer.
+`parse` is advertised by every current build and requires no state. `symbols` is advertised only by a
+process that owns a workspace symbol store, which is every process spawned by `src/main.zig`. The
+capability list stays `["lex", "parse"]` for a stateless server, so a test or an embedder that runs the
+request path without a store cannot be told to call `symbols/*`. Capabilities are recorded during the
+handshake and cleared when that process exits, so a restarted sidecar is re-interrogated instead of
+inheriting the previous answer.
+
+The adapter records `parse` but still requires only `lex` to accept a handshake. `parse()` checks the
+recorded capability after startup and rejects with `Zig backend does not advertise the parse
+capability.` instead of sending a request that an older binary would answer with `-32601`. A backend
+from before 0.3.0 therefore keeps serving `lex` while the caller falls back to `parseGDScript`.
 
 ## Framing
 
@@ -240,6 +247,56 @@ units, so `end` and `character` can run past the source length. The token value 
 source. The Zig implementation reproduces the numeric overshoot because the TypeScript parser asserts on
 token positions and the two implementations must agree before any provider switch.
 
+## The `parse` method
+
+`parse` is a differential-tested reimplementation of `src/analyzer/parser.ts`, which stays the contract
+and the fallback. It covers the declaration level of that parser: the top-level cursor, nested classes,
+enums, annotations, parameters, `extends`, function body ranges and the diagnostics the TypeScript
+implementation reports. It is not an expression Pratt parser, and it does not add an AST the TypeScript
+model lacks.
+
+Params:
+
+```json
+{"sourceBase64":"<base64 of UTF-16LE code units>","encoding":"utf16le"}
+```
+
+Result:
+
+```json
+{
+  "strings": ["<base64 of UTF-16LE code units>", "..."],
+  "ast": {
+    "kind": "script",
+    "range": {"start": {"offset": 0, "line": 0, "character": 0}, "end": {"offset": 0, "line": 0, "character": 0}},
+    "declarations": []
+  },
+  "diagnostics": []
+}
+```
+
+The response keeps text out of the JSON body. Every string field in `ast` is an index into `strings`,
+and each table entry is base64 of UTF-16LE code units, so lone surrogates and non-BMP text survive the
+round trip unchanged. The table is a compact index over the request's UTF-16 units; it does not dedupe.
+Diagnostic messages are interned after all AST fields, and `diagnostics[i].message` is the index of the
+i-th appended message rather than an index the AST could collide with. `diagnostics[i].severity` is
+always `error`, matching every diagnostic the TypeScript parser produces.
+
+Optional fields are explicit. `name`, `type`, `value`, `defaultValue`, `returnType`, `extendsName` and
+`members[i].value` are `null` when the TypeScript node has no such property value, and `bodyRange` is
+`null` for a function without an indented body. Enum declarations use `"kind":"enum"`; anonymous enums
+still carry a `nameOffset` field set to `null`. Every declaration other than `extends` carries
+`nameOffset`, and `extends` omits the field entirely, so the adapter can reject a response that adds a
+key the TypeScript AST would not have.
+
+The adapter rebuilds the JavaScript object with the same key set, including keys whose value is
+`undefined`, which keeps `assert.deepEqual` against `parseGDScript` exact. A response with a missing
+field, an out-of-range string index, or an unrecognised kind rejects with
+`Zig backend returned a malformed parse result.`; it never throws out of the promise chain.
+
+`parse` is opt-in. No provider calls it yet, and the default analysis path remains the TypeScript
+parser, so a native bug can cost at most the caller that asked for it.
+
 ## The `symbols` family
 
 `symbols/*` is the first provider integration. The sidecar keeps a compact copy of the workspace symbol
@@ -347,11 +404,11 @@ keyed by the synchronous index state, and a table one flush behind would poison 
 
 ## Cancellation
 
-`$/cancelRequest` carries `{"id": <target>}`. `lex` and every `symbols/*` call are synchronous and
-short, so the backend acknowledges the notification by doing nothing. The adapter removes the pending
-entry and stops waiting; the late response is dropped by id, which keeps the connection usable. The
-mirror adds its own budget on top: a query gives the flush 150 ms and falls back to the TypeScript index
-when that expires, so a stuck sidecar delays one keystroke at most.
+`$/cancelRequest` carries `{"id": <target>}`. `lex`, `parse` and every `symbols/*` call are synchronous
+and short, so the backend acknowledges the notification by doing nothing. The adapter removes the
+pending entry and stops waiting; the late response is dropped by id, which keeps the connection usable.
+The mirror adds its own budget on top: a query gives the flush 150 ms and falls back to the TypeScript
+index when that expires, so a stuck sidecar delays one keystroke at most.
 
 When longer methods arrive, cancellation becomes cooperative: the server keeps a cancel flag per
 in-flight request, checks it between work units, and answers `-32800` (request cancelled). That code is
@@ -443,6 +500,15 @@ The comparison is structural: every field of every token must match, so a change
 on a fresh checkout; CI runs a separate enforced step after building the binary, where a missing binary
 is a failure rather than a skip.
 
+`src/backend/zig_backend_parse.test.ts` does the same for `parse`: it compares the whole `ast` and
+`diagnostics` object with `parseGDScript` for top-level declarations, nested classes and enums,
+annotations, static functions, anonymous enums, an inner class with `extends`, CRLF and mixed line
+endings, non-ASCII text and lone surrogates, malformed declarations, function bodies that must not leak
+declarations, and empty or whitespace-only input. It also checks that the adapter's `parse` capability
+starts false and turns true after the handshake, that four concurrent parse requests keep their
+results separate, and that `parse` rejects after shutdown. The Windows CI job compiles `tsconfig.test.json`
+and runs both differential files against the native binary with the backend required.
+
 `src/index/zig_symbol_mirror.test.ts` tests the mirror twice. A stub backend covers the refusal paths:
 missing capability, a sidecar that will not start, a digest that does not match the snapshot, a flush
 that exceeds the budget, and a non-ASCII name that arrives after the table was built. With the real
@@ -485,6 +551,39 @@ mirror is attached. The first touch of a needle that is not cached costs one IPC
 1.2-1.4 ms locally; repeated queries are served from the 128-entry cache. These numbers describe this
 machine and are not a CI gate.
 
+`tools/profile_native_parse.ts` measures `parse` end to end against `parseGDScript` on the same process.
+It reports the startup plus first parse separately, then p50 and p95 for each corpus after a warmup,
+using 40 samples and 10 warmup iterations by default. Run it with `npx ts-node
+tools/profile_native_parse.ts` after `npm run build:backend`, and override the counts with
+`PROFILE_ITERATIONS` and `PROFILE_WARMUP`. It first asserts that the native result deep-equals the
+TypeScript result for every corpus entry, so a benchmark run cannot hide a fidelity regression.
+
+Measured on the development machine (Windows x64, Node v26.13.0, ReleaseSafe build):
+
+| Corpus | UTF-16 units | TypeScript p50 / p95 | Native p50 / p95 | Native p50 vs TypeScript |
+| --- | ---: | --- | --- | ---: |
+| typical-script | 379 | 0.0382 / 0.0572 ms | 0.1196 / 0.1893 ms | 0.32x |
+| generated-64 | 8,570 | 0.2523 / 0.3077 ms | 1.1021 / 1.3968 ms | 0.23x |
+| generated-512 | 70,250 | 1.6825 / 3.1419 ms | 7.5177 / 8.7958 ms | 0.22x |
+| generated-2048 | 286,410 | 14.9198 / 21.3709 ms | 28.88 / 36.4668 ms | 0.52x |
+
+Startup plus the first parse took 58.1 ms, which the long-lived process pays once. The steady-state
+result is the important one: the native path is 1.9x to 4.5x slower end to end than the TypeScript
+parser. The parse itself is not the bottleneck; base64 encoding, the framed round trip, JSON
+serialisation of the AST and decoding it back into a JavaScript object dominate. The native parser
+therefore does not meet the performance gate, and no default analysis path calls it. It earns its
+place only as opt-in groundwork until the protocol carries a compact AST, or a caller can amortise
+the round trip over work that stays in the sidecar.
+
+The gate for wiring this path into a provider is explicit: native `parse` must reach the same p50 as
+`parseGDScript` for every corpus entry, measured by `tools/profile_native_parse.ts` on the same host
+and process. Until that holds, the adapter stays opt-in and the TypeScript parser remains the only
+analysis path.
+
+These measurements come from Node 26 on one host and are not a CI gate; CI runs Node 22.x and only
+checks that the differential suite passes. The direction of the result is not sensitive to that
+difference, because the cost is on the wire rather than in the parser.
+
 ## Migration order
 
 Each step lands only after the previous one is differentially verified and can be reverted on its own.
@@ -493,7 +592,7 @@ Each step lands only after the previous one is differentially verified and can b
 1. protocol and process management   <- shipped
 2. lexer                            <- shipped
 3. workspace symbol mirror          <- shipped
-4. parser and AST                   <- next
+4. parser and AST                   <- shipped as opt-in
 5. native semantic index and queries
 6. remaining provider integration
 7. formatter
@@ -504,8 +603,11 @@ Each step lands only after the previous one is differentially verified and can b
 
 The symbol mirror went first because it needs no parser: the TypeScript index already owns the symbol
 objects, so the native side only has to reproduce the ordering contract for names it receives. The
-remaining provider integration waits for the native parser and semantic index, because a partial native
-model would answer questions the TypeScript implementation currently answers correctly.
+parser stage is shipped as an adapter capability, not wired into a provider: the measured round trip
+is slower than calling `parseGDScript` locally, and the semantic index has to live in the sidecar
+before moving a provider would pay off. The remaining provider integration still waits for the native
+semantic index, because a partial native model would answer questions the TypeScript implementation
+currently answers correctly.
 
 ## Repository layout
 
@@ -515,17 +617,21 @@ backend/
   build.zig.zon      package metadata, minimum Zig version
   src/main.zig       entry point, stdio wiring
   src/protocol.zig   framing and JSON-RPC message handling
-  src/server.zig     request dispatch for health, lex, symbols, shutdown
+  src/server.zig     request dispatch for health, lex, parse, symbols, shutdown
   src/lexer.zig      UTF-16 GDScript tokenizer
+  src/parser.zig     declaration parser matching src/analyzer/parser.ts
   src/symbol_index.zig workspace symbol store and ASCII collation
   src/tests.zig      test root that imports every module for `zig build test`
 src/backend/
   zig_backend.ts     spawn, framing, request/response adapter
   zig_backend.test.ts differential tests against lexGDScript
+  zig_backend_parse.test.ts differential tests against parseGDScript
 src/index/
   ascii_collation.ts host collation probe and the shared ASCII comparator
   zig_symbol_mirror.ts native symbol mirror and its fallback rules
   zig_symbol_mirror.test.ts differential tests against symbol_index
+tools/
+  profile_native_parse.ts end-to-end parse benchmark against parseGDScript
 ```
 
 ## Verification of this document
