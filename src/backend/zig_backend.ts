@@ -544,22 +544,35 @@ const readOffset = (record: Readonly<Record<string, unknown>>, key: string): num
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 };
 
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const UTF16LE_BYTES_PER_CODE_UNIT = 2;
+
+/** Decodes canonical base64 that must contain a whole number of UTF-16 code units. */
+export const decodeBase64Utf16 = (encoded: unknown): string | undefined => {
+	if (typeof encoded !== "string") return undefined;
+	if (encoded.length % 4 !== 0 || !BASE64_PATTERN.test(encoded)) return undefined;
+	const bytes = Buffer.from(encoded, "base64");
+	if (bytes.length % UTF16LE_BYTES_PER_CODE_UNIT !== 0) return undefined;
+	if (bytes.toString("base64") !== encoded) return undefined;
+	return bytes.toString("utf16le");
+};
+
 const parseToken = (value: unknown): GDScriptToken | undefined => {
 	if (!isRecord(value)) return undefined;
 	const kind = value["kind"];
 	const encoded = value["valueBase64"];
+	const decodedValue = decodeBase64Utf16(encoded);
 	const start = readOffset(value, "start");
 	const end = readOffset(value, "end");
 	const line = readOffset(value, "line");
 	const character = readOffset(value, "character");
 	const indent = readOffset(value, "indent");
-	if (!isTokenKind(kind)) return undefined;
-	if (typeof encoded !== "string") return undefined;
+	if (!isTokenKind(kind) || decodedValue === undefined) return undefined;
 	if (start === undefined || end === undefined || line === undefined) return undefined;
 	if (character === undefined || indent === undefined) return undefined;
 	return {
 		kind,
-		value: Buffer.from(encoded, "base64").toString("utf16le"),
+		value: decodedValue,
 		start,
 		end,
 		line,
@@ -611,14 +624,9 @@ const decodeRange = (value: unknown): SourceRange | undefined => {
 	return { start, end };
 };
 
-const decodeBase64String = (encoded: unknown): string | undefined => {
-	if (typeof encoded !== "string") return undefined;
-	return Buffer.from(encoded, "base64").toString("utf16le");
-};
-
 const decodeStringTable = (value: unknown): string[] | undefined => {
 	if (!Array.isArray(value)) return undefined;
-	const strings = value.map((entry: unknown) => decodeBase64String(entry));
+	const strings = value.map((entry: unknown) => decodeBase64Utf16(entry));
 	if (strings.includes(undefined)) return undefined;
 	return strings.filter(isDefined);
 };

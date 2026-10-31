@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import { after, test } from "node:test";
 
 import { parseGDScript } from "../analyzer/parser.js";
-import { createZigBackend, resolveZigBackendExecutable, zigBackendRequiresBuiltBinary } from "./zig_backend.js";
+import {
+	createZigBackend,
+	decodeBase64Utf16,
+	resolveZigBackendExecutable,
+	zigBackendRequiresBuiltBinary,
+} from "./zig_backend.js";
 
 interface ParseCase {
 	readonly name: string;
@@ -27,6 +32,18 @@ const binarySkip =
 
 const backend = createZigBackend();
 after(() => backend.shutdown());
+
+test("rejects malformed base64 in backend payloads", () => {
+	assert.equal(decodeBase64Utf16("dgBhAHIA"), "var");
+	assert.equal(decodeBase64Utf16(""), "");
+	assert.equal(decodeBase64Utf16("dgBhAHI"), undefined);
+	assert.equal(decodeBase64Utf16("dgBhAHIA="), undefined);
+	assert.equal(decodeBase64Utf16("dgBhAHI!"), undefined);
+	assert.equal(decodeBase64Utf16("dgBhAHIA===="), undefined);
+	assert.equal(decodeBase64Utf16("dgBhAHIA "), undefined);
+	assert.equal(decodeBase64Utf16("dgBhAHA="), undefined);
+	assert.equal(decodeBase64Utf16(42), undefined);
+});
 
 const parseCases: readonly ParseCase[] = [
 	{
