@@ -175,6 +175,6 @@ test "runWithStore ingests queries and advertises symbols" {
     const health_body = (try protocol.readFrame(&output, std.testing.allocator)) orelse
         return error.TestUnexpectedResult;
     defer std.testing.allocator.free(health_body);
-    try std.testing.expect(std.mem.indexOf(u8, health_body, "\"capabilities\":[\"lex\",\"symbols\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, health_body, "\"capabilities\":[\"lex\",\"parse\",\"symbols\"]") != null);
     try std.testing.expect((try protocol.readFrame(&output, std.testing.allocator)) == null);
 }

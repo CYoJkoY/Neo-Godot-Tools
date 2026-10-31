@@ -1,6 +1,6 @@
 .{
     .name = .neo_godot_backend,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .fingerprint = 0x5780725bf903ac5,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},
