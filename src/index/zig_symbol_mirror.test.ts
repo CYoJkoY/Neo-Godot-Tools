@@ -148,8 +148,9 @@ function memoryBackend(options: MemoryBackendOptions = {}): ZigBackend {
 
 function backendStub(overrides: Partial<ZigBackend> = {}): ZigBackend {
 	return {
-		capabilities: { lex: true, symbols: true },
+		capabilities: { lex: true, parse: true, symbols: true },
 		lex: async () => [],
+		parse: async () => ({ ast: { kind: "script", range: range(0, 0), declarations: [] }, diagnostics: [] }),
 		ingestSymbols: async (
 			revision: number,
 			files: readonly ZigBackendFileSymbols[],
@@ -171,7 +172,7 @@ describe("ZigSymbolMirror", () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
 			snapshot: () => indexedSymbolFiles(index.symbols),
-			backend: backendStub({ capabilities: { lex: true, symbols: false } }),
+			backend: backendStub({ capabilities: { lex: true, parse: true, symbols: false } }),
 		});
 		try {
 			assert.equal(await mirror.workspaceSymbols(""), undefined);
@@ -185,7 +186,7 @@ describe("ZigSymbolMirror", () => {
 		const mirror = createZigSymbolMirror({
 			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub({
-				capabilities: { lex: false, symbols: false },
+				capabilities: { lex: false, parse: false, symbols: false },
 				lex: async () => Promise.reject(new Error("missing executable")),
 			}),
 		});
@@ -253,7 +254,7 @@ describe("ZigSymbolMirror", () => {
 			backend: {
 				...memoryBackend(),
 				get capabilities() {
-					return { lex: true, symbols: symbolCapable };
+					return { lex: true, parse: true, symbols: symbolCapable };
 				},
 				lex: async () => {
 					attempts.push(1);
@@ -284,7 +285,7 @@ describe("ZigSymbolMirror", () => {
 			snapshot: () => indexedSymbolFiles(index.symbols),
 			onDiagnostic: (message) => messages.push(message),
 			backend: backendStub({
-				capabilities: { lex: true, symbols: false },
+				capabilities: { lex: true, parse: true, symbols: false },
 				lex: async () => {
 					attempts += 1;
 					return Promise.reject(new Error("the sidecar exited"));
