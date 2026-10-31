@@ -10,9 +10,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const lexer = @import("lexer.zig");
+const parser = @import("parser.zig");
 const symbols = @import("symbol_index.zig");
 
-pub const backend_version = "0.2.0";
+pub const backend_version = "0.3.0";
 pub const zig_version = "0.17.0";
 pub const protocol_version: i64 = 1;
 
@@ -248,6 +249,7 @@ fn buildHealth(allocator: Allocator, id: RequestId, has_store: bool) BuilderErro
     try stringify.objectField("capabilities");
     try stringify.beginArray();
     try stringify.write("lex");
+    try stringify.write("parse");
     if (has_store) try stringify.write("symbols");
     try stringify.endArray();
     try stringify.endObject();
@@ -355,6 +357,300 @@ fn buildLexResult(allocator: Allocator, id: RequestId, params: std.json.Value, a
     try stringify.endObject();
     try stringify.endObject();
     return allocating.toOwnedSlice();
+}
+
+/// String table for the `parse` response. AST string fields travel as indices
+/// over the request's UTF-16 units, which keeps the payload lossless for lone
+/// surrogates without repeating the source encoding rules in every field.
+const StringTable = struct {
+    allocator: Allocator,
+    items: std.ArrayList([]const u16) = .empty,
+
+    fn add(self: *StringTable, value: []const u16) BuilderError!usize {
+        const index = self.items.items.len;
+        try self.items.append(self.allocator, value);
+        return index;
+    }
+
+    fn addMessage(self: *StringTable, message: []const u8) BuilderError!usize {
+        if (message.len == 0) return self.add(&.{});
+        const units = try self.allocator.alloc(u16, message.len);
+        for (message, 0..) |byte, index| units[index] = byte;
+        return self.add(units);
+    }
+};
+
+/// Maximum number of inner-class levels serialised by one std.json.Stringify.
+///
+/// Stringify keeps a fixed 256-entry nesting stack in safety-checked builds.
+/// Every class costs two entries (the declaration object and its declarations
+/// array), so a source with enough nested classes would otherwise abort the
+/// process from inside the encoder. Deeper subtrees are rendered by a fresh
+/// encoder and copied in as a raw value, which keeps the wire bytes identical
+/// and makes encoder depth independent of source depth.
+const max_inline_class_depth: usize = 48;
+
+fn writePosition(stringify: *std.json.Stringify, position: parser.Position) BuilderError!void {
+    try stringify.beginObject();
+    try stringify.objectField("offset");
+    try stringify.print("{d}", .{position.offset});
+    try stringify.objectField("line");
+    try stringify.print("{d}", .{position.line});
+    try stringify.objectField("character");
+    try stringify.print("{d}", .{position.character});
+    try stringify.endObject();
+}
+
+fn writeRange(stringify: *std.json.Stringify, range: parser.Range) BuilderError!void {
+    try stringify.beginObject();
+    try stringify.objectField("start");
+    try writePosition(stringify, range.start);
+    try stringify.objectField("end");
+    try writePosition(stringify, range.end);
+    try stringify.endObject();
+}
+
+fn writeIndex(stringify: *std.json.Stringify, index: usize) BuilderError!void {
+    try stringify.print("{d}", .{index});
+}
+
+fn writeOptionalString(
+    stringify: *std.json.Stringify,
+    table: *StringTable,
+    field: []const u8,
+    value: ?[]const u16,
+) BuilderError!void {
+    try stringify.objectField(field);
+    if (value) |text| {
+        try writeIndex(stringify, try table.add(text));
+    } else {
+        try stringify.write(null);
+    }
+}
+
+fn writeParameters(
+    stringify: *std.json.Stringify,
+    table: *StringTable,
+    parameters: []const parser.Parameter,
+) BuilderError!void {
+    try stringify.beginArray();
+    for (parameters) |parameter| {
+        try stringify.beginObject();
+        try writeOptionalString(stringify, table, "name", parameter.name);
+        try writeOptionalString(stringify, table, "type", parameter.type_name);
+        try writeOptionalString(stringify, table, "defaultValue", parameter.default_value);
+        try stringify.objectField("range");
+        try writeRange(stringify, parameter.range);
+        try stringify.endObject();
+    }
+    try stringify.endArray();
+}
+
+fn writeDeclarations(
+    stringify: *std.json.Stringify,
+    table: *StringTable,
+    declarations: []const parser.Declaration,
+    depth: usize,
+) BuilderError!void {
+    try stringify.beginArray();
+    for (declarations) |declaration| {
+        if (depth >= max_inline_class_depth and declaration.kind == .class) {
+            try stringify.beginWriteRaw();
+            var nested: std.json.Stringify = .{ .writer = stringify.writer };
+            try writeDeclaration(&nested, table, declaration, 0);
+            stringify.endWriteRaw();
+            continue;
+        }
+        try writeDeclaration(stringify, table, declaration, depth);
+    }
+    try stringify.endArray();
+}
+
+fn writeDeclaration(
+    stringify: *std.json.Stringify,
+    table: *StringTable,
+    declaration: parser.Declaration,
+    depth: usize,
+) BuilderError!void {
+    try stringify.beginObject();
+    try stringify.objectField("kind");
+    try stringify.write(declaration.kind.wireName());
+    switch (declaration.kind) {
+        .script => {},
+        .class => {
+            try writeOptionalString(stringify, table, "name", declaration.name);
+            try writeOptionalString(stringify, table, "extendsName", declaration.extends_name);
+        },
+        .class_name, .signal, .constant, .variable, .function => {
+            try writeOptionalString(stringify, table, "name", declaration.name);
+        },
+        .extends => {
+            try writeOptionalString(stringify, table, "name", declaration.name);
+        },
+        .enum_decl => {
+            try writeOptionalString(stringify, table, "name", declaration.name);
+            try stringify.objectField("members");
+            try stringify.beginArray();
+            for (declaration.members) |member| {
+                try stringify.beginObject();
+                try writeOptionalString(stringify, table, "name", member.name);
+                try writeOptionalString(stringify, table, "value", member.value);
+                try stringify.objectField("range");
+                try writeRange(stringify, member.range);
+                try stringify.endObject();
+            }
+            try stringify.endArray();
+        },
+    }
+    if (declaration.kind != .extends) {
+        try stringify.objectField("nameOffset");
+        if (declaration.name_offset) |offset| {
+            try stringify.print("{d}", .{offset});
+        } else {
+            try stringify.write(null);
+        }
+    }
+    switch (declaration.kind) {
+        .constant, .variable => {
+            try writeOptionalString(stringify, table, "type", declaration.type_name);
+            try writeOptionalString(stringify, table, "value", declaration.value);
+        },
+        .function => {
+            try stringify.objectField("parameters");
+            try writeParameters(stringify, table, declaration.parameters);
+            try writeOptionalString(stringify, table, "returnType", declaration.return_type);
+            try stringify.objectField("static");
+            try stringify.write(declaration.is_static);
+            try stringify.objectField("indent");
+            try stringify.print("{d}", .{declaration.indent});
+            try stringify.objectField("bodyRange");
+            if (declaration.body_range) |body| {
+                try writeRange(stringify, body);
+            } else {
+                try stringify.write(null);
+            }
+        },
+        .signal => {
+            try stringify.objectField("parameters");
+            try writeParameters(stringify, table, declaration.parameters);
+        },
+        .class => {
+            try stringify.objectField("declarations");
+            try writeDeclarations(stringify, table, declaration.declarations, depth + 1);
+        },
+        else => {},
+    }
+    try stringify.objectField("range");
+    try writeRange(stringify, declaration.range);
+    try stringify.endObject();
+}
+
+fn buildParseResult(allocator: Allocator, id: RequestId, params: std.json.Value, arena: Allocator) BuilderError![]u8 {
+    const object = switch (params) {
+        .object => |value| value,
+        else => return buildError(allocator, id, .invalid_params, "params must be an object"),
+    };
+    const encoded_value = object.get("sourceBase64") orelse
+        return buildError(allocator, id, .invalid_params, "missing sourceBase64");
+    const encoded = switch (encoded_value) {
+        .string => |value| value,
+        else => return buildError(allocator, id, .invalid_params, "sourceBase64 must be a string"),
+    };
+    const encoding_value = object.get("encoding") orelse
+        return buildError(allocator, id, .invalid_params, "missing encoding");
+    const encoding = switch (encoding_value) {
+        .string => |value| value,
+        else => return buildError(allocator, id, .invalid_params, "encoding must be a string"),
+    };
+    if (!std.mem.eql(u8, encoding, "utf16le")) {
+        return buildError(allocator, id, .invalid_params, "unknown encoding");
+    }
+
+    const decoded = decodeSource(arena, encoded) catch |err| switch (err) {
+        error.InvalidBase64 => return buildError(allocator, id, .invalid_params, "invalid base64"),
+        error.OddByteCount => return buildError(allocator, id, .invalid_params, "odd byte count"),
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    const parsed = parser.parse(arena, decoded.units) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep => return buildError(
+            allocator,
+            id,
+            .invalid_params,
+            "class nesting exceeds the parser limit",
+        ),
+    };
+
+    var table = StringTable{ .allocator = arena };
+    defer table.items.deinit(arena);
+
+    // The AST is serialised first so every string index is known before the
+    // table is written. Diagnostics intern their messages in the same pass.
+    var ast_allocating: std.Io.Writer.Allocating = .init(arena);
+    defer ast_allocating.deinit();
+    var ast_stringify: std.json.Stringify = .{ .writer = &ast_allocating.writer };
+    try writeAST(&ast_stringify, &table, parsed);
+    const diagnostic_base = table.items.items.len;
+    for (parsed.diagnostics) |diagnostic| _ = try table.addMessage(diagnostic.message);
+
+    var allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer allocating.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
+
+    try stringify.beginObject();
+    try stringify.objectField("jsonrpc");
+    try stringify.write("2.0");
+    try stringify.objectField("id");
+    try writeId(&stringify, id);
+    try stringify.objectField("result");
+    try stringify.beginObject();
+    try stringify.objectField("strings");
+    try stringify.beginArray();
+    for (table.items.items) |entry| {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(arena);
+        try bytes.ensureTotalCapacity(arena, entry.len * 2);
+        for (entry) |unit| {
+            try bytes.append(arena, @truncate(unit));
+            try bytes.append(arena, @truncate(unit >> 8));
+        }
+        const encoded_length = std.base64.standard.Encoder.calcSize(bytes.items.len);
+        const value_buffer = try arena.alloc(u8, encoded_length);
+        try stringify.write(std.base64.standard.Encoder.encode(value_buffer, bytes.items));
+    }
+    try stringify.endArray();
+    try stringify.objectField("ast");
+    try stringify.beginWriteRaw();
+    try stringify.writer.writeAll(ast_allocating.written());
+    stringify.endWriteRaw();
+    try stringify.objectField("diagnostics");
+    try stringify.beginArray();
+    for (parsed.diagnostics, 0..) |diagnostic, index| {
+        try stringify.beginObject();
+        try stringify.objectField("message");
+        try writeIndex(&stringify, diagnostic_base + index);
+        try stringify.objectField("severity");
+        try stringify.write("error");
+        try stringify.objectField("range");
+        try writeRange(&stringify, diagnostic.range);
+        try stringify.endObject();
+    }
+    try stringify.endArray();
+    try stringify.endObject();
+    try stringify.endObject();
+    return allocating.toOwnedSlice();
+}
+
+fn writeAST(stringify: *std.json.Stringify, table: *StringTable, parsed: parser.ParseResult) BuilderError!void {
+    try stringify.beginObject();
+    try stringify.objectField("kind");
+    try stringify.write("script");
+    try stringify.objectField("range");
+    try writeRange(stringify, parsed.script.range);
+    try stringify.objectField("declarations");
+    try writeDeclarations(stringify, table, parsed.script.declarations, 0);
+    try stringify.endObject();
 }
 
 const ParsedId = union(enum) { missing: void, invalid: void, present: RequestId };
@@ -682,6 +978,11 @@ fn handleObject(
         const params = object.get("params") orelse
             return .{ .response = try buildError(allocator, request_id, .invalid_params, "missing params") };
         return .{ .response = try buildLexResult(allocator, request_id, params, arena) };
+    }
+    if (std.mem.eql(u8, method, "parse")) {
+        const params = object.get("params") orelse
+            return .{ .response = try buildError(allocator, request_id, .invalid_params, "missing params") };
+        return .{ .response = try buildParseResult(allocator, request_id, params, arena) };
     }
     if (std.mem.startsWith(u8, method, symbol_method_prefix)) {
         const active_store = store orelse
@@ -1092,7 +1393,7 @@ test "health advertises symbols only with a store" {
     const stateless = try handleBody(std.testing.allocator, "{\"id\":13,\"method\":\"health\"}");
     defer if (stateless.response) |body| std.testing.allocator.free(body);
     const stateless_body = stateless.response orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOf(u8, stateless_body, "\"capabilities\":[\"lex\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stateless_body, "\"capabilities\":[\"lex\",\"parse\"]") != null);
 
     const with_store = try handleBodyWithStore(
         std.testing.allocator,
@@ -1101,5 +1402,107 @@ test "health advertises symbols only with a store" {
     );
     defer if (with_store.response) |body| std.testing.allocator.free(body);
     const with_store_body = with_store.response orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOf(u8, with_store_body, "\"capabilities\":[\"lex\",\"symbols\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, with_store_body, "\"capabilities\":[\"lex\",\"parse\",\"symbols\"]") != null);
+}
+
+test "parse round trip uses a string table" {
+    const result = try handleBody(
+        std.testing.allocator,
+        "{\"id\":15,\"method\":\"parse\",\"params\":{\"sourceBase64\":\"YwBsAGEAcwBzAF8AbgBhAG0AZQAgAFAAbABhAHkAZQByAAoAdgBhAHIAIABoAGUAYQBsAHQAaAAgAD0AIAAxAAoA\",\"encoding\":\"utf16le\"}}",
+    );
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"kind\":\"script\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"kind\":\"class_name\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"kind\":\"variable\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"strings\":[\"UABsAGEAeQBlAHIA\",\"aABlAGEAbAB0AGgA\",\"MQA=\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"diagnostics\":[]") != null);
+}
+
+test "parse rejects an unknown encoding" {
+    const result = try handleBody(
+        std.testing.allocator,
+        "{\"id\":16,\"method\":\"parse\",\"params\":{\"sourceBase64\":\"\",\"encoding\":\"utf8\"}}",
+    );
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32602") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "unknown encoding") != null);
+}
+
+/// Builds a `parse` request whose source is `depth` nested classes with a
+/// variable leaf. The generated source is ASCII, so each byte can be widened
+/// to UTF-16LE explicitly without relying on the host endianness.
+fn nestedClassParseBody(allocator: Allocator, id: usize, depth: usize) ![]u8 {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(allocator);
+    var level: usize = 0;
+    while (level < depth) : (level += 1) {
+        try source.appendNTimes(allocator, '\t', level);
+        try source.appendSlice(allocator, "class A:\n");
+    }
+    try source.appendNTimes(allocator, '\t', depth);
+    try source.appendSlice(allocator, "var leaf = 1\n");
+
+    const units = try allocator.alloc(u8, source.items.len * 2);
+    defer allocator.free(units);
+    for (source.items, 0..) |byte, index| {
+        units[index * 2] = byte;
+        units[index * 2 + 1] = 0;
+    }
+
+    const encoded_length = std.base64.standard.Encoder.calcSize(units.len);
+    const encoded = try allocator.alloc(u8, encoded_length);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, units);
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"id\":{d},\"method\":\"parse\",\"params\":{{\"sourceBase64\":\"{s}\",\"encoding\":\"utf16le\"}}}}",
+        .{ id, encoded },
+    );
+}
+
+test "parse serialises nested classes past the inline encoder depth" {
+    const depth: usize = 60;
+    const request = try nestedClassParseBody(std.testing.allocator, 17, depth);
+    defer std.testing.allocator.free(request);
+    const result = try handleBody(std.testing.allocator, request);
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"id\":17") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32602") == null);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
+    defer parsed.deinit();
+    const response = parsed.value.object;
+    const result_object = response.get("result").?.object;
+    const ast = result_object.get("ast").?.object;
+    var declarations = ast.get("declarations").?.array;
+    var classes: usize = 0;
+    while (declarations.items.len > 0) {
+        const first = declarations.items[0].object;
+        if (!std.mem.eql(u8, first.get("kind").?.string, "class")) break;
+        classes += 1;
+        declarations = first.get("declarations").?.array;
+    }
+    try std.testing.expectEqual(depth, classes);
+    try std.testing.expectEqualStrings("variable", declarations.items[0].object.get("kind").?.string);
+}
+
+test "parse rejects nesting past the parser limit and keeps serving" {
+    const depth = parser.max_class_nesting + 1;
+    const request = try nestedClassParseBody(std.testing.allocator, 18, depth);
+    defer std.testing.allocator.free(request);
+    const result = try handleBody(std.testing.allocator, request);
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32602") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "class nesting exceeds the parser limit") != null);
+
+    const follow_up_request = try nestedClassParseBody(std.testing.allocator, 19, 0);
+    defer std.testing.allocator.free(follow_up_request);
+    const follow_up = try handleBody(std.testing.allocator, follow_up_request);
+    defer if (follow_up.response) |next| std.testing.allocator.free(next);
+    const next = follow_up.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, next, "\"kind\":\"variable\"") != null);
 }

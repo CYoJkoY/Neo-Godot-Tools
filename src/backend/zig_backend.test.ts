@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import { after, test } from "node:test";
 
 import { lexGDScript } from "../analyzer/lexer.js";
-import { createZigBackend, resolveZigBackendExecutable, zigBackendRequiresBuiltBinary } from "./zig_backend.js";
+import {
+	createZigBackend,
+	readZigBackendCapabilities,
+	resolveZigBackendExecutable,
+	zigBackendRequiresBuiltBinary,
+} from "./zig_backend.js";
 
 interface LexCase {
 	readonly name: string;
@@ -170,10 +175,10 @@ test("pre-aborted requests reject without starting the backend", { skip: binaryS
 
 test("advertises the symbol capability only after the handshake", { skip: binarySkip }, async () => {
 	const adapter = createZigBackend();
-	assert.deepEqual(adapter.capabilities, { lex: false, symbols: false });
+	assert.deepEqual(adapter.capabilities, { lex: false, parse: false, symbols: false });
 	await assert.rejects(adapter.ingestSymbols(1, []), /symbols capability/);
 	await adapter.lex("var x = 1\n");
-	assert.deepEqual(adapter.capabilities, { lex: true, symbols: true });
+	assert.deepEqual(adapter.capabilities, { lex: true, parse: true, symbols: true });
 	await adapter.shutdown();
 });
 
@@ -286,4 +291,24 @@ test("reports a missing executable with build instructions", () => {
 		assert.equal(candidate.endsWith("neo-godot-backend"), true, candidate);
 		return candidate;
 	});
+});
+
+test("reads capabilities from health and treats an older backend as parse-free", () => {
+	assert.deepEqual(readZigBackendCapabilities({ capabilities: ["lex", "parse", "symbols"] }), {
+		lex: true,
+		parse: true,
+		symbols: true,
+	});
+	assert.deepEqual(readZigBackendCapabilities({ capabilities: ["lex", "symbols"] }), {
+		lex: true,
+		parse: false,
+		symbols: true,
+	});
+	assert.deepEqual(readZigBackendCapabilities({ capabilities: ["lex"] }), {
+		lex: true,
+		parse: false,
+		symbols: false,
+	});
+	assert.equal(readZigBackendCapabilities({ capabilities: "parse" }), undefined);
+	assert.equal(readZigBackendCapabilities(undefined), undefined);
 });

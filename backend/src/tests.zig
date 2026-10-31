@@ -3,6 +3,7 @@
 
 test {
     _ = @import("lexer.zig");
+    _ = @import("parser.zig");
     _ = @import("protocol.zig");
     _ = @import("server.zig");
     _ = @import("symbol_index.zig");

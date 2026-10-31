@@ -11,6 +11,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Writable } from "node:stream";
 
+import type {
+	GDScriptDeclaration,
+	GDScriptDiagnostic,
+	GDScriptEnumMember,
+	GDScriptNodeKind,
+	GDScriptParameter,
+	GDScriptParseResult,
+	GDScriptScript,
+	SourcePosition,
+	SourceRange,
+} from "../analyzer/ast.js";
 import type { GDScriptToken, GDScriptTokenKind } from "../analyzer/lexer.js";
 
 const PROTOCOL_VERSION = 1;
@@ -65,11 +76,13 @@ export interface ZigBackendDigest {
 
 export interface ZigBackendCapabilities {
 	readonly lex: boolean;
+	readonly parse: boolean;
 	readonly symbols: boolean;
 }
 
 export interface ZigBackend {
 	lex(source: string, options?: ZigBackendTokenOptions): Promise<GDScriptToken[]>;
+	parse(source: string, options?: ZigBackendTokenOptions): Promise<GDScriptParseResult>;
 	readonly capabilities: ZigBackendCapabilities;
 	ingestSymbols(
 		revision: number,
@@ -137,7 +150,7 @@ interface Lifecycle {
 	shutdownPromise: Promise<void> | undefined;
 	shutdownResolve: (() => void) | undefined;
 	shutdownTimer: ReturnType<typeof setTimeout> | undefined;
-	capabilities: { lex: boolean; symbols: boolean };
+	capabilities: ZigBackendCapabilities;
 	capabilitiesKnown: boolean;
 }
 
@@ -531,22 +544,35 @@ const readOffset = (record: Readonly<Record<string, unknown>>, key: string): num
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 };
 
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const UTF16LE_BYTES_PER_CODE_UNIT = 2;
+
+/** Decodes canonical base64 that must contain a whole number of UTF-16 code units. */
+export const decodeBase64Utf16 = (encoded: unknown): string | undefined => {
+	if (typeof encoded !== "string") return undefined;
+	if (encoded.length % 4 !== 0 || !BASE64_PATTERN.test(encoded)) return undefined;
+	const bytes = Buffer.from(encoded, "base64");
+	if (bytes.length % UTF16LE_BYTES_PER_CODE_UNIT !== 0) return undefined;
+	if (bytes.toString("base64") !== encoded) return undefined;
+	return bytes.toString("utf16le");
+};
+
 const parseToken = (value: unknown): GDScriptToken | undefined => {
 	if (!isRecord(value)) return undefined;
 	const kind = value["kind"];
 	const encoded = value["valueBase64"];
+	const decodedValue = decodeBase64Utf16(encoded);
 	const start = readOffset(value, "start");
 	const end = readOffset(value, "end");
 	const line = readOffset(value, "line");
 	const character = readOffset(value, "character");
 	const indent = readOffset(value, "indent");
-	if (!isTokenKind(kind)) return undefined;
-	if (typeof encoded !== "string") return undefined;
+	if (!isTokenKind(kind) || decodedValue === undefined) return undefined;
 	if (start === undefined || end === undefined || line === undefined) return undefined;
 	if (character === undefined || indent === undefined) return undefined;
 	return {
 		kind,
-		value: Buffer.from(encoded, "base64").toString("utf16le"),
+		value: decodedValue,
 		start,
 		end,
 		line,
@@ -562,6 +588,236 @@ const parseLexResult = (value: unknown): GDScriptToken[] | undefined => {
 	const tokens = encodedTokens.map((entry: unknown) => parseToken(entry)).filter(isDefined);
 	if (tokens.length !== encodedTokens.length) return undefined;
 	return tokens;
+};
+
+const isNodeKind = (value: unknown): value is GDScriptNodeKind => {
+	switch (value) {
+		case "script":
+		case "class":
+		case "class_name":
+		case "extends":
+		case "signal":
+		case "enum":
+		case "constant":
+		case "variable":
+		case "function":
+			return true;
+		default:
+			return false;
+	}
+};
+
+const decodePosition = (value: unknown): SourcePosition | undefined => {
+	if (!isRecord(value)) return undefined;
+	const offset = readOffset(value, "offset");
+	const line = readOffset(value, "line");
+	const character = readOffset(value, "character");
+	if (offset === undefined || line === undefined || character === undefined) return undefined;
+	return { offset, line, character };
+};
+
+const decodeRange = (value: unknown): SourceRange | undefined => {
+	if (!isRecord(value)) return undefined;
+	const start = decodePosition(value["start"]);
+	const end = decodePosition(value["end"]);
+	if (start === undefined || end === undefined) return undefined;
+	return { start, end };
+};
+
+const decodeStringTable = (value: unknown): string[] | undefined => {
+	if (!Array.isArray(value)) return undefined;
+	const strings = value.map((entry: unknown) => decodeBase64Utf16(entry));
+	if (strings.includes(undefined)) return undefined;
+	return strings.filter(isDefined);
+};
+
+interface StringTableReader {
+	read(index: unknown): string | undefined;
+	readOrNull(index: unknown): string | null | undefined;
+}
+
+const createStringTableReader = (strings: readonly string[]): StringTableReader => {
+	const read = (index: unknown): string | undefined => {
+		if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0) return undefined;
+		return strings[index];
+	};
+	return {
+		read,
+		readOrNull: (index: unknown): string | null | undefined => (index === null ? null : read(index)),
+	};
+};
+
+const readRequiredString = (reader: StringTableReader, value: unknown): string | undefined => reader.read(value);
+
+const readOptionalString = (reader: StringTableReader, value: unknown): string | null | undefined =>
+	reader.readOrNull(value);
+
+const decodeAll = <T>(value: unknown, decode: (entry: unknown) => T | undefined): T[] | undefined => {
+	if (!Array.isArray(value)) return undefined;
+	const decoded = value.map((entry: unknown) => decode(entry));
+	return decoded.includes(undefined) ? undefined : decoded.filter(isDefined);
+};
+
+const decodeParameters = (value: unknown, reader: StringTableReader): GDScriptParameter[] | undefined =>
+	decodeAll(value, (entry: unknown) => {
+		if (!isRecord(entry)) return undefined;
+		const name = readRequiredString(reader, entry["name"]);
+		const type = readOptionalString(reader, entry["type"]);
+		const defaultValue = readOptionalString(reader, entry["defaultValue"]);
+		const parameterRange = decodeRange(entry["range"]);
+		if (name === undefined) return undefined;
+		if (type === undefined || defaultValue === undefined) return undefined;
+		if (parameterRange === undefined) return undefined;
+		return { name, type: type ?? undefined, defaultValue: defaultValue ?? undefined, range: parameterRange };
+	});
+
+const decodeEnumMembers = (value: unknown, reader: StringTableReader): GDScriptEnumMember[] | undefined =>
+	decodeAll(value, (entry: unknown) => {
+		if (!isRecord(entry)) return undefined;
+		const name = readRequiredString(reader, entry["name"]);
+		const memberValue = readOptionalString(reader, entry["value"]);
+		const memberRange = decodeRange(entry["range"]);
+		if (name === undefined || memberRange === undefined) return undefined;
+		if (memberValue === undefined) return undefined;
+		return { name, value: memberValue ?? undefined, range: memberRange };
+	});
+
+const decodeDeclaration = (value: unknown, reader: StringTableReader): GDScriptDeclaration | undefined => {
+	if (!isRecord(value)) return undefined;
+	const kind = value["kind"];
+	if (!isNodeKind(kind) || kind === "script") return undefined;
+	const declarationRange = decodeRange(value["range"]);
+	if (declarationRange === undefined) return undefined;
+	const nameOffsetValue = value["nameOffset"];
+	if (kind === "extends") {
+		if (nameOffsetValue !== undefined) return undefined;
+		const name = readRequiredString(reader, value["name"]);
+		if (name === undefined) return undefined;
+		return { kind, name, range: declarationRange };
+	}
+	if (kind === "enum") {
+		const name = reader.readOrNull(value["name"]);
+		const members = decodeEnumMembers(value["members"], reader);
+		if (name === undefined || members === undefined) return undefined;
+		const enumNameOffset = nameOffsetValue === null ? undefined : readOffset(value, "nameOffset");
+		if (enumNameOffset === undefined && nameOffsetValue !== null) return undefined;
+		return { kind, name: name ?? undefined, nameOffset: enumNameOffset, members, range: declarationRange };
+	}
+	if (nameOffsetValue === null) return undefined;
+	const nameOffset = readOffset(value, "nameOffset");
+	if (nameOffset === undefined) return undefined;
+
+	switch (kind) {
+		case "class_name": {
+			const name = readRequiredString(reader, value["name"]);
+			if (name === undefined) return undefined;
+			return { kind, name, nameOffset, range: declarationRange };
+		}
+		case "signal": {
+			const name = readRequiredString(reader, value["name"]);
+			const parameters = decodeParameters(value["parameters"], reader);
+			if (name === undefined || parameters === undefined) return undefined;
+			return { kind, name, nameOffset, parameters, range: declarationRange };
+		}
+		case "constant":
+		case "variable": {
+			const name = readRequiredString(reader, value["name"]);
+			const type = reader.readOrNull(value["type"]);
+			const declarationValue = reader.readOrNull(value["value"]);
+			if (name === undefined) return undefined;
+			if (type === undefined || declarationValue === undefined) return undefined;
+			return {
+				kind,
+				name,
+				nameOffset,
+				type: type ?? undefined,
+				value: declarationValue ?? undefined,
+				range: declarationRange,
+			};
+		}
+		case "function": {
+			const name = readRequiredString(reader, value["name"]);
+			const parameters = decodeParameters(value["parameters"], reader);
+			const returnType = reader.readOrNull(value["returnType"]);
+			const encodedStatic = value["static"];
+			const indent = readOffset(value, "indent");
+			const bodyRangeValue = value["bodyRange"];
+			if (name === undefined || parameters === undefined) return undefined;
+			if (returnType === undefined || indent === undefined) return undefined;
+			if (typeof encodedStatic !== "boolean") return undefined;
+			const bodyRange = bodyRangeValue === null ? undefined : decodeRange(bodyRangeValue);
+			if (bodyRangeValue !== null && bodyRange === undefined) return undefined;
+			return {
+				kind,
+				name,
+				nameOffset,
+				parameters,
+				returnType: returnType ?? undefined,
+				static: encodedStatic,
+				indent,
+				bodyRange,
+				range: declarationRange,
+			};
+		}
+		case "class": {
+			const name = readRequiredString(reader, value["name"]);
+			const extendsName = reader.readOrNull(value["extendsName"]);
+			const declarations = decodeDeclarations(value["declarations"], reader);
+			if (name === undefined || declarations === undefined) return undefined;
+			if (extendsName === undefined) return undefined;
+			return { kind, name, nameOffset, extendsName: extendsName ?? undefined, declarations, range: declarationRange };
+		}
+		default:
+			return undefined;
+	}
+};
+
+const decodeDeclarations = (value: unknown, reader: StringTableReader): GDScriptDeclaration[] | undefined =>
+	decodeAll(value, (entry: unknown) => decodeDeclaration(entry, reader));
+
+const decodeDiagnostics = (value: unknown, reader: StringTableReader): GDScriptDiagnostic[] | undefined =>
+	decodeAll(value, (entry: unknown) => {
+		if (!isRecord(entry)) return undefined;
+		const message = readRequiredString(reader, entry["message"]);
+		const diagnosticRange = decodeRange(entry["range"]);
+		const severity = entry["severity"];
+		if (message === undefined || diagnosticRange === undefined) return undefined;
+		if (severity !== "error" && severity !== "warning") return undefined;
+		return { message, range: diagnosticRange, severity };
+	});
+
+const parseParseResult = (value: unknown): GDScriptParseResult | undefined => {
+	if (!isRecord(value)) return undefined;
+	const strings = decodeStringTable(value["strings"]);
+	if (strings === undefined) return undefined;
+	const reader = createStringTableReader(strings);
+	const encodedAst = value["ast"];
+	if (!isRecord(encodedAst)) return undefined;
+	if (encodedAst["kind"] !== "script") return undefined;
+	const scriptRange = decodeRange(encodedAst["range"]);
+	const declarations = decodeDeclarations(encodedAst["declarations"], reader);
+	const diagnostics = decodeDiagnostics(value["diagnostics"], reader);
+	if (scriptRange === undefined || declarations === undefined) return undefined;
+	if (diagnostics === undefined) return undefined;
+	const ast: GDScriptScript = { kind: "script", range: scriptRange, declarations };
+	return { ast, diagnostics };
+};
+
+const requestParse = (
+	lifecycle: Lifecycle,
+	state: BackendProcess,
+	source: string,
+	signal: AbortSignal | undefined,
+): Promise<GDScriptParseResult> => {
+	const params = {
+		sourceBase64: Buffer.from(source, "utf16le").toString("base64"),
+		encoding: "utf16le",
+	};
+	return sendRequestOnProcess(lifecycle, state, "parse", params, undefined, signal).then((result) => {
+		const parsed = parseParseResult(result);
+		if (parsed !== undefined) return parsed;
+		return Promise.reject(new Error("Zig backend returned a malformed parse result."));
+	});
 };
 
 const requestLex = (
@@ -649,12 +905,19 @@ const isCompatibleHealth = (value: unknown): boolean => {
 	return capabilities.some((entry: unknown) => entry === "lex");
 };
 
-const recordCapabilities = (lifecycle: Lifecycle, health: unknown): void => {
-	if (!isRecord(health)) return;
+/** Reads the declared capability list; older binaries simply omit `parse`. */
+export const readZigBackendCapabilities = (health: unknown): ZigBackendCapabilities | undefined => {
+	if (!isRecord(health)) return undefined;
 	const declared = health["capabilities"];
-	if (!Array.isArray(declared)) return;
+	if (!Array.isArray(declared)) return undefined;
 	const supports = (name: string): boolean => declared.some((entry: unknown) => entry === name);
-	lifecycle.capabilities = { lex: supports("lex"), symbols: supports("symbols") };
+	return { lex: supports("lex"), parse: supports("parse"), symbols: supports("symbols") };
+};
+
+const recordCapabilities = (lifecycle: Lifecycle, health: unknown): void => {
+	const capabilities = readZigBackendCapabilities(health);
+	if (capabilities === undefined) return;
+	lifecycle.capabilities = capabilities;
 	lifecycle.capabilitiesKnown = true;
 };
 
@@ -817,7 +1080,7 @@ const finalizeProcess = (lifecycle: Lifecycle, state: BackendProcess, error: Err
 	// Capabilities describe the process that answered the handshake; a restart
 	// reports a fresh set once its own health check completes.
 	if (wasActive) {
-		lifecycle.capabilities = { lex: false, symbols: false };
+		lifecycle.capabilities = { lex: false, parse: false, symbols: false };
 		lifecycle.capabilitiesKnown = false;
 	}
 	rejectAllPending(lifecycle, error);
@@ -981,7 +1244,7 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		shutdownPromise: undefined,
 		shutdownResolve: undefined,
 		shutdownTimer: undefined,
-		capabilities: { lex: false, symbols: false },
+		capabilities: { lex: false, parse: false, symbols: false },
 		capabilitiesKnown: false,
 	};
 
@@ -1010,6 +1273,22 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 			const state = lifecycle.child;
 			if (state === undefined) return Promise.reject(new Error("Zig backend process is not available."));
 			return requestLex(lifecycle, state, source, signal);
+		});
+	};
+
+	/** `parse` arrived in backend 0.3.0; older binaries fail the handshake check here. */
+	const parseUnavailable = (): Promise<never> =>
+		Promise.reject(new Error("Zig backend does not advertise the parse capability."));
+
+	const parse = (source: string, tokenOptions: ZigBackendTokenOptions = {}): Promise<GDScriptParseResult> => {
+		const signal = tokenOptions.signal;
+		if (signal?.aborted === true) return Promise.reject(createAbortError());
+		return ensureProcess(lifecycle, options).then(() => {
+			if (lifecycle.disposed) return Promise.reject(createShutdownError());
+			const state = lifecycle.child;
+			if (state === undefined) return Promise.reject(new Error("Zig backend process is not available."));
+			if (!lifecycle.capabilities.parse) return parseUnavailable();
+			return requestParse(lifecycle, state, source, signal);
 		});
 	};
 
@@ -1142,6 +1421,7 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 
 	return {
 		lex,
+		parse,
 		get capabilities(): ZigBackendCapabilities {
 			return { ...lifecycle.capabilities };
 		},
