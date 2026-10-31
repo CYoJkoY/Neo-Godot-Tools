@@ -298,7 +298,9 @@ Inner classes are limited to 256 levels. The parser recurses once per class, and
 in a safety-checked build keeps a fixed 256-entry nesting stack where each class costs two entries, so
 an unbounded source could abort the process inside the encoder. `parse` returns JSON-RPC `-32602` with
 the detail `class nesting exceeds the parser limit` for deeper input, leaves the process alive, and
-the caller can retry the same source through `parseGDScript`, which does not enforce this limit.
+the caller can retry the same source through `parseGDScript`, which does not enforce this limit but
+reaches its own `RangeError` on the main thread at roughly 4000 levels on the development machine.
+That threshold moves with the remaining call stack, so neither path accepts an unbounded chain.
 
 The AST encoder starts a fresh `std.json.Stringify` for every subtree below 48 class levels and embeds
 it with `beginWriteRaw`, which keeps wire bytes identical while making encoder depth independent of
