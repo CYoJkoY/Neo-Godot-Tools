@@ -572,15 +572,15 @@ TypeScript result for every corpus entry, so a benchmark run cannot hide a fidel
 
 Measured on the development machine (Windows x64, Node v26.13.0, ReleaseSafe build):
 
-| Corpus | UTF-16 units | TypeScript p50 / p95 | Native p50 / p95 | Native p50 vs TypeScript |
+| Corpus | UTF-16 units | TypeScript p50 / p95 | Native p50 / p95 | TypeScript / native p50 |
 | --- | ---: | --- | --- | ---: |
-| typical-script | 379 | 0.0382 / 0.0572 ms | 0.1196 / 0.1893 ms | 0.32x |
-| generated-64 | 8,570 | 0.2523 / 0.3077 ms | 1.1021 / 1.3968 ms | 0.23x |
-| generated-512 | 70,250 | 1.6825 / 3.1419 ms | 7.5177 / 8.7958 ms | 0.22x |
-| generated-2048 | 286,410 | 14.9198 / 21.3709 ms | 28.88 / 36.4668 ms | 0.52x |
+| typical-script | 379 | 0.0391 / 0.0543 ms | 0.2685 / 0.3627 ms | 0.15x |
+| generated-64 | 8,570 | 0.2165 / 0.2804 ms | 1.0753 / 1.3978 ms | 0.20x |
+| generated-512 | 70,250 | 1.5133 / 2.4764 ms | 7.7835 / 9.7167 ms | 0.19x |
+| generated-2048 | 286,410 | 15.4178 / 24.0241 ms | 26.642 / 37.7805 ms | 0.58x |
 
-Startup plus the first parse took 58.1 ms, which the long-lived process pays once. The steady-state
-result is the important one: the native path is 1.9x to 4.5x slower end to end than the TypeScript
+Startup plus the first parse took 93.9 ms, which the long-lived process pays once. The steady-state
+result is the important one: the native path is 1.7x to 6.9x slower end to end than the TypeScript
 parser. The parse itself is not the bottleneck; base64 encoding, the framed round trip, JSON
 serialisation of the AST and decoding it back into a JavaScript object dominate. The native parser
 therefore does not meet the performance gate, and no default analysis path calls it. It earns its
