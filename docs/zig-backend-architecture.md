@@ -294,6 +294,16 @@ The adapter rebuilds the JavaScript object with the same key set, including keys
 field, an out-of-range string index, or an unrecognised kind rejects with
 `Zig backend returned a malformed parse result.`; it never throws out of the promise chain.
 
+Inner classes are limited to 256 levels. The parser recurses once per class, and `std.json.Stringify`
+in a safety-checked build keeps a fixed 256-entry nesting stack where each class costs two entries, so
+an unbounded source could abort the process inside the encoder. `parse` returns JSON-RPC `-32602` with
+the detail `class nesting exceeds the parser limit` for deeper input, leaves the process alive, and
+the caller can retry the same source through `parseGDScript`, which does not enforce this limit.
+
+The AST encoder starts a fresh `std.json.Stringify` for every subtree below 48 class levels and embeds
+it with `beginWriteRaw`, which keeps wire bytes identical while making encoder depth independent of
+source depth. The 60-level protocol test and the 100-level differential case exercise the handoff.
+
 `parse` is opt-in. No provider calls it yet, and the default analysis path remains the TypeScript
 parser, so a native bug can cost at most the caller that asked for it.
 
@@ -506,8 +516,10 @@ annotations, static functions, anonymous enums, an inner class with `extends`, C
 endings, non-ASCII text and lone surrogates, malformed declarations, function bodies that must not leak
 declarations, and empty or whitespace-only input. It also checks that the adapter's `parse` capability
 starts false and turns true after the handshake, that four concurrent parse requests keep their
-results separate, and that `parse` rejects after shutdown. The Windows CI job compiles `tsconfig.test.json`
-and runs both differential files against the native binary with the backend required.
+results separate, that `parse` rejects after shutdown, that a 100-level nested class chain matches
+`parseGDScript`, and that 300 levels reject with the documented detail while the next request still
+succeeds on the same process. The Windows CI job compiles `tsconfig.test.json` and runs both
+differential files against the native binary with the backend required.
 
 `src/index/zig_symbol_mirror.test.ts` tests the mirror twice. A stub backend covers the refusal paths:
 missing capability, a sidecar that will not start, a digest that does not match the snapshot, a flush

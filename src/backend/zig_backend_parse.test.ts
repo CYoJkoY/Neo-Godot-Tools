@@ -141,3 +141,27 @@ test("rejects parse after shutdown", { skip: binarySkip }, async () => {
 	await adapter.shutdown();
 	await assert.rejects(adapter.parse("var x = 1\n"), /shut down/);
 });
+
+/** Builds `depth` nested classes, each indented one tab deeper than its parent. */
+const nestedClassSource = (depth: number): string => {
+	const lines: string[] = [];
+	for (let level = 0; level < depth; level += 1) lines.push(`${"\t".repeat(level)}class A:`);
+	lines.push(`${"\t".repeat(depth)}var leaf = 1`);
+	return `${lines.join("\n")}\n`;
+};
+
+test("matches parseGDScript for deeply nested classes", { skip: binarySkip }, async () => {
+	const source = nestedClassSource(100);
+	assert.deepEqual(await backend.parse(source), parseGDScript(source));
+});
+
+test("rejects nesting past the parser limit and keeps serving", { skip: binarySkip }, async () => {
+	const adapter = createZigBackend();
+	try {
+		await assert.rejects(adapter.parse(nestedClassSource(300)), /class nesting exceeds the parser limit/);
+		const source = "var after = 1\n";
+		assert.deepEqual(await adapter.parse(source), parseGDScript(source));
+	} finally {
+		await adapter.shutdown();
+	}
+});

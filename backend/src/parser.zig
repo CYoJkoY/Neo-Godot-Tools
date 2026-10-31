@@ -11,7 +11,13 @@ const Allocator = std.mem.Allocator;
 
 const lexer = @import("lexer.zig");
 
-pub const ParserError = Allocator.Error;
+pub const ParserError = Allocator.Error || error{NestingTooDeep};
+
+/// Deepest inner-class chain this parser accepts. `parseClass` recurses once
+/// per nested class, so the limit keeps a hostile source from exhausting the
+/// thread stack. The request handler turns this error into a JSON-RPC
+/// failure, which callers can retry through the TypeScript parser.
+pub const max_class_nesting: usize = 256;
 
 pub const Position = struct {
     offset: usize,
@@ -115,6 +121,7 @@ const Parser = struct {
     line_ends: std.ArrayList(usize) = .empty,
     index: usize = 0,
     diagnostics: std.ArrayList(Diagnostic) = .empty,
+    class_depth: usize = 0,
 
     fn init(allocator: Allocator, source: []const u16) ParserError!Parser {
         const tokens = try lexer.lex(allocator, source);
@@ -353,6 +360,9 @@ const Parser = struct {
     fn parseClass(self: *Parser, indent: usize) ParserError!?Declaration {
         const start = self.current();
         _ = self.advance();
+        if (self.class_depth >= max_class_nesting) return error.NestingTooDeep;
+        self.class_depth += 1;
+        defer self.class_depth -= 1;
         const name = try self.consumeIdentifier("Expected inner class name.") orelse return null;
         const extends_name = try self.readExtendsName();
         self.skipToLineEnd();
@@ -935,4 +945,35 @@ test "parses inner class inheritance" {
     try expectUnitText("Base", worker.extends_name.?);
     try expectUnitText("1.0", worker.declarations[0].value.?);
     try std.testing.expectEqual(Kind.function, result.script.declarations[1].kind);
+}
+
+/// Builds `depth` nested classes, each indented one tab deeper than its
+/// parent, with a variable leaf so the last class has a member.
+fn nestedClassSource(arena: Allocator, depth: usize) ![]const u16 {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(arena);
+    var level: usize = 0;
+    while (level < depth) : (level += 1) {
+        try source.appendNTimes(arena, '\t', level);
+        try source.appendSlice(arena, "class A:\n");
+    }
+    try source.appendNTimes(arena, '\t', depth);
+    try source.appendSlice(arena, "var leaf = 1\n");
+    return std.unicode.utf8ToUtf16LeAlloc(arena, source.items);
+}
+
+test "accepts nesting up to the class depth limit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const units = try nestedClassSource(arena.allocator(), max_class_nesting);
+    const result = try parse(arena.allocator(), units);
+    try std.testing.expectEqual(@as(usize, 0), result.diagnostics.len);
+    try std.testing.expectEqual(@as(usize, 1), result.script.declarations.len);
+}
+
+test "rejects nesting past the class depth limit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const units = try nestedClassSource(arena.allocator(), max_class_nesting + 1);
+    try std.testing.expectError(error.NestingTooDeep, parse(arena.allocator(), units));
 }

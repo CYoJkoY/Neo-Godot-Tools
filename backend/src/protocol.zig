@@ -380,6 +380,16 @@ const StringTable = struct {
     }
 };
 
+/// Maximum number of inner-class levels serialised by one std.json.Stringify.
+///
+/// Stringify keeps a fixed 256-entry nesting stack in safety-checked builds.
+/// Every class costs two entries (the declaration object and its declarations
+/// array), so a source with enough nested classes would otherwise abort the
+/// process from inside the encoder. Deeper subtrees are rendered by a fresh
+/// encoder and copied in as a raw value, which keeps the wire bytes identical
+/// and makes encoder depth independent of source depth.
+const max_inline_class_depth: usize = 48;
+
 fn writePosition(stringify: *std.json.Stringify, position: parser.Position) BuilderError!void {
     try stringify.beginObject();
     try stringify.objectField("offset");
@@ -440,9 +450,19 @@ fn writeDeclarations(
     stringify: *std.json.Stringify,
     table: *StringTable,
     declarations: []const parser.Declaration,
+    depth: usize,
 ) BuilderError!void {
     try stringify.beginArray();
-    for (declarations) |declaration| try writeDeclaration(stringify, table, declaration);
+    for (declarations) |declaration| {
+        if (depth >= max_inline_class_depth and declaration.kind == .class) {
+            try stringify.beginWriteRaw();
+            var nested: std.json.Stringify = .{ .writer = stringify.writer };
+            try writeDeclaration(&nested, table, declaration, 0);
+            stringify.endWriteRaw();
+            continue;
+        }
+        try writeDeclaration(stringify, table, declaration, depth);
+    }
     try stringify.endArray();
 }
 
@@ -450,6 +470,7 @@ fn writeDeclaration(
     stringify: *std.json.Stringify,
     table: *StringTable,
     declaration: parser.Declaration,
+    depth: usize,
 ) BuilderError!void {
     try stringify.beginObject();
     try stringify.objectField("kind");
@@ -515,7 +536,7 @@ fn writeDeclaration(
         },
         .class => {
             try stringify.objectField("declarations");
-            try writeDeclarations(stringify, table, declaration.declarations);
+            try writeDeclarations(stringify, table, declaration.declarations, depth + 1);
         },
         else => {},
     }
@@ -551,7 +572,15 @@ fn buildParseResult(allocator: Allocator, id: RequestId, params: std.json.Value,
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    const parsed = try parser.parse(arena, decoded.units);
+    const parsed = parser.parse(arena, decoded.units) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep => return buildError(
+            allocator,
+            id,
+            .invalid_params,
+            "class nesting exceeds the parser limit",
+        ),
+    };
 
     var table = StringTable{ .allocator = arena };
     defer table.items.deinit(arena);
@@ -620,7 +649,7 @@ fn writeAST(stringify: *std.json.Stringify, table: *StringTable, parsed: parser.
     try stringify.objectField("range");
     try writeRange(stringify, parsed.script.range);
     try stringify.objectField("declarations");
-    try writeDeclarations(stringify, table, parsed.script.declarations);
+    try writeDeclarations(stringify, table, parsed.script.declarations, 0);
     try stringify.endObject();
 }
 
@@ -1399,4 +1428,81 @@ test "parse rejects an unknown encoding" {
     const body = result.response orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.mem.indexOf(u8, body, "-32602") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "unknown encoding") != null);
+}
+
+/// Builds a `parse` request whose source is `depth` nested classes with a
+/// variable leaf. The generated source is ASCII, so each byte can be widened
+/// to UTF-16LE explicitly without relying on the host endianness.
+fn nestedClassParseBody(allocator: Allocator, id: usize, depth: usize) ![]u8 {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(allocator);
+    var level: usize = 0;
+    while (level < depth) : (level += 1) {
+        try source.appendNTimes(allocator, '\t', level);
+        try source.appendSlice(allocator, "class A:\n");
+    }
+    try source.appendNTimes(allocator, '\t', depth);
+    try source.appendSlice(allocator, "var leaf = 1\n");
+
+    const units = try allocator.alloc(u8, source.items.len * 2);
+    defer allocator.free(units);
+    for (source.items, 0..) |byte, index| {
+        units[index * 2] = byte;
+        units[index * 2 + 1] = 0;
+    }
+
+    const encoded_length = std.base64.standard.Encoder.calcSize(units.len);
+    const encoded = try allocator.alloc(u8, encoded_length);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, units);
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"id\":{d},\"method\":\"parse\",\"params\":{{\"sourceBase64\":\"{s}\",\"encoding\":\"utf16le\"}}}}",
+        .{ id, encoded },
+    );
+}
+
+test "parse serialises nested classes past the inline encoder depth" {
+    const depth: usize = 60;
+    const request = try nestedClassParseBody(std.testing.allocator, 17, depth);
+    defer std.testing.allocator.free(request);
+    const result = try handleBody(std.testing.allocator, request);
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"id\":17") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32602") == null);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
+    defer parsed.deinit();
+    const response = parsed.value.object;
+    const result_object = response.get("result").?.object;
+    const ast = result_object.get("ast").?.object;
+    var declarations = ast.get("declarations").?.array;
+    var classes: usize = 0;
+    while (declarations.items.len > 0) {
+        const first = declarations.items[0].object;
+        if (!std.mem.eql(u8, first.get("kind").?.string, "class")) break;
+        classes += 1;
+        declarations = first.get("declarations").?.array;
+    }
+    try std.testing.expectEqual(depth, classes);
+    try std.testing.expectEqualStrings("variable", declarations.items[0].object.get("kind").?.string);
+}
+
+test "parse rejects nesting past the parser limit and keeps serving" {
+    const depth = parser.max_class_nesting + 1;
+    const request = try nestedClassParseBody(std.testing.allocator, 18, depth);
+    defer std.testing.allocator.free(request);
+    const result = try handleBody(std.testing.allocator, request);
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32602") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "class nesting exceeds the parser limit") != null);
+
+    const follow_up_request = try nestedClassParseBody(std.testing.allocator, 19, 0);
+    defer std.testing.allocator.free(follow_up_request);
+    const follow_up = try handleBody(std.testing.allocator, follow_up_request);
+    defer if (follow_up.response) |next| std.testing.allocator.free(next);
+    const next = follow_up.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, next, "\"kind\":\"variable\"") != null);
 }
