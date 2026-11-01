@@ -148,7 +148,7 @@ function memoryBackend(options: MemoryBackendOptions = {}): ZigBackend {
 
 function backendStub(overrides: Partial<ZigBackend> = {}): ZigBackend {
 	return {
-		capabilities: { lex: true, parse: true, symbols: true },
+		capabilities: { lex: true, parse: true, symbols: true, status: true },
 		lex: async () => [],
 		parse: async () => ({ ast: { kind: "script", range: range(0, 0), declarations: [] }, diagnostics: [] }),
 		ingestSymbols: async (
@@ -162,6 +162,15 @@ function backendStub(overrides: Partial<ZigBackend> = {}): ZigBackend {
 		querySymbols: async () => new Uint32Array(),
 		digestSymbols: async (): Promise<ZigBackendDigest> => ({ revision: 0, files: 0, symbols: 0 }),
 		clearSymbols: async (revision: number) => revision,
+		status: async () => ({
+			backendVersion: "0.3.0",
+			zigVersion: "0.17.0",
+			protocolVersion: 1,
+			uptimeMs: 0,
+			scratchLastBytes: 0,
+			scratchPeakBytes: 0,
+			modules: [],
+		}),
 		shutdown: async () => undefined,
 		...overrides,
 	};
@@ -172,7 +181,7 @@ describe("ZigSymbolMirror", () => {
 		const index = workspace(COLLATION_SOURCES);
 		const mirror = createZigSymbolMirror({
 			snapshot: () => indexedSymbolFiles(index.symbols),
-			backend: backendStub({ capabilities: { lex: true, parse: true, symbols: false } }),
+			backend: backendStub({ capabilities: { lex: true, parse: true, symbols: false, status: true } }),
 		});
 		try {
 			assert.equal(await mirror.workspaceSymbols(""), undefined);
@@ -186,7 +195,7 @@ describe("ZigSymbolMirror", () => {
 		const mirror = createZigSymbolMirror({
 			snapshot: () => indexedSymbolFiles(index.symbols),
 			backend: backendStub({
-				capabilities: { lex: false, parse: false, symbols: false },
+				capabilities: { lex: false, parse: false, symbols: false, status: false },
 				lex: async () => Promise.reject(new Error("missing executable")),
 			}),
 		});
@@ -254,7 +263,7 @@ describe("ZigSymbolMirror", () => {
 			backend: {
 				...memoryBackend(),
 				get capabilities() {
-					return { lex: true, parse: true, symbols: symbolCapable };
+					return { lex: true, parse: true, symbols: symbolCapable, status: true };
 				},
 				lex: async () => {
 					attempts.push(1);
@@ -285,7 +294,7 @@ describe("ZigSymbolMirror", () => {
 			snapshot: () => indexedSymbolFiles(index.symbols),
 			onDiagnostic: (message) => messages.push(message),
 			backend: backendStub({
-				capabilities: { lex: true, parse: true, symbols: false },
+				capabilities: { lex: true, parse: true, symbols: false, status: true },
 				lex: async () => {
 					attempts += 1;
 					return Promise.reject(new Error("the sidecar exited"));

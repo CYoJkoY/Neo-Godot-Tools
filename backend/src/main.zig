@@ -8,6 +8,7 @@ const Io = std.Io;
 
 const protocol = @import("protocol.zig");
 const server = @import("server.zig");
+const metrics = @import("metrics.zig");
 const symbols = @import("symbol_index.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -25,5 +26,6 @@ pub fn main(init: std.process.Init) !void {
     var store = symbols.Store.init(allocator);
     defer store.deinit();
 
-    try server.runWithStore(allocator, &stdin_reader.interface, &stdout_file_writer.interface, &store);
+    var registry = metrics.Registry.init(io);
+    try server.runWithStore(allocator, &stdin_reader.interface, &stdout_file_writer.interface, &store, &registry);
 }
