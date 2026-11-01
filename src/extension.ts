@@ -15,6 +15,7 @@ import { LanguageService } from "./language/service";
 import { languageProfiler } from "./performance/profiler";
 import { createZigSymbolMirror, indexedSymbolFiles } from "./index/zig_symbol_mirror";
 import { ClientConnectionManager } from "./lsp";
+import { type BackendStatusPanel, createBackendStatusPanel } from "./dashboard/status_panel";
 import type {
 	GDCompletionItemProvider,
 	GDDefinitionProvider,
@@ -86,6 +87,7 @@ interface Extension {
 	completionProvider?: GDCompletionItemProvider;
 	tasksProvider?: GDTaskProvider;
 	devServer?: DebugServer;
+	backendStatusPanel?: BackendStatusPanel;
 }
 
 export const globals: Extension = {};
@@ -114,6 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });
+	globals.backendStatusPanel = createBackendStatusPanel(context);
 	globals.resourceInspector = new ResourceInspectorProvider(context, {
 		lspClient: () => globals.lsp?.client,
 	});
@@ -172,6 +175,7 @@ export function activate(context: vscode.ExtensionContext) {
 		register_command("exportPerformanceSnapshot", export_performance_snapshot),
 		register_command("switchSceneScript", switch_scene_script),
 		register_command("getGodotPath", get_godot_path),
+		register_command("showBackendStatus", () => globals.backendStatusPanel?.show()),
 	);
 	set_context("godotFiles", ["gdscript", "gdscene", "gdresource", "gdshader"]);
 	set_context("sceneLikeFiles", ["gdscript", "gdscene"]);

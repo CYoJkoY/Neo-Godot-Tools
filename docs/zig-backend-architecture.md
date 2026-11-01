@@ -1,10 +1,11 @@
 # Zig Backend Architecture
 
 Status: implemented for the bootstrap slice, the workspace symbol mirror and the native declaration
-parser. The Zig 0.17.0 sidecar serves `health`, `lex`, `parse`, `shutdown` and the `symbols/*` family,
-and its Windows and Linux x64 binaries ship inside the VSIX. Workspace symbol queries and global
-completions answer from the sidecar when it is available, and the adapter exposes `parse` as an
-opt-in call. Every provider still runs on the existing TypeScript analysis path.
+parser. The Zig 0.17.0 sidecar serves `health`, `lex`, `parse`, `status`, `shutdown` and the `symbols/*`
+family, and its Windows and Linux x64 binaries ship inside the VSIX. Workspace symbol queries and
+global completions answer from the sidecar when it is available, the adapter exposes `parse` as an
+opt-in call, and the status dashboard reports the native counters. Every provider still runs on the
+existing TypeScript analysis path.
 
 This document is the contract for moving the GDScript analysis core into a native Zig 0.17.0 process.
 It defines the process lifecycle, the wire protocol, the offset model, the failure semantics and the
@@ -97,7 +98,7 @@ retry loop without a delay.
   "protocolVersion": 1,
   "backendVersion": "0.3.0",
   "zigVersion": "0.17.0",
-  "capabilities": ["lex", "parse", "symbols"]
+  "capabilities": ["lex", "parse", "symbols", "status"]
 }
 ```
 
@@ -107,11 +108,12 @@ so adding a method does not require a protocol bump. `zigVersion` is information
 built the binary is recorded in CI, not inferred at runtime.
 
 `parse` is advertised by every current build and requires no state. `symbols` is advertised only by a
-process that owns a workspace symbol store, which is every process spawned by `src/main.zig`. The
-capability list stays `["lex", "parse"]` for a stateless server, so a test or an embedder that runs the
-request path without a store cannot be told to call `symbols/*`. Capabilities are recorded during the
-handshake and cleared when that process exits, so a restarted sidecar is re-interrogated instead of
-inheriting the previous answer.
+process that owns a workspace symbol store, which is every process spawned by `src/main.zig`. `status`
+is advertised only by a process that owns a metrics registry, which is again every process spawned by
+`src/main.zig`. The capability list stays `["lex", "parse"]` for a stateless server, so a test or an
+embedder that runs the request path without a store cannot be told to call `symbols/*` or `status`.
+Capabilities are recorded during the handshake and cleared when that process exits, so a restarted
+sidecar is re-interrogated instead of inheriting the previous answer.
 
 The adapter records `parse` but still requires only `lex` to accept a handshake. `parse()` checks the
 recorded capability after startup and rejects with `Zig backend does not advertise the parse
@@ -414,6 +416,52 @@ it cannot grow with the size of the workspace.
 The completion path deliberately does not write the semantic cache from a mirrored result. That cache is
 keyed by the synchronous index state, and a table one flush behind would poison it for later requests.
 
+## The `status` method
+
+`status` reports what the sidecar has done since it started. It carries no parameters and returns the
+build versions, the process uptime and one counter row per instrumented module:
+
+```json
+{
+  "backendVersion": "0.3.0",
+  "zigVersion": "0.17.0",
+  "protocolVersion": 1,
+  "uptimeMs": 48213,
+  "scratch": { "lastBytes": 2048, "peakBytes": 4096 },
+  "modules": [
+    { "name": "request", "label": "Request (end to end)", "driver": "zig", "requests": 12, "meanMicros": 214, "maxMicros": 1900 },
+    { "name": "lexer", "label": "Lexer", "driver": "zig", "requests": 9, "meanMicros": 120, "maxMicros": 640 },
+    { "name": "parser", "label": "Parser", "driver": "zig", "requests": 3, "meanMicros": 480, "maxMicros": 1200 },
+    { "name": "symbols", "label": "Symbol Index", "driver": "zig", "requests": 0, "meanMicros": 0, "maxMicros": 0 }
+  ]
+}
+```
+
+`name` is the stable wire identifier, `label` is display text the dashboard renders, and `driver` names
+the language that executes the module. Modules are always emitted in the fixed order above, so a
+consumer can index the array instead of searching it. `requests` is the number of completed calls;
+`meanMicros` and `maxMicros` describe their duration, and both are zero before the first call.
+
+The `request` row measures the whole dispatch of a frame, excluding framing, and is recorded before the
+method runs; the per-module rows measure only their own section. That split keeps an unaccounted method
+visible in the totals instead of vanishing from the table.
+
+`scratch.lastBytes` is the retained capacity of the transaction arena after the most recent request and
+`scratch.peakBytes` is the largest value it ever reached. The arena is reset, not freed, between
+requests, so the last value is the steady-state working set of the heaviest recent call and the peak
+shows what a single large document once needed.
+
+Counters live in a `Registry` created once in `src/main.zig` and passed down through `runWithStore`. A
+server built without a registry answers `status` with `-32601` and does not advertise the capability,
+which is why the adapter checks `capabilities.status` before sending the request. Nothing is persisted:
+a respawn starts from zero, and the dashboard states that by showing the process uptime next to the
+counters.
+
+The dashboard itself is a plain webview (`neoGodotTools.showBackendStatus`) with no framework: the
+extension host calls `status()` on `ready` and `refresh` and forwards the parsed result. The panel owns
+its sidecar and shuts it down on dispose, so opening the dashboard never leaves a second idle process
+behind.
+
 ## Cancellation
 
 `$/cancelRequest` carries `{"id": <target>}`. `lex`, `parse` and every `symbols/*` call are synchronous
@@ -631,7 +679,8 @@ backend/
   build.zig.zon      package metadata, minimum Zig version
   src/main.zig       entry point, stdio wiring
   src/protocol.zig   framing and JSON-RPC message handling
-  src/server.zig     request dispatch for health, lex, parse, symbols, shutdown
+  src/server.zig     request dispatch for health, lex, parse, status, symbols, shutdown
+  src/metrics.zig    per-module counters and scratch arena accounting for status
   src/lexer.zig      UTF-16 GDScript tokenizer
   src/parser.zig     declaration parser matching src/analyzer/parser.ts
   src/symbol_index.zig workspace symbol store and ASCII collation
@@ -644,6 +693,9 @@ src/index/
   ascii_collation.ts host collation probe and the shared ASCII comparator
   zig_symbol_mirror.ts native symbol mirror and its fallback rules
   zig_symbol_mirror.test.ts differential tests against symbol_index
+src/dashboard/
+  panel_html.ts      dependency-free dashboard document for the status report
+  status_panel.ts    webview panel that owns and queries the sidecar
 tools/
   profile_native_parse.ts end-to-end parse benchmark against parseGDScript
 ```

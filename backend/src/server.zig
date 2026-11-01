@@ -8,6 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const protocol = @import("protocol.zig");
+const metrics = @import("metrics.zig");
 const symbols = @import("symbol_index.zig");
 
 fn framingDetail(err: protocol.FrameError) []const u8 {
@@ -37,17 +38,20 @@ fn reportFramingError(allocator: Allocator, writer: *std.Io.Writer, detail: []co
 
 /// Serves framed requests until shutdown, a framing error or clean stdin EOF.
 pub fn run(allocator: Allocator, reader: *std.Io.Reader, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    return runWithStore(allocator, reader, writer, null);
+    return runWithStore(allocator, reader, writer, null, null);
 }
 
-/// Serves framed requests with an optional workspace symbol store. Passing a
-/// store advertises the `symbols` capability and lets `symbols/*` methods
-/// mutate and query it; passing null keeps the stateless stream unchanged.
+/// Serves framed requests with an optional workspace symbol store and metrics
+/// registry. Passing a store advertises the `symbols` capability and lets
+/// `symbols/*` methods mutate and query it; passing a registry advertises
+/// `status` and records per-module timings. Passing null for both keeps the
+/// stateless stream unchanged.
 pub fn runWithStore(
     allocator: Allocator,
     reader: *std.Io.Reader,
     writer: *std.Io.Writer,
     store: ?*symbols.Store,
+    registry: ?*metrics.Registry,
 ) std.Io.Writer.Error!void {
     while (true) {
         const frame = protocol.readFrame(reader, allocator) catch |err| {
@@ -57,7 +61,12 @@ pub fn runWithStore(
         const body = frame orelse return;
         defer allocator.free(body);
 
-        const result = protocol.handleBodyWithStore(allocator, body, store) catch {
+        // One frame body end to end: framing is excluded, since it is the
+        // read-coalescing layer rather than per-request work.
+        const timer = metrics.Timer.start(registry);
+        defer timer.finish(.request);
+
+        const result = protocol.handleBodyWithStore(allocator, body, store, registry) catch {
             // `handleBody` reports allocation failures itself once it has the
             // parsed id; this fallback only covers that report failing too.
             const failure = protocol.buildInternalError(allocator, .null) catch {
@@ -68,7 +77,6 @@ pub fn runWithStore(
             try protocol.writeFrame(writer, failure);
             continue;
         };
-
         const response = result.response orelse continue;
         defer allocator.free(response);
         try protocol.writeFrame(writer, response);
@@ -158,7 +166,7 @@ test "runWithStore ingests queries and advertises symbols" {
     var reader = std.Io.Reader.fixed(input);
     var storage: [8192]u8 = undefined;
     var writer = std.Io.Writer.fixed(&storage);
-    try runWithStore(std.testing.allocator, &reader, &writer, &store);
+    try runWithStore(std.testing.allocator, &reader, &writer, &store, null);
 
     var output = std.Io.Reader.fixed(storage[0..writer.end]);
     const ingest_body = (try protocol.readFrame(&output, std.testing.allocator)) orelse
@@ -177,4 +185,37 @@ test "runWithStore ingests queries and advertises symbols" {
     defer std.testing.allocator.free(health_body);
     try std.testing.expect(std.mem.indexOf(u8, health_body, "\"capabilities\":[\"lex\",\"parse\",\"symbols\"]") != null);
     try std.testing.expect((try protocol.readFrame(&output, std.testing.allocator)) == null);
+}
+
+test "runWithStore counts requests for the status method" {
+    var store = symbols.Store.init(std.testing.allocator);
+    defer store.deinit();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var registry = metrics.Registry.init(io);
+
+    const lex = try protocol.buildFrame(
+        std.testing.allocator,
+        "{\"id\":1,\"method\":\"lex\",\"params\":{\"sourceBase64\":\"dgBhAHIA\",\"encoding\":\"utf16le\"}}",
+    );
+    defer std.testing.allocator.free(lex);
+    const status = try protocol.buildFrame(std.testing.allocator, "{\"id\":2,\"method\":\"status\"}");
+    defer std.testing.allocator.free(status);
+    const input = try std.mem.concat(std.testing.allocator, u8, &.{ lex, status });
+    defer std.testing.allocator.free(input);
+
+    var reader = std.Io.Reader.fixed(input);
+    var storage: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&storage);
+    try runWithStore(std.testing.allocator, &reader, &writer, &store, &registry);
+
+    var output = std.Io.Reader.fixed(storage[0..writer.end]);
+    const lex_body = (try protocol.readFrame(&output, std.testing.allocator)) orelse
+        return error.TestUnexpectedResult;
+    std.testing.allocator.free(lex_body);
+    const status_body = (try protocol.readFrame(&output, std.testing.allocator)) orelse
+        return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(status_body);
+    try std.testing.expect(std.mem.indexOf(u8, status_body, "\"requests\":1") != null);
+    try std.testing.expectEqual(@as(u64, 1), registry.lexer.requests);
+    try std.testing.expectEqual(@as(u64, 2), registry.request.requests);
 }

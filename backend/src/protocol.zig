@@ -10,6 +10,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const lexer = @import("lexer.zig");
+const metrics = @import("metrics.zig");
 const parser = @import("parser.zig");
 const symbols = @import("symbol_index.zig");
 
@@ -229,7 +230,7 @@ pub fn buildInternalError(allocator: Allocator, id: RequestId) Allocator.Error![
     return buildError(allocator, id, .internal, "allocation failure") catch |err| mapBuilderError(err);
 }
 
-fn buildHealth(allocator: Allocator, id: RequestId, has_store: bool) BuilderError![]u8 {
+fn buildHealth(allocator: Allocator, id: RequestId, has_store: bool, has_metrics: bool) BuilderError![]u8 {
     var allocating: std.Io.Writer.Allocating = .init(allocator);
     errdefer allocating.deinit();
     var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
@@ -251,6 +252,56 @@ fn buildHealth(allocator: Allocator, id: RequestId, has_store: bool) BuilderErro
     try stringify.write("lex");
     try stringify.write("parse");
     if (has_store) try stringify.write("symbols");
+    if (has_metrics) try stringify.write("status");
+    try stringify.endArray();
+    try stringify.endObject();
+    try stringify.endObject();
+    return allocating.toOwnedSlice();
+}
+
+/// Self-report of the running sidecar: which modules are native, how many
+/// requests each served, and the mean and peak latency measured with the
+/// monotonic awake clock. The dashboard renders exactly these fields.
+fn buildStatusResult(allocator: Allocator, id: RequestId, registry: *metrics.Registry) BuilderError![]u8 {
+    var allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer allocating.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &allocating.writer };
+    try writeEnvelopeStart(&stringify, id);
+    try stringify.beginObject();
+    try stringify.objectField("backendVersion");
+    try stringify.write(backend_version);
+    try stringify.objectField("zigVersion");
+    try stringify.write(zig_version);
+    try stringify.objectField("protocolVersion");
+    try stringify.print("{d}", .{protocol_version});
+    try stringify.objectField("uptimeMs");
+    try stringify.print("{d}", .{registry.uptimeMilliseconds()});
+    try stringify.objectField("scratch");
+    try stringify.beginObject();
+    try stringify.objectField("lastBytes");
+    try stringify.print("{d}", .{registry.scratch_last});
+    try stringify.objectField("peakBytes");
+    try stringify.print("{d}", .{registry.scratch_peak});
+    try stringify.endObject();
+    try stringify.objectField("modules");
+    try stringify.beginArray();
+    for (metrics.Module.order) |module| {
+        const counter = registry.counter(module);
+        try stringify.beginObject();
+        try stringify.objectField("name");
+        try stringify.write(@tagName(module));
+        try stringify.objectField("label");
+        try stringify.write(module.label());
+        try stringify.objectField("driver");
+        try stringify.write(module.driver());
+        try stringify.objectField("requests");
+        try stringify.print("{d}", .{counter.requests});
+        try stringify.objectField("meanMicros");
+        try stringify.print("{d}", .{counter.meanMicros()});
+        try stringify.objectField("maxMicros");
+        try stringify.print("{d}", .{counter.max_ns / 1000});
+        try stringify.endObject();
+    }
     try stringify.endArray();
     try stringify.endObject();
     try stringify.endObject();
@@ -935,6 +986,7 @@ fn handleObject(
     object: std.json.ObjectMap,
     arena: Allocator,
     store: ?*symbols.Store,
+    registry: ?*metrics.Registry,
 ) BuilderError!Result {
     const parsed_id = parseId(object);
     const id = switch (parsed_id) {
@@ -972,21 +1024,32 @@ fn handleObject(
     if (is_notification) return .{ .response = null };
 
     if (std.mem.eql(u8, method, "health")) {
-        return .{ .response = try buildHealth(allocator, request_id, store != null) };
+        return .{ .response = try buildHealth(allocator, request_id, store != null, registry != null) };
+    }
+    if (std.mem.eql(u8, method, "status")) {
+        const active_registry = registry orelse
+            return .{ .response = try buildError(allocator, request_id, .unknown_method, "status is unavailable") };
+        return .{ .response = try buildStatusResult(allocator, request_id, active_registry) };
     }
     if (std.mem.eql(u8, method, "lex")) {
         const params = object.get("params") orelse
             return .{ .response = try buildError(allocator, request_id, .invalid_params, "missing params") };
+        const timer = metrics.Timer.start(registry);
+        defer timer.finish(.lexer);
         return .{ .response = try buildLexResult(allocator, request_id, params, arena) };
     }
     if (std.mem.eql(u8, method, "parse")) {
         const params = object.get("params") orelse
             return .{ .response = try buildError(allocator, request_id, .invalid_params, "missing params") };
+        const timer = metrics.Timer.start(registry);
+        defer timer.finish(.parser);
         return .{ .response = try buildParseResult(allocator, request_id, params, arena) };
     }
     if (std.mem.startsWith(u8, method, symbol_method_prefix)) {
         const active_store = store orelse
             return .{ .response = try buildError(allocator, request_id, .unknown_method, "symbols are unavailable") };
+        const timer = metrics.Timer.start(registry);
+        defer timer.finish(.symbols);
         const method_name = method[symbol_method_prefix.len..];
         if (std.mem.eql(u8, method_name, "digest")) {
             return .{ .response = try buildDigestResult(allocator, request_id, active_store.digest()) };
@@ -1043,6 +1106,7 @@ fn handleBodyInner(
     arena: Allocator,
     id_out: *?RequestId,
     store: ?*symbols.Store,
+    registry: ?*metrics.Registry,
 ) BuilderError!Result {
     const valid_document = isSingleJsonDocument(arena, body) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -1064,7 +1128,7 @@ fn handleBodyInner(
                 .present => |value| value,
                 .missing, .invalid => null,
             };
-            return handleObject(allocator, object, arena, store);
+            return handleObject(allocator, object, arena, store, registry);
         },
         else => return .{ .response = try buildError(allocator, .null, .invalid_request, "request must be an object") },
     }
@@ -1073,23 +1137,32 @@ fn handleBodyInner(
 /// Handles one frame body. Parse failures produce a `-32700` response and keep
 /// the connection usable because the frame boundary is already known.
 pub fn handleBody(allocator: Allocator, body: []const u8) Allocator.Error!Result {
-    return handleBodyWithStore(allocator, body, null);
+    return handleBodyWithStore(allocator, body, null, null);
 }
 
-/// Handles one frame body with an optional workspace symbol store. The store is
-/// the only mutable state the request path can reach; without it the response
-/// stream is byte identical to `handleBody`.
-pub fn handleBodyWithStore(allocator: Allocator, body: []const u8, store: ?*symbols.Store) Allocator.Error!Result {
+/// Handles one frame body with an optional workspace symbol store and an
+/// optional metrics registry. Without a registry every counter stays zero and
+/// the response stream is byte identical to the stateless form.
+pub fn handleBodyWithStore(
+    allocator: Allocator,
+    body: []const u8,
+    store: ?*symbols.Store,
+    registry: ?*metrics.Registry,
+) Allocator.Error!Result {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     var request_id: ?RequestId = null;
-    return handleBodyInner(allocator, body, arena_state.allocator(), &request_id, store) catch |err| switch (err) {
+    const result = handleBodyInner(allocator, body, arena_state.allocator(), &request_id, store, registry) catch |err| switch (err) {
         error.OutOfMemory, error.WriteFailed => {
             const id = request_id orelse RequestId.null;
             const failure = buildInternalError(allocator, id) catch |build_err| return mapBuilderError(build_err);
             return .{ .response = failure };
         },
     };
+    // Capacity, not usage: the arena keeps its committed blocks until the next
+    // reset, so the figure answers "how much did one request retain".
+    if (registry) |active| active.recordScratch(arena_state.queryCapacity());
+    return result;
 }
 
 pub fn buildFrame(allocator: Allocator, body: []const u8) Allocator.Error![]u8 {
@@ -1269,7 +1342,7 @@ test "internal error echoes the request id" {
 }
 
 fn symbolResponse(store: *symbols.Store, body: []const u8) ![]u8 {
-    const result = try handleBodyWithStore(std.testing.allocator, body, store);
+    const result = try handleBodyWithStore(std.testing.allocator, body, store, null);
     return result.response orelse error.TestUnexpectedResult;
 }
 
@@ -1399,10 +1472,70 @@ test "health advertises symbols only with a store" {
         std.testing.allocator,
         "{\"id\":14,\"method\":\"health\"}",
         &store,
+        null,
     );
     defer if (with_store.response) |body| std.testing.allocator.free(body);
     const with_store_body = with_store.response orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.mem.indexOf(u8, with_store_body, "\"capabilities\":[\"lex\",\"parse\",\"symbols\"]") != null);
+}
+
+test "status is unknown without a registry" {
+    const result = try handleBody(std.testing.allocator, "{\"id\":16,\"method\":\"status\"}");
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "-32601") != null);
+}
+
+test "status reports versions modules and scratch" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var registry = metrics.Registry.init(io);
+    const result = try handleBodyWithStore(
+        std.testing.allocator,
+        "{\"id\":17,\"method\":\"status\"}",
+        null,
+        &registry,
+    );
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"backendVersion\":\"" ++ backend_version ++ "\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"zigVersion\":\"" ++ zig_version ++ "\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"protocolVersion\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"uptimeMs\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"scratch\":{\"lastBytes\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"name\":\"lexer\",\"label\":\"Lexer\",\"driver\":\"zig\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"name\":\"symbols\",\"label\":\"Symbol Index\"") != null);
+    // The status request itself is counted before the response is built.
+    try std.testing.expect(registry.request.requests == 0);
+}
+
+test "health advertises status only with a registry" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var registry = metrics.Registry.init(io);
+    const result = try handleBodyWithStore(
+        std.testing.allocator,
+        "{\"id\":18,\"method\":\"health\"}",
+        null,
+        &registry,
+    );
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    const body = result.response orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"capabilities\":[\"lex\",\"parse\",\"status\"]") != null);
+}
+
+test "lex counts one request when a registry is present" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var registry = metrics.Registry.init(io);
+    const result = try handleBodyWithStore(
+        std.testing.allocator,
+        "{\"id\":19,\"method\":\"lex\",\"params\":{\"sourceBase64\":\"dgBhAHIA\",\"encoding\":\"utf16le\"}}",
+        null,
+        &registry,
+    );
+    defer if (result.response) |body| std.testing.allocator.free(body);
+    try std.testing.expect(result.response != null);
+    try std.testing.expectEqual(@as(u64, 1), registry.lexer.requests);
+    try std.testing.expectEqual(@as(u64, 0), registry.parser.requests);
+    try std.testing.expect(registry.scratch_last > 0);
 }
 
 test "parse round trip uses a string table" {

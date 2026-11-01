@@ -94,6 +94,11 @@
 			},
 			{
 				"category": "Neo Godot Tools",
+				"command": "neoGodotTools.showBackendStatus",
+				"title": "Show Native Backend Status"
+			},
+			{
+				"category": "Neo Godot Tools",
 				"command": "neoGodotTools.startLanguageServer",
 				"title": "Start the GDScript Language Server for this workspace"
 			},

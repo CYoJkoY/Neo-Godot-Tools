@@ -74,10 +74,37 @@ export interface ZigBackendDigest {
 	readonly symbols: number;
 }
 
+/** One row of the dashboard's module table. */
+export interface ZigBackendModuleStatus {
+	/** Stable wire identifier, for example `lexer`. */
+	readonly name: string;
+	/** Display name supplied by the backend, for example `Lexer`. */
+	readonly label: string;
+	/** Language that executes the module, for example `zig`. */
+	readonly driver: string;
+	readonly requests: number;
+	readonly meanMicros: number;
+	readonly maxMicros: number;
+}
+
+/** Self-report returned by the `status` method. */
+export interface ZigBackendStatus {
+	readonly backendVersion: string;
+	readonly zigVersion: string;
+	readonly protocolVersion: number;
+	readonly uptimeMs: number;
+	/** Scratch arena capacity of the most recent request, in bytes. */
+	readonly scratchLastBytes: number;
+	/** Largest scratch capacity any request has held, in bytes. */
+	readonly scratchPeakBytes: number;
+	readonly modules: readonly ZigBackendModuleStatus[];
+}
+
 export interface ZigBackendCapabilities {
 	readonly lex: boolean;
 	readonly parse: boolean;
 	readonly symbols: boolean;
+	readonly status: boolean;
 }
 
 export interface ZigBackend {
@@ -93,6 +120,8 @@ export interface ZigBackend {
 	querySymbols(revision: number, query: string, options?: ZigBackendTokenOptions): Promise<Uint32Array>;
 	digestSymbols(options?: ZigBackendTokenOptions): Promise<ZigBackendDigest>;
 	clearSymbols(revision: number, options?: ZigBackendTokenOptions): Promise<number>;
+	/** Runtime counters for the dashboard; requires the `status` capability. */
+	status(options?: ZigBackendTokenOptions): Promise<ZigBackendStatus>;
 	shutdown(): Promise<void>;
 }
 
@@ -882,6 +911,51 @@ const parseDigestResult = (value: unknown): ZigBackendDigest | undefined => {
 	return { revision, files, symbols };
 };
 
+const readText = (record: Readonly<Record<string, unknown>>, key: string): string | undefined => {
+	const value = record[key];
+	return typeof value === "string" ? value : undefined;
+};
+
+const parseModuleStatus = (value: unknown): ZigBackendModuleStatus | undefined => {
+	if (!isRecord(value)) return undefined;
+	const name = readText(value, "name");
+	const label = readText(value, "label");
+	const driver = readText(value, "driver");
+	const requests = readOffset(value, "requests");
+	const meanMicros = readOffset(value, "meanMicros");
+	const maxMicros = readOffset(value, "maxMicros");
+	if (name === undefined || label === undefined || driver === undefined) return undefined;
+	if (requests === undefined || meanMicros === undefined || maxMicros === undefined) return undefined;
+	return { name, label, driver, requests, meanMicros, maxMicros };
+};
+
+const parseStatusResult = (value: unknown): ZigBackendStatus | undefined => {
+	if (!isRecord(value)) return undefined;
+	const backendVersion = readText(value, "backendVersion");
+	const zigVersion = readText(value, "zigVersion");
+	const protocolVersion = readOffset(value, "protocolVersion");
+	const uptimeMs = readOffset(value, "uptimeMs");
+	const scratch = value["scratch"];
+	const modules = value["modules"];
+	if (backendVersion === undefined || zigVersion === undefined) return undefined;
+	if (protocolVersion === undefined || uptimeMs === undefined) return undefined;
+	if (!isRecord(scratch) || !Array.isArray(modules)) return undefined;
+	const scratchLastBytes = readOffset(scratch, "lastBytes");
+	const scratchPeakBytes = readOffset(scratch, "peakBytes");
+	if (scratchLastBytes === undefined || scratchPeakBytes === undefined) return undefined;
+	const parsedModules = modules.map((entry: unknown) => parseModuleStatus(entry)).filter(isDefined);
+	if (parsedModules.length !== modules.length) return undefined;
+	return {
+		backendVersion,
+		zigVersion,
+		protocolVersion,
+		uptimeMs,
+		scratchLastBytes,
+		scratchPeakBytes,
+		modules: parsedModules,
+	};
+};
+
 const requestSymbols = <T>(
 	lifecycle: Lifecycle,
 	state: BackendProcess,
@@ -911,7 +985,7 @@ export const readZigBackendCapabilities = (health: unknown): ZigBackendCapabilit
 	const declared = health["capabilities"];
 	if (!Array.isArray(declared)) return undefined;
 	const supports = (name: string): boolean => declared.some((entry: unknown) => entry === name);
-	return { lex: supports("lex"), parse: supports("parse"), symbols: supports("symbols") };
+	return { lex: supports("lex"), parse: supports("parse"), symbols: supports("symbols"), status: supports("status") };
 };
 
 const recordCapabilities = (lifecycle: Lifecycle, health: unknown): void => {
@@ -1080,7 +1154,7 @@ const finalizeProcess = (lifecycle: Lifecycle, state: BackendProcess, error: Err
 	// Capabilities describe the process that answered the handshake; a restart
 	// reports a fresh set once its own health check completes.
 	if (wasActive) {
-		lifecycle.capabilities = { lex: false, parse: false, symbols: false };
+		lifecycle.capabilities = { lex: false, parse: false, symbols: false, status: false };
 		lifecycle.capabilitiesKnown = false;
 	}
 	rejectAllPending(lifecycle, error);
@@ -1244,7 +1318,7 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		shutdownPromise: undefined,
 		shutdownResolve: undefined,
 		shutdownTimer: undefined,
-		capabilities: { lex: false, parse: false, symbols: false },
+		capabilities: { lex: false, parse: false, symbols: false, status: false },
 		capabilitiesKnown: false,
 	};
 
@@ -1279,6 +1353,22 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 	/** `parse` arrived in backend 0.3.0; older binaries fail the handshake check here. */
 	const parseUnavailable = (): Promise<never> =>
 		Promise.reject(new Error("Zig backend does not advertise the parse capability."));
+
+	const statusUnavailable = (): Promise<never> =>
+		Promise.reject(new Error("Zig backend does not advertise the status capability."));
+
+	const status = (tokenOptions: ZigBackendTokenOptions = {}): Promise<ZigBackendStatus> => {
+		if (!lifecycle.capabilities.status) return statusUnavailable();
+		return withProcess(tokenOptions.signal, (state) =>
+			sendRequestOnProcess(lifecycle, state, "status", undefined, undefined, tokenOptions.signal).then(
+				(result) => {
+					const parsed = parseStatusResult(result);
+					if (parsed !== undefined) return parsed;
+					return Promise.reject(new Error("Zig backend returned a malformed status result."));
+				},
+			),
+		);
+	};
 
 	const parse = (source: string, tokenOptions: ZigBackendTokenOptions = {}): Promise<GDScriptParseResult> => {
 		const signal = tokenOptions.signal;
@@ -1430,6 +1520,7 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		querySymbols,
 		digestSymbols,
 		clearSymbols,
+		status,
 		shutdown,
 	};
 };
