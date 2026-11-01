@@ -316,9 +316,12 @@ export async function applySceneResourcePropertyWrite(
  * Properties that can be added to a node: every known property that the scene
  * does not override yet, most relevant (script) first.
  */
-export function addableProperties(metadata: readonly PropertyMetadata[], node: SceneNode): PropertyMetadata[] {
+export function addableProperties(
+	metadata: readonly PropertyMetadata[],
+	properties: readonly { name: string }[],
+): PropertyMetadata[] {
 	return metadata
-		.filter((property) => property.name !== "script" && !findProperty(node.properties, property.name))
+		.filter((property) => property.name !== "script" && !findProperty(properties, property.name))
 		.sort((left, right) => {
 			const leftDefault = left.defaultValue !== undefined ? 0 : 1;
 			const rightDefault = right.defaultValue !== undefined ? 0 : 1;

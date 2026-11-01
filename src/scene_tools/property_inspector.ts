@@ -5,7 +5,14 @@ import { resourceInspectorHtml } from "../resource_inspector/panel_html.js";
 import { parseVariant } from "../resource_inspector/values.js";
 import { convert_resource_path_to_uri, convert_uri_to_resource_path, convert_uid_to_uri, createLogger } from "../utils";
 import { SceneParser } from "./parser.js";
-import { NodePropertyMetadata, applyScenePropertyWrite, applySceneResourcePropertyWrite } from "./property_editor.js";
+import {
+	NodePropertyMetadata,
+	addableProperties,
+	applyScenePropertyWrite,
+	applySceneResourcePropertyWrite,
+	promptPropertyValue,
+} from "./property_editor.js";
+import { findProperty } from "./properties.js";
 import {
 	addSceneExternalResource,
 	addSceneSubResource,
@@ -153,6 +160,9 @@ export function createScenePropertyInspector(
 				case "revertProperty":
 					if (message.name) await writeProperty(target, message.target, message.name, null);
 					return;
+				case "addProperty":
+					await addProperty(target);
+					return;
 				case "pickResource":
 					if (message.name) await pickResource(target, message.target, message.name);
 					return;
@@ -264,6 +274,48 @@ export function createScenePropertyInspector(
 		const node = scene.nodes.get(nodePath);
 		if (!node) return;
 		await applyScenePropertyWrite(document, scene, node, name, value);
+	}
+
+	/**
+	 * Adds an override to the inspected node.
+	 *
+	 * The standalone editor has no tree to fall back on, so it offers the
+	 * node's known properties first and always keeps a free-form name for
+	 * properties the language server does not know about.
+	 */
+	async function addProperty(target: InspectorTarget): Promise<void> {
+		const document = await vscode.workspace.openTextDocument(target.uri);
+		const scene = parser.parse_scene(document);
+		const node = scene.nodes.get(target.nodePath);
+		if (!node) return;
+		const metadata = await nodeProperties.forNode(scene, node);
+		const picks = [
+			...addableProperties(metadata, node.properties).map((property) => ({
+				label: property.name,
+				description: property.type,
+				detail: property.source === "script" ? "script @export" : property.source,
+				property,
+			})),
+			{
+				label: "$(edit) Custom property...",
+				description: "",
+				detail: "Type a property name",
+				property: undefined,
+			},
+		];
+		const picked = await vscode.window.showQuickPick(picks, { title: `Add property to ${node.path}` });
+		if (!picked) return;
+
+		const name =
+			picked.property?.name ??
+			(await vscode.window.showInputBox({ title: "Property name", placeHolder: "e.g. position" }))?.trim();
+		if (!name) return;
+		const existing = findProperty(node.properties, name);
+		const propertyMetadata =
+			picked.property ?? (await nodeProperties.forProperty(scene, node, name));
+		const value = await promptPropertyValue(propertyMetadata, existing?.raw ?? propertyMetadata?.defaultValue ?? "");
+		if (value === undefined || value === null) return;
+		await writeProperty(target, `node:${node.path}`, name, value);
 	}
 
 	async function pickResource(

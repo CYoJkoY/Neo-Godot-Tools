@@ -104,7 +104,7 @@ export interface TextEditPlan {
 }
 
 /** Finds a property by name, matching Godot's property paths. */
-export function findProperty(properties: readonly SceneProperty[], name: string): SceneProperty | undefined {
+export function findProperty<T extends { name: string }>(properties: readonly T[], name: string): T | undefined {
 	return properties.find((property) => property.name === name);
 }
 

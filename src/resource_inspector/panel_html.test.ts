@@ -623,7 +623,7 @@ describe("resource inspector webview", () => {
 		assert.equal(webview.messages.at(-1)?.target, "sub:Material_1");
 	});
 
-	it("renders the TSCN property editor without .tres lock and add-property controls", () => {
+	it("renders the TSCN property editor without .tres lock and with add-property controls", () => {
 		const webview = loadWebview();
 		webview.render({
 			uri: "file:///project/level.tscn",
@@ -647,7 +647,7 @@ describe("resource inspector webview", () => {
 		assert.ok(buttons.includes("Open scene text"));
 		assert.ok(buttons.includes("↻  Reload"));
 		assert.ok(!buttons.includes("🔓 Auto"));
-		assert.ok(!buttons.includes("+  Add property"));
+		assert.ok(buttons.includes("+  Add property"));
 	});
 
 	it("keeps list containers when entries change", () => {
