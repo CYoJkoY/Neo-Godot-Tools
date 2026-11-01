@@ -27,17 +27,11 @@ import {
 } from "../utils";
 import { apply_custom_class_icons, invalidateNodeIconCaches } from "./node_icons";
 import { SceneParser } from "./parser";
-import { findProperty } from "./properties";
-import {
-	NodePropertyMetadata,
-	addableProperties,
-	applyScenePropertyWrite,
-	promptPropertyValue,
-} from "./property_editor";
-import { type Scene, SceneNode, ScenePropertiesGroup, ScenePropertyItem } from "./types";
+import { NodePropertyMetadata } from "./property_editor";
+import { type Scene, SceneNode } from "./types";
 import { createScenePropertyInspector, type ScenePropertyInspector } from "./property_inspector.js";
 
-export type SceneTreeElement = SceneNode | ScenePropertiesGroup | ScenePropertyItem;
+export type SceneTreeElement = SceneNode;
 
 const log = createLogger("scenes.preview");
 
@@ -47,8 +41,6 @@ export class ScenePreviewProvider
 	public dropMimeTypes = [];
 	public dragMimeTypes = [];
 	private tree: TreeView<SceneTreeElement>;
-	/** Path of the node whose properties are currently expanded in the tree. */
-	private inspectedPath: string | undefined;
 	private scenePreviewLocked = false;
 	private currentScene = "";
 	public parser = new SceneParser();
@@ -90,12 +82,9 @@ export class ScenePreviewProvider
 			register_command("scenePreview.goToDefinition", this.go_to_definition.bind(this)),
 			register_command("scenePreview.openDocumentation", this.open_documentation.bind(this)),
 			register_command("scenePreview.refresh", this.refresh.bind(this)),
-			register_command("scenePreview.openPropertyInspector", (item?: ScenePropertiesGroup | SceneNode) =>
+			register_command("scenePreview.openPropertyInspector", (item?: SceneNode) =>
 				this.open_property_inspector(item),
 			),
-			register_command("scenePreview.editProperty", (item?: ScenePropertyItem) => this.edit_property(item)),
-			register_command("scenePreview.addProperty", (item?: ScenePropertiesGroup) => this.add_property(item)),
-			register_command("scenePreview.removeProperty", (item?: ScenePropertyItem) => this.remove_property(item)),
 			window.onDidChangeActiveTextEditor(this.text_editor_changed.bind(this)),
 			window.registerFileDecorationProvider(this.uniqueDecorator),
 			window.registerFileDecorationProvider(this.scriptDecorator),
@@ -107,7 +96,6 @@ export class ScenePreviewProvider
 			this.scriptWatcher.onDidChange(() => invalidateNodeIconCaches()),
 			this.scriptWatcher.onDidDelete(() => invalidateNodeIconCaches()),
 			this.scriptWatcher,
-			this.tree.onDidChangeSelection(this.tree_selection_changed),
 			this.tree,
 			{ dispose: () => this.dispose() },
 		);
@@ -429,27 +417,6 @@ export class ScenePreviewProvider
 		vscode.commands.executeCommand("vscode.open", make_docs_uri(item.className));
 	}
 
-	private tree_selection_changed(event: vscode.TreeViewSelectionChangeEvent<SceneTreeElement>) {
-		const item = event.selection.length === 1 ? event.selection[0] : undefined;
-		this.tree.message =
-			item instanceof ScenePropertyItem
-				? `${item.node.path}  ${item.property.name} = ${item.property.raw}`
-				: (this.scene?.title ?? "");
-
-		// The selected node reveals its properties inline, like the inspector of
-		// the editor it mirrors. Only the two affected nodes change, so the
-		// remaining children are neither re-fetched nor re-rendered.
-		const node = item instanceof SceneNode ? item : item?.node;
-		const previous = this.inspectedPath;
-		const next = node?.path;
-		if (previous === next) return;
-		this.inspectedPath = next;
-		for (const path of [previous, next]) {
-			const changed = path ? this.scene?.nodes.get(path) : undefined;
-			if (changed) this.changeTreeEvent.fire(changed);
-		}
-	}
-
 	private get_scene_children(element?: SceneNode): SceneNode[] {
 		if (!this.scene?.root) return [];
 		if (!element) return [this.scene.root];
@@ -459,35 +426,13 @@ export class ScenePreviewProvider
 	}
 
 	public async getChildren(element?: SceneTreeElement): Promise<SceneTreeElement[]> {
-		if (element instanceof ScenePropertiesGroup) {
-			return element.node.properties.map((property) => new ScenePropertyItem(element.node, property));
-		}
-		if (element instanceof ScenePropertyItem) return [];
 		if (!element) return this.get_scene_children();
-		return [
-			...this.get_scene_children(element),
-			...(this.shows_properties(element) ? [new ScenePropertiesGroup(element)] : []),
-		];
-	}
-
-	/** Nodes with overrides (and the selected node) expose an editable properties group. */
-	private shows_properties(node: SceneNode): boolean {
-		return node.properties.length > 0 || node.path === this.inspectedPath;
+		return this.get_scene_children(element);
 	}
 
 	public getTreeItem(element: SceneTreeElement): TreeItem | Thenable<TreeItem> {
-		if (element instanceof ScenePropertyItem || element instanceof ScenePropertiesGroup) {
-			element.id =
-				element instanceof ScenePropertyItem
-					? `property:${element.node.path}:${element.property.name}`
-					: `properties:${element.node.path}`;
-			return element;
-		}
-
 		if (this.get_scene_children(element).length > 0) {
 			element.collapsibleState = TreeItemCollapsibleState.Expanded;
-		} else if (this.shows_properties(element)) {
-			element.collapsibleState = TreeItemCollapsibleState.Collapsed;
 		} else {
 			element.collapsibleState = TreeItemCollapsibleState.None;
 		}
@@ -503,110 +448,12 @@ export class ScenePreviewProvider
 		return element;
 	}
 
-	/** Current document of the previewed scene, if it can be edited. */
-	private async scene_document(): Promise<vscode.TextDocument | undefined> {
-		if (!this.currentScene || !fs.existsSync(this.currentScene)) return undefined;
-		return vscode.workspace.openTextDocument(this.currentScene);
-	}
-
-	/**
-	 * Re-reads the node from the document that is about to be edited.
-	 *
-	 * The tree can hold a parse from before the last keystroke, and property
-	 * offsets are absolute character positions: using them on newer text would
-	 * corrupt the file, so the scene is re-parsed whenever the text moved.
-	 */
-	private async editable_node(
-		nodePath: string,
-	): Promise<{ document: vscode.TextDocument; scene: Scene; node: SceneNode } | undefined> {
-		const document = await this.scene_document();
-		if (!document) return undefined;
-		let scene = this.scene;
-		if (!scene) return undefined;
-		if (document.getText() !== scene.source || scene.path !== document.uri.fsPath) {
-			scene = this.parser.parse_scene(document);
-		}
-		const node = scene.nodes.get(nodePath);
-		if (!node || node.position < 0 || node.bodyEnd < 0) return undefined;
-		return { document, scene, node };
-	}
-
-	private async open_property_inspector(item?: ScenePropertiesGroup | SceneNode) {
-		const node = item instanceof ScenePropertiesGroup ? item.node : item;
+	/** Opens the dedicated property editor for the node the inline pencil edited. */
+	private async open_property_inspector(item?: SceneNode) {
+		const node = item;
 		const scenePath = this.currentScene || this.scene?.path;
 		if (!node || !scenePath) return;
 		await this.propertyInspector.open(vscode.Uri.file(scenePath), node.path);
-	}
-
-	private async edit_property(item?: ScenePropertyItem) {
-		if (!item?.node) return;
-		const target = await this.editable_node(item.node.path);
-		if (!target) return;
-		const property = target.node.properties.find((entry) => entry.name === item.property.name);
-		const metadata = await this.nodeProperties.forProperty(target.scene, target.node, item.property.name);
-		const value = await promptPropertyValue(metadata, property?.raw ?? item.property.raw);
-		if (value === undefined) return;
-		await this.write_property(target, item.property.name, value);
-	}
-
-	private async add_property(item?: ScenePropertiesGroup) {
-		if (!item?.node) return;
-		const target = await this.editable_node(item.node.path);
-		if (!target) return;
-		const known = addableProperties(await this.nodeProperties.forNode(target.scene, target.node), target.node);
-		const picks = [
-			...known.map((property) => ({
-				label: property.name,
-				description: property.type,
-				detail: property.source === "script" ? "script @export" : property.source,
-				property,
-			})),
-			{
-				label: "$(edit) Custom property...",
-				description: "",
-				detail: "Type a property name",
-				property: undefined,
-			},
-		];
-		const picked = await vscode.window.showQuickPick(picks, { title: `Add property to ${item.node.path}` });
-		if (!picked) return;
-
-		let name = picked.property?.name;
-		if (!name) {
-			name = await vscode.window.showInputBox({ title: "Property name", placeHolder: "e.g. position" });
-			if (!name) return;
-		}
-		const existing = findProperty(target.node.properties, name);
-		const metadata = picked.property ?? (await this.nodeProperties.forProperty(target.scene, target.node, name));
-		const value = await promptPropertyValue(metadata, existing?.raw ?? metadata?.defaultValue ?? "");
-		if (value === undefined) return;
-		await this.write_property(target, name, value);
-	}
-
-	private async remove_property(item?: ScenePropertyItem) {
-		if (!item?.node) return;
-		const target = await this.editable_node(item.node.path);
-		if (!target || !findProperty(target.node.properties, item.property.name)) return;
-		const answer = await vscode.window.showWarningMessage(
-			`Remove '${item.property.name}' from '${item.node.path}'?`,
-			{ modal: true },
-			"Remove",
-		);
-		if (answer !== "Remove") return;
-		await this.write_property(target, item.property.name, null);
-	}
-
-	private async write_property(
-		target: { document: vscode.TextDocument; scene: Scene; node: SceneNode },
-		name: string,
-		value: string | null,
-	): Promise<void> {
-		const written = await applyScenePropertyWrite(target.document, target.scene, target.node, name, value);
-		if (!written) {
-			log.debug(`Unable to write property '${name}' of '${target.node.path}'.`);
-			return;
-		}
-		await target.document.save();
 	}
 }
 

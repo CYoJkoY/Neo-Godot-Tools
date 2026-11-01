@@ -166,36 +166,6 @@ export class Scene {
 	}
 }
 
-/** Properties of a node, grouped in the Scene Preview tree. */
-export class ScenePropertiesGroup extends TreeItem {
-	constructor(public node: SceneNode) {
-		super("Edit properties…", TreeItemCollapsibleState.None);
-		this.description = node.properties.length ? `${node.properties.length} overridden` : "open inspector";
-		this.contextValue = "sceneProperties";
-		this.tooltip = "Open the dedicated Scene Property Editor for this node";
-		this.command = {
-			command: "neoGodotTools.scenePreview.openPropertyInspector",
-			title: "Edit node properties",
-			arguments: [node],
-		};
-	}
-}
-
-/** One editable property of a node. */
-export class ScenePropertyItem extends TreeItem {
-	constructor(
-		public node: SceneNode,
-		public property: SceneProperty,
-		label?: string,
-	) {
-		super(label ?? "", TreeItemCollapsibleState.None);
-		this.label = property.name;
-		this.description = property.raw.length > 80 ? `${property.raw.slice(0, 77)}...` : property.raw;
-		this.contextValue = "sceneProperty";
-		this.tooltip = new MarkdownString(`\`\`\`gdresource\n${property.name} = ${property.raw}\n\`\`\``);
-	}
-}
-
 export interface SceneResource {
 	path: string;
 	type: string;

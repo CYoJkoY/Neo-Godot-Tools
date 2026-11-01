@@ -694,7 +694,7 @@ function render(model, resources) {
 		propertyContainer.appendChild(propertyRow(property, model, commit, revert));
 	}
 	app.appendChild(propertyContainer);
-	if (!sceneNode) app.appendChild(element("button", { class: "tonal add-resource", text: "+  Add property", onclick: () => post("addProperty", {}) }));
+	app.appendChild(element("button", { class: "tonal add-resource", text: "+  Add property", onclick: () => post("addProperty", {}) }));
 
 	if (!sceneNode || model.subResources.length) {
 	const subSection = element("section", { class: "resource-section" });

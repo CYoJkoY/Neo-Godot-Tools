@@ -411,7 +411,10 @@ export class SceneParser {
 		imported.inheritedFromScene = true;
 		imported.resourcePath = source.resourcePath;
 		imported.instanceScene = source.instanceScene;
-		imported.contextValue = source.contextValue;
+		// Instanced children have no section of their own in this scene, so they
+		// cannot be edited here. A distinct context value keeps the inline edit
+		// action off rows that would only refuse the write.
+		imported.contextValue = (source.contextValue ?? "").replace("sceneNode", "instancedNode");
 		imported.tooltip = source.tooltip;
 		imported.resourceUri = Uri.from({ scheme: "godot", path: targetPath });
 		return imported;

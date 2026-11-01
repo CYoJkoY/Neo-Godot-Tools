@@ -150,4 +150,38 @@ real = 1
 			dispose();
 		}
 	});
+
+	it("marks nodes inherited from an instanced scene as not editable", () => {
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-instance-"));
+		try {
+			const child = `[gd_scene format=3]
+
+[node name="ChildRoot" type="Node2D"]
+
+[node name="Sprite" type="Sprite2D" parent="."]
+`;
+			const main = `[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="child.tscn" id="1_child"]
+
+[node name="Root" type="Node2D"]
+
+[node name="Child" parent="." instance=ExtResource("1_child")]
+`;
+			fs.writeFileSync(path.join(folder, "child.tscn"), child);
+			const file = path.join(folder, "main.tscn");
+			fs.writeFileSync(file, main);
+			const scene = new SceneParser().parse_scene(fakeDocument(file, main));
+
+			assert.equal(scene.nodes.get("Root")?.contextValue, "sceneNode");
+			// The instance row itself is declared in this file and stays editable.
+			assert.match(scene.nodes.get("Root/Child")?.contextValue ?? "", /sceneNode/);
+			const inherited = scene.nodes.get("Root/Child/Sprite");
+			assert.ok(inherited, "an instanced scene contributes its descendants");
+			assert.equal(inherited.contextValue, "instancedNode");
+			assert.equal(inherited.position, -1);
+		} finally {
+			fs.rmSync(folder, { recursive: true, force: true });
+		}
+	});
 });
