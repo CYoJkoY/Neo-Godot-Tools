@@ -2,13 +2,27 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.1.0 — 2026-10-29 (pending)
+### 3.2.0 — 2026-11-02 (pending)
+
+Changes since [v3.1.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.1.0...v3.2.0).
+
+#### Changed
+
+- \[Issue-203\] feat(backend): add native GDScript parser and parse method ([#204](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/204))
+- \[Issue-205\] feat(backend): add sidecar status method and tech stack dashboard ([#206](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/206))
+- \[Issue-207\] feat(scene-preview): open node properties from an inline pencil ([#208](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/208))
+
+### 3.1.0 — 2026-10-29
 
 Changes since [v3.0.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.0.0...v3.1.0).
 
 #### Changed
 
 - \[Issue-201\] perf(backend): mirror workspace symbols in the Zig sidecar ([#202](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/202))
+
+#### Documentation
+
+- **changelog:** update changelog ([6267523](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/62675233c70cc24dca5302c942319755663ddd05))
 
 ### 3.0.0 — 2026-10-28
 
