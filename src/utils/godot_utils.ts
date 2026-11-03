@@ -218,7 +218,7 @@ function read_executable_version(target: string): string | undefined {
 }
 
 const against_workspace = (target: string): string =>
-	path.resolve(vscode.workspace.workspaceFolders?.[0].uri.fsPath ?? "", target);
+	path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", target);
 
 export function verify_godot_version(godotPath: string, expectedVersion: "3" | "4" | string): VERIFY_RESULT {
 	const cleaned = clean_godot_path(godotPath);
