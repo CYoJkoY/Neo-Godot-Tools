@@ -49,7 +49,7 @@ import {
 } from "./providers";
 import { ResourceInspectorProvider } from "./resource_inspector/provider";
 import { ScenePreviewProvider } from "./scene_tools";
-import { attemptSettingsUpdate, clean_godot_path } from "./utils";
+import { attemptSettingsUpdate, clean_godot_path, editor_environment } from "./utils";
 import {
 	convert_uri_to_resource_path,
 	find_file,
@@ -347,6 +347,7 @@ async function launch_detached_editor(godotPath: string, projectDir: string, arg
 
 	const child = detachedProcess(godotPath, args, {
 		cwd: projectDir,
+		env: editor_environment(process.env),
 		windowsHide: false,
 	});
 
@@ -393,6 +394,7 @@ async function open_workspace_with_editor() {
 				{
 					cwd: projectDir,
 					detached: false,
+					env: editor_environment(process.env),
 					windowsHide: false,
 				},
 				args,
