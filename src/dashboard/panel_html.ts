@@ -1,5 +1,5 @@
 /**
- * HTML/JavaScript for the Native Sidecar status dashboard.
+ * HTML/JavaScript for the architecture and native backend dashboard.
  *
  * The page is dependency free. It renders the single `status` payload the
  * extension forwards from the Zig backend, and posts back only `ready` and
@@ -7,6 +7,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { technologyMapHtml } from "./tech_stack.js";
 
 const PANEL_SCRIPT = `
 const vscode = acquireVsCodeApi();
@@ -108,7 +109,7 @@ export function backendStatusHtml(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-<title>Native Sidecar</title>
+<title>Architecture</title>
 <style>
 	:root {
 		color-scheme: light dark;
@@ -160,19 +161,48 @@ export function backendStatusHtml(): string {
 	.error { border-color: var(--vscode-inputValidation-errorBorder, #be1100); }
 	.error h2 { color: var(--vscode-errorForeground, #f48771); }
 	.error p { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+	.tech-table th.technology, .tech-table th.paths, .tech-table td.technology, .tech-table td.paths { padding-left: 14px; }
+	.tech-table td.technology { white-space: normal; }
+	.tech-table td.paths { color: var(--st-muted); font-size: 11px; overflow-wrap: anywhere; }
+	.tech-table code { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
+	@media (max-width: 560px) {
+		.tech-table thead { display: none; }
+		.tech-table, .tech-table tbody, .tech-table tr, .tech-table td { display: block; width: 100%; }
+		.tech-table tr { padding: 8px 0; border-top: 1px solid var(--st-border); }
+		.tech-table tr:first-child { border-top: 0; }
+		.tech-table td { padding: 1px 0; border-top: 0; }
+		.tech-table td.technology, .tech-table td.paths { padding-left: 0; }
+		.tech-table td.technology { color: var(--st-muted); }
+	}
 </style>
 </head>
 <body>
 <main>
 	<header>
 		<p class="eyebrow">Neo Godot Tools</p>
-		<h1>Native Sidecar</h1>
+		<h1>Architecture and native backend</h1>
 		<p id="versions" class="muted">Connecting to the native backend...</p>
 		<div class="meta">
 			<span id="uptime" class="badge">Uptime -</span>
 			<button id="refresh" type="button">Refresh</button>
 		</div>
 	</header>
+	<section class="card">
+		<h2>Technology map</h2>
+		<p class="hint">Which implementation serves each part of Neo Godot Tools. This map is static and remains visible when the native sidecar is unavailable.</p>
+		<table class="tech-table">
+			<thead>
+				<tr>
+					<th>Component</th>
+					<th class="technology">Technology</th>
+					<th class="paths">Source</th>
+				</tr>
+			</thead>
+			<tbody>
+${technologyMapHtml()}
+			</tbody>
+		</table>
+	</section>
 	<section class="card">
 		<h2>Modules</h2>
 		<table id="module-table" hidden>

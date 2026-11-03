@@ -138,4 +138,17 @@ describe("backend status dashboard", () => {
 		dashboard.dispatch({ type: "status", status });
 		assert.equal(dashboard.elements["error"]?.hidden, true);
 	});
+
+	it("keeps the technology map visible without a native status payload", () => {
+		const html = backendStatusHtml();
+		assert.match(html, /Technology map/);
+		assert.match(html, /TypeScript, Node\.js, VS Code API/);
+		assert.match(html, /Zig 0\.17\.0, JSON-RPC 2\.0 over stdio/);
+		assert.match(html, /HTML\/CSS\/vanilla JavaScript webviews/);
+		assert.match(html, /src\/analyzer\//);
+		assert.match(html, /backend\/src\//);
+		assert.equal((html.match(/class="tech-row"/g) ?? []).length, 9);
+		assert.match(html, /@media \(max-width: 560px\)/);
+		assert.match(html, /\.tech-table tr, \.tech-table td \{ display: block; width: 100%; \}/);
+	});
 });
