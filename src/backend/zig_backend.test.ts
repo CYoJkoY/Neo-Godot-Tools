@@ -322,31 +322,43 @@ test("reads capabilities from health and treats an older backend as parse-free",
 	assert.equal(readZigBackendCapabilities(undefined), undefined);
 });
 
-test("status reports versions counters and scratch usage", { skip: binarySkip }, async () => {
-	const adapter = createZigBackend();
-	await adapter.lex("var value = 1\n");
-	const status = await adapter.status();
-	assert.equal(status.backendVersion, "0.3.0");
-	assert.equal(status.zigVersion, "0.17.0");
-	assert.equal(status.protocolVersion, 1);
-	assert.ok(status.uptimeMs >= 0, "uptime must not be negative");
-	assert.ok(status.scratchPeakBytes >= status.scratchLastBytes, "the peak must cover the last request");
-	assert.ok(status.scratchPeakBytes > 0, "a lex request must retain scratch memory");
+test(
+	"status starts a fresh adapter and reports versions, counters and scratch usage",
+	{ skip: binarySkip },
+	async () => {
+		const adapter = createZigBackend();
+		try {
+			// No prior request: the capability check must follow the startup handshake.
+			const status = await adapter.status();
+			assert.equal(status.backendVersion, "0.3.0");
+			assert.equal(status.zigVersion, "0.17.0");
+			assert.equal(status.protocolVersion, 1);
+			assert.ok(status.uptimeMs >= 0, "uptime must not be negative");
+			assert.ok(status.scratchPeakBytes >= status.scratchLastBytes, "the peak must cover the last request");
+			assert.ok(status.scratchPeakBytes > 0, "the status request must retain scratch memory");
+			assert.equal(adapter.capabilities.status, true);
 
-	const names = status.modules.map((module) => module.name);
-	assert.deepEqual(names, ["request", "lexer", "parser", "symbols"]);
-	const lexer = status.modules.find((module) => module.name === "lexer");
-	assert.notEqual(lexer, undefined);
-	assert.equal(lexer?.label, "Lexer");
-	assert.equal(lexer?.driver, "zig");
-	assert.ok((lexer?.requests ?? 0) >= 1, "the lex request must be counted");
-	const parser = status.modules.find((module) => module.name === "parser");
-	assert.equal(parser?.requests, 0);
-	await adapter.shutdown();
-});
+			const names = status.modules.map((module) => module.name);
+			assert.deepEqual(names, ["request", "lexer", "parser", "symbols"]);
+			const lexer = status.modules.find((module) => module.name === "lexer");
+			assert.notEqual(lexer, undefined);
+			assert.equal(lexer?.label, "Lexer");
+			assert.equal(lexer?.driver, "zig");
+			assert.equal(lexer?.requests, 0);
+			const parser = status.modules.find((module) => module.name === "parser");
+			assert.equal(parser?.requests, 0);
+		} finally {
+			await adapter.shutdown();
+		}
+	},
+);
 
-test("status is rejected before the handshake advertises it", async () => {
+test("start completes the handshake without issuing a feature request", { skip: binarySkip }, async () => {
 	const adapter = createZigBackend();
-	await assert.rejects(adapter.status(), /status capability/);
-	await adapter.shutdown();
+	try {
+		await adapter.start();
+		assert.deepEqual(adapter.capabilities, { lex: true, parse: true, symbols: true, status: true });
+	} finally {
+		await adapter.shutdown();
+	}
 });

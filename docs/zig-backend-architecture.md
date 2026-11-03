@@ -57,10 +57,14 @@ VS Code extension host (TypeScript)
 neo-godot-backend (Zig 0.17.0, one process per adapter instance)
 ```
 
-One long-lived process per adapter instance. The adapter starts it lazily on the first request, keeps
-it for the lifetime of the adapter, and stops it on extension deactivation. The design target is one
-process per workspace folder; adapters are not pooled across workspaces yet. The process is spawned
-with `stdio: ["pipe", "pipe", "pipe"]` so the extension host controls all three streams.
+One long-lived process per adapter instance. The extension creates one adapter during activation and
+warms it with `start()`, which spawns the process and completes the handshake without sending a user
+request. Keeping it warm means the first workspace symbol query and the dashboard both see the same
+process. The process stays alive for the lifetime of the adapter and stops on extension deactivation.
+If the binary is missing or incompatible, activation still succeeds and the TypeScript path answers.
+The design target is one process per workspace folder; adapters are not pooled across workspaces yet.
+The process is spawned with `stdio: ["pipe", "pipe", "pipe"]` so the extension host controls all
+three streams.
 
 Rules that follow from the transport:
 
@@ -453,14 +457,21 @@ shows what a single large document once needed.
 
 Counters live in a `Registry` created once in `src/main.zig` and passed down through `runWithStore`. A
 server built without a registry answers `status` with `-32601` and does not advertise the capability,
-which is why the adapter checks `capabilities.status` before sending the request. Nothing is persisted:
-a respawn starts from zero, and the dashboard states that by showing the process uptime next to the
-counters.
+so the adapter checks `capabilities.status` before sending the request. That check runs after
+`withProcess` has spawned the sidecar and completed its handshake, because a fresh adapter has not seen
+any capability yet. Nothing is persisted: a respawn starts from zero, and the dashboard states that by
+showing the process uptime next to the counters.
 
 The dashboard itself is a plain webview (`neoGodotTools.showBackendStatus`) with no framework: the
 extension host calls `status()` on `ready` and `refresh` and forwards the parsed result. The panel owns
-its sidecar and shuts it down on dispose, so opening the dashboard never leaves a second idle process
-behind.
+no process; it observes the adapter created in `activate()`, which also serves the symbol mirror. The
+counters therefore describe the work the extension is doing, and closing the tab cannot shut down the
+backend under the language service.
+
+The same document renders a static technology map from `src/dashboard/tech_stack.ts`. It names the
+language or runtime behind the extension host, analysis pipeline, native sidecar, webviews, LSP bridge,
+debugger, grammars and build tooling, and remains visible when `status` fails. The README carries the
+same table for readers outside the editor.
 
 ## Cancellation
 
@@ -695,7 +706,8 @@ src/index/
   zig_symbol_mirror.test.ts differential tests against symbol_index
 src/dashboard/
   panel_html.ts      dependency-free dashboard document for the status report
-  status_panel.ts    webview panel that owns and queries the sidecar
+  tech_stack.ts      static language and runtime map rendered in the panel
+  status_panel.ts    webview panel observing the shared sidecar adapter
 tools/
   profile_native_parse.ts end-to-end parse benchmark against parseGDScript
 ```

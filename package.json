@@ -95,7 +95,7 @@
 			{
 				"category": "Neo Godot Tools",
 				"command": "neoGodotTools.showBackendStatus",
-				"title": "Show Native Backend Status"
+				"title": "Show Architecture and Native Backend"
 			},
 			{
 				"category": "Neo Godot Tools",

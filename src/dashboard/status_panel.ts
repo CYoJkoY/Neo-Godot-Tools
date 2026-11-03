@@ -1,13 +1,15 @@
 /**
- * Webview panel that reports what the Zig sidecar is doing.
+ * Webview panel that reports what the shared Zig sidecar is doing.
  *
- * The panel owns the sidecar process it queries, so closing the tab stops the
- * child instead of leaving an idle process behind. The document itself is
- * dependency free; the extension host only forwards the status payload.
+ * The panel observes the backend the extension already uses for workspace
+ * symbols. It never spawns a second process, so the counters represent real
+ * work and closing the tab cannot stop the backend under the language service.
+ * The document itself is dependency free; the extension host only forwards
+ * the status payload.
  */
 
 import * as vscode from "vscode";
-import { type ZigBackend, createZigBackend } from "../backend/zig_backend.js";
+import type { ZigBackend } from "../backend/zig_backend.js";
 import { createLogger } from "../utils/index.js";
 import { backendStatusHtml } from "./panel_html.js";
 
@@ -19,7 +21,6 @@ interface PanelMessage {
 
 interface PanelState {
 	panel: vscode.WebviewPanel | undefined;
-	backend: ZigBackend | undefined;
 	/** Serializes status requests so a burst of clicks cannot interleave. */
 	queue: Promise<void>;
 }
@@ -31,25 +32,16 @@ export interface BackendStatusPanel {
 
 const describe_error = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export function createBackendStatusPanel(context: vscode.ExtensionContext): BackendStatusPanel {
-	const state: PanelState = { panel: undefined, backend: undefined, queue: Promise.resolve() };
+export function createBackendStatusPanel(context: vscode.ExtensionContext, backend: ZigBackend): BackendStatusPanel {
+	const state: PanelState = { panel: undefined, queue: Promise.resolve() };
 
 	const post = (message: unknown): void => {
 		void state.panel?.webview.postMessage(message);
 	};
 
-	const release_backend = (): void => {
-		const owned = state.backend;
-		state.backend = undefined;
-		if (owned === undefined) return;
-		void owned.shutdown().catch((error: unknown) => log.warn("shutdown failed:", error));
-	};
-
 	const run_refresh = async (): Promise<void> => {
-		const active = state.backend ?? createZigBackend();
-		state.backend = active;
 		try {
-			post({ type: "status", status: await active.status() });
+			post({ type: "status", status: await backend.status() });
 		} catch (error) {
 			log.debug("status request failed:", error);
 			post({ type: "error", message: describe_error(error) });
@@ -65,7 +57,7 @@ export function createBackendStatusPanel(context: vscode.ExtensionContext): Back
 	const create_panel = (): vscode.WebviewPanel => {
 		const created = vscode.window.createWebviewPanel(
 			"neoGodotTools.backendStatus",
-			"Native Sidecar",
+			"Architecture and Native Backend",
 			vscode.ViewColumn.Beside,
 			{ enableScripts: true, retainContextWhenHidden: true },
 		);
@@ -76,7 +68,6 @@ export function createBackendStatusPanel(context: vscode.ExtensionContext): Back
 		created.onDidDispose(() => {
 			if (state.panel !== created) return;
 			state.panel = undefined;
-			release_backend();
 		});
 		context.subscriptions.push(created);
 		return created;
@@ -101,7 +92,6 @@ export function createBackendStatusPanel(context: vscode.ExtensionContext): Back
 		const active = state.panel;
 		state.panel = undefined;
 		active?.dispose();
-		release_backend();
 	};
 
 	return { show, dispose };

@@ -165,6 +165,7 @@ VS Code extension
        │
        ├── Local GDScript semantic analysis
        │        └── Incremental project index
+       │                └── Zig 0.17.0 native symbol mirror
        │
        ├── Godot resource / scene / shader tooling
        │
@@ -173,6 +174,22 @@ VS Code extension
        └── Godot LSP
               └── advanced semantic fallback / engine integration
 ```
+
+Run **Neo Godot Tools: Show Architecture and Native Backend** from the command
+palette to see the same technology map and the live sidecar counters in the
+editor. The map stays visible when the native binary is unavailable.
+
+| Area | Implementation | Main sources |
+| --- | --- | --- |
+| Extension host and providers | TypeScript, Node.js, VS Code API | `src/extension.ts`, `src/providers/` |
+| GDScript analysis and project index | TypeScript | `src/analyzer/`, `src/index/`, `src/language/` |
+| Native analysis sidecar | Zig 0.17.0, JSON-RPC 2.0 over stdio | `backend/src/` |
+| Native symbol mirror | TypeScript adapter, Zig symbol store | `src/backend/zig_backend.ts`, `src/index/zig_symbol_mirror.ts` |
+| Editors, previews and inspectors | TypeScript host, HTML/CSS/vanilla JavaScript webviews | `src/dashboard/`, `src/resource_inspector/`, `src/scene_tools/` |
+| Godot language server integration | TypeScript, TCP/JSON-RPC | `src/lsp/` |
+| Godot debugger | TypeScript, Debug Adapter Protocol | `src/debugger/` |
+| Syntax highlighting | TextMate JSON grammars | `syntaxes/` |
+| Build, tests and CI | Node.js, TypeScript, Zig build, GitHub Actions YAML | `package.json`, `backend/build.zig`, `.github/workflows/` |
 
 Detailed design and development documents are available in [`docs/`](docs/):
 

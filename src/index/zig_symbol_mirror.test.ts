@@ -171,6 +171,7 @@ function backendStub(overrides: Partial<ZigBackend> = {}): ZigBackend {
 			scratchPeakBytes: 0,
 			modules: [],
 		}),
+		start: async () => undefined,
 		shutdown: async () => undefined,
 		...overrides,
 	};
