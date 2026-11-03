@@ -2,13 +2,25 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.2.1 — 2026-11-03 (pending)
+### 3.2.2 — 2026-11-04 (pending)
+
+Changes since [v3.2.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.2.1...v3.2.2).
+
+#### Changed
+
+- \[Issue-211\] fix(editor): sanitize Godot launch environment and resolve platform paths ([#212](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/212))
+
+### 3.2.1 — 2026-11-03
 
 Changes since [v3.2.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.2.0...v3.2.1).
 
 #### Changed
 
 - \[Issue-209\] fix(backend): load the Zig sidecar before status checks and expose the technology map ([#210](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/210))
+
+#### Documentation
+
+- **changelog:** update changelog ([9073013](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/9073013e018baf2e455708273683cd8c23ea9436))
 
 ### 3.2.0 — 2026-11-02
 
