@@ -49,7 +49,7 @@ import {
 } from "./providers";
 import { ResourceInspectorProvider } from "./resource_inspector/provider";
 import { ScenePreviewProvider } from "./scene_tools";
-import { attemptSettingsUpdate, clean_godot_path } from "./utils";
+import { attemptSettingsUpdate, clean_godot_path, editor_environment } from "./utils";
 import {
 	convert_uri_to_resource_path,
 	find_file,
@@ -347,6 +347,7 @@ async function launch_detached_editor(godotPath: string, projectDir: string, arg
 
 	const child = detachedProcess(godotPath, args, {
 		cwd: projectDir,
+		env: editor_environment(process.env),
 		windowsHide: false,
 	});
 
@@ -393,6 +394,7 @@ async function open_workspace_with_editor() {
 				{
 					cwd: projectDir,
 					detached: false,
+					env: editor_environment(process.env),
 					windowsHide: false,
 				},
 				args,
@@ -425,7 +427,15 @@ async function open_workspace_with_editor() {
 
 async function open_godot_editor_settings() {
 	const dir = get_editor_data_dir();
+	if (!fs.existsSync(dir)) {
+		vscode.window.showErrorMessage(`Neo Godot Tools: Godot editor settings directory not found: ${dir}`);
+		return;
+	}
 	const files = fs.readdirSync(dir).filter((v) => v.endsWith(".tres"));
+	if (!files.length) {
+		vscode.window.showErrorMessage(`Neo Godot Tools: No Godot editor settings found in ${dir}`);
+		return;
+	}
 	const ver = (await get_project_version()) ?? "";
 	for (const file of files)
 		if (file.includes(ver)) {

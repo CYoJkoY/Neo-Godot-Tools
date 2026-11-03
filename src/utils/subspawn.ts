@@ -14,6 +14,7 @@ import {
 	spawn,
 } from "node:child_process";
 import { createLogger } from ".";
+import { build_cmd_start_command, build_start_process_script } from "./editor_launch";
 
 const log = createLogger("subspawn");
 
@@ -74,37 +75,36 @@ export function subProcess(
 	return childProcess;
 }
 
-function quote_for_cmd(value: string): string {
-	const trailing = value.match(/\\*$/)?.[0] ?? "";
-	return `"${value.replace(/"/g, '""')}${trailing}"`;
-}
-
-function quote_for_ps(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
-}
-
-function spawn_via_powershell(command: string, args: readonly string[], cwd: string): ChildProcess {
-	const argList = args.length > 0 ? `@(${args.map(quote_for_ps).join(",")})` : "@()";
-	const script =
-		`Start-Process -FilePath ${quote_for_ps(command)} ` +
-		`-ArgumentList ${argList} -WorkingDirectory ${quote_for_ps(cwd)}`;
-
+function spawn_via_powershell(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): ChildProcess {
 	return spawn(
 		"powershell.exe",
-		["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-		{ windowsHide: true, windowsVerbatimArguments: true, stdio: "ignore" },
+		[
+			"-NoProfile",
+			"-NonInteractive",
+			"-ExecutionPolicy",
+			"Bypass",
+			"-Command",
+			build_start_process_script(command, args, cwd),
+		],
+		// Node must quote the script as one argument; verbatim mode would let
+		// PowerShell split it at the spaces inside the generated command line.
+		{ env, windowsHide: true, stdio: "ignore" },
 	);
 }
 
-function spawn_via_cmd_start(command: string, args: readonly string[], cwd: string): ChildProcess {
-	const commandLine = [
-		'/d /s /c start "" /d',
-		quote_for_cmd(cwd),
-		quote_for_cmd(command),
-		...args.map(quote_for_cmd),
-	].join(" ");
-
-	return spawn("cmd.exe", [commandLine], {
+function spawn_via_cmd_start(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): ChildProcess {
+	return spawn("cmd.exe", [build_cmd_start_command(command, args, cwd)], {
+		env,
 		windowsHide: true,
 		windowsVerbatimArguments: true,
 		stdio: "ignore",
@@ -117,13 +117,14 @@ export function detachedProcess(
 	options: SpawnOptions = {},
 ): ChildProcess {
 	const cwd = String(options.cwd ?? process.cwd());
+	const env = options.env ?? process.env;
 
 	if (process.platform === "win32") {
-		const child = spawn_via_powershell(command, args, cwd);
+		const child = spawn_via_powershell(command, args, cwd, env);
 		child.once("error", () => {
 			log.warn("detachedProcess: Start-Process failed, falling back to cmd /c start");
 			try {
-				spawn_via_cmd_start(command, args, cwd).unref();
+				spawn_via_cmd_start(command, args, cwd, env).unref();
 			} catch (error) {
 				log.error(`detachedProcess: fallback launch failed: ${error}`);
 			}
