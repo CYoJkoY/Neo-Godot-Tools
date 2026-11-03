@@ -6,14 +6,19 @@ import * as vscode from "vscode";
 import { createLruCache } from "./lru_cache";
 
 export function get_editor_data_dir(): string {
-	// from: https://stackoverflow.com/a/26227660
-	const appdata =
-		process.env["APPDATA"] ||
-		(process.platform === "darwin"
-			? `${process.env["HOME"]}/Library/Preferences`
-			: `${process.env["HOME"]}/.local/share`);
-
-	return path.join(appdata, "Godot");
+	// Godot 4 keeps editor settings under the platform's config directory:
+	// APPDATA on Windows, Application Support on macOS, XDG_CONFIG_HOME on Linux.
+	if (process.platform === "darwin") {
+		const home = process.env["HOME"] ?? os.homedir();
+		return path.join(home, "Library", "Application Support", "Godot");
+	}
+	if (process.platform === "win32") {
+		const appdata = process.env["APPDATA"] ?? path.join(os.homedir(), "AppData", "Roaming");
+		return path.join(appdata, "Godot");
+	}
+	const configHome = process.env["XDG_CONFIG_HOME"] || path.join(os.homedir(), ".config");
+	// Godot 4 lowercases its directory name ("godot"); Linux paths are case sensitive.
+	return path.join(configHome, "godot");
 }
 
 /** Resolved once per session: the project file and the directory holding it. */
@@ -220,26 +225,56 @@ export function verify_godot_version(godotPath: string, expectedVersion: "3" | "
 	const target = resolve_windows_executable(cleaned) ?? cleaned;
 	// A relative path is tried against the workspace when it is not on PATH.
 	const fallback = path.isAbsolute(target) ? target : against_workspace(target);
-	const output =
-		read_executable_version(target) ?? (fallback === target ? undefined : read_executable_version(fallback));
+	// PATH resolution is the normal case for a bare name such as `godot`; only use
+	// the workspace-relative path when that executable could not be run at all.
+	const primaryOutput = read_executable_version(target);
+	const resolved = primaryOutput === undefined ? fallback : target;
+	const output = primaryOutput ?? (fallback === target ? undefined : read_executable_version(fallback));
 	if (output === undefined) {
-		return { status: "INVALID_EXE", godotPath: fallback };
+		return { status: "INVALID_EXE", godotPath: resolved };
 	}
 
 	const match = output.match(/^(([34])\.([0-9]+)(?:\.[0-9]+)?)/m);
 	if (!match) {
-		return { status: "INVALID_EXE", godotPath: fallback };
+		return { status: "INVALID_EXE", godotPath: resolved };
 	}
 	return match[2] === expectedVersion
-		? { status: "SUCCESS", godotPath: fallback, version: match[1] }
-		: { status: "WRONG_VERSION", godotPath: fallback, version: match[1] };
+		? { status: "SUCCESS", godotPath: resolved, version: match[1] }
+		: { status: "WRONG_VERSION", godotPath: resolved, version: match[1] };
 }
 
 export function clean_godot_path(godotPath: string): string {
-	// `${env:VAR}` lets a setting point at an environment variable.
-	const fromEnv = godotPath.match(/\$\{env:(.+?)\}/);
-	const unquoted = (fromEnv ? (process.env[fromEnv[1]] ?? "") : godotPath).replace(/^"/, "").replace(/"$/, "");
-	return os.platform() === "darwin" && unquoted.endsWith(".app")
-		? path.join(unquoted, "Contents", "MacOS", "Godot")
-		: unquoted;
+	const unquoted = expand_environment_references(godotPath).replace(/^["']/, "").replace(/["']$/, "").trim();
+	const home = os.homedir();
+	const expanded = expand_home_directory(unquoted, home);
+	if (os.platform() !== "darwin" || !expanded.toLowerCase().endsWith(".app")) return expanded;
+	const bundle = expanded.replace(/[\\/]+$/, "");
+	return macOS_bundle_executable(bundle) ?? path.join(bundle, "Contents", "MacOS", "Godot");
+}
+
+/** Replaces a leading `~` with the home directory, keeping the rest of the path intact. */
+function expand_home_directory(target: string, home: string): string {
+	const rest = target.match(/^~[\\/]?(.*)$/)?.[1];
+	if (rest === undefined) return target;
+	return rest.length > 0 ? path.join(home, ...rest.split(/[\\/]/)) : home;
+}
+
+/** Replaces every `${env:VAR}` token; an unset variable stays visible for the user. */
+function expand_environment_references(value: string): string {
+	return value.replace(/\$\{env:(.+?)\}/g, (token, name: string) => process.env[name] ?? token);
+}
+
+/** The executable inside a macOS `.app`; its name is not always `Godot`. */
+function macOS_bundle_executable(bundle: string): string | undefined {
+	const macos_dir = path.join(bundle, "Contents", "MacOS");
+	try {
+		const candidates = fs
+			.readdirSync(macos_dir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() || entry.isSymbolicLink())
+			.map((entry) => path.join(macos_dir, entry.name));
+		const preferred = candidates.find((candidate) => path.basename(candidate) === "Godot");
+		return preferred ?? candidates[0];
+	} catch {
+		return undefined;
+	}
 }

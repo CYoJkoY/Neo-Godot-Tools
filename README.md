@@ -118,6 +118,15 @@ To use VS Code as the external script editor in Godot:
 4. Set the VS Code executable as **Exec Path**.
 5. Use `{project} --goto {file}:{line}:{col}` as **Exec Flags**.
 
+On Windows, point **Exec Path** at `Code.exe` (or `VSCodium.exe`); the
+`code.cmd` wrapper cannot receive Godot's arguments. On macOS, use the
+GUI executable inside the bundle
+(`Visual Studio Code.app/Contents/MacOS/Electron`); on Linux, use the
+`code` binary rather than a desktop launcher or a wrapper script.
+
+Godot refuses to start a second instance for the same project when the editor
+is already open, so close it before launching the project from VS Code again.
+
 For automatic reloads, also review Godot's external-change and focus-loss settings.
 
 ### VS Code settings
@@ -127,6 +136,7 @@ Extension settings use the `neoGodotTools.*` namespace:
 - `neoGodotTools.editorPath.godot3`
 - `neoGodotTools.editorPath.godot4`
 - `neoGodotTools.editor.verbose`
+- `neoGodotTools.editor.detached`
 - `neoGodotTools.editor.revealTerminal`
 - `neoGodotTools.lsp.serverHost`
 - `neoGodotTools.lsp.serverPort`

@@ -427,7 +427,15 @@ async function open_workspace_with_editor() {
 
 async function open_godot_editor_settings() {
 	const dir = get_editor_data_dir();
+	if (!fs.existsSync(dir)) {
+		vscode.window.showErrorMessage(`Neo Godot Tools: Godot editor settings directory not found: ${dir}`);
+		return;
+	}
 	const files = fs.readdirSync(dir).filter((v) => v.endsWith(".tres"));
+	if (!files.length) {
+		vscode.window.showErrorMessage(`Neo Godot Tools: No Godot editor settings found in ${dir}`);
+		return;
+	}
 	const ver = (await get_project_version()) ?? "";
 	for (const file of files)
 		if (file.includes(ver)) {
