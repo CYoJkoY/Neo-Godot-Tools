@@ -16,6 +16,7 @@ import { languageProfiler } from "./performance/profiler";
 import { createZigSymbolMirror, indexedSymbolFiles } from "./index/zig_symbol_mirror";
 import { ClientConnectionManager } from "./lsp";
 import { type BackendStatusPanel, createBackendStatusPanel } from "./dashboard/status_panel";
+import { type ZigBackend, createZigBackend } from "./backend/zig_backend";
 import type {
 	GDCompletionItemProvider,
 	GDDefinitionProvider,
@@ -88,6 +89,7 @@ interface Extension {
 	tasksProvider?: GDTaskProvider;
 	devServer?: DebugServer;
 	backendStatusPanel?: BackendStatusPanel;
+	zigBackend?: ZigBackend;
 }
 
 export const globals: Extension = {};
@@ -103,12 +105,25 @@ export function activate(context: vscode.ExtensionContext) {
 		new RenameFallback(),
 	);
 	const languageService = globals.languageService;
+	// One sidecar serves the symbol mirror and the dashboard, so the counters
+	// report the work the extension actually does instead of a second process.
+	const zigBackend = createZigBackend({
+		onDiagnostic: (message) => console.warn(`[Neo Godot Tools] ${message}`),
+	});
+	globals.zigBackend = zigBackend;
+	// Warm the process during activation so the native backend is loaded even
+	// before the first workspace symbol query. A missing binary only logs; the
+	// TypeScript index remains the fallback.
+	void zigBackend.start().catch((error: unknown) => {
+		console.warn("[Neo Godot Tools] Zig backend is unavailable:", error);
+	});
 	// The sidecar mirror only accelerates workspace symbol lookups; every other
 	// feature keeps using the TypeScript indexes and stays available when the
 	// native binary is missing.
 	languageService.attachSymbolMirror(
 		createZigSymbolMirror({
 			snapshot: () => indexedSymbolFiles(languageService.symbols),
+			backend: zigBackend,
 			// The fallback keeps every query correct, so the reason it happened is
 			// only worth the extension host log.
 			onDiagnostic: (message) => console.warn(`[Neo Godot Tools] ${message}`),
@@ -116,7 +131,7 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	globals.debug = new GodotDebugger(context);
 	globals.scenePreviewProvider = new ScenePreviewProvider(context, { lspClient: () => globals.lsp?.client });
-	globals.backendStatusPanel = createBackendStatusPanel(context);
+	globals.backendStatusPanel = createBackendStatusPanel(context, zigBackend);
 	globals.resourceInspector = new ResourceInspectorProvider(context, {
 		lspClient: () => globals.lsp?.client,
 	});
@@ -212,7 +227,19 @@ export function deactivate(): Thenable<void> {
 	return new Promise<void>((resolve) => {
 		globals.languageService?.dispose();
 		globals.lsp?.client.stop();
-		resolve();
+		const backend = globals.zigBackend;
+		globals.zigBackend = undefined;
+		if (backend === undefined) {
+			resolve();
+			return;
+		}
+		void backend.shutdown().then(
+			() => resolve(),
+			(error: unknown) => {
+				console.warn("[Neo Godot Tools] Zig backend shutdown failed:", error);
+				resolve();
+			},
+		);
 	});
 }
 

@@ -122,6 +122,8 @@ export interface ZigBackend {
 	clearSymbols(revision: number, options?: ZigBackendTokenOptions): Promise<number>;
 	/** Runtime counters for the dashboard; requires the `status` capability. */
 	status(options?: ZigBackendTokenOptions): Promise<ZigBackendStatus>;
+	/** Spawns the sidecar and completes its health handshake without a request. */
+	start(): Promise<void>;
 	shutdown(): Promise<void>;
 }
 
@@ -1358,17 +1360,21 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		Promise.reject(new Error("Zig backend does not advertise the status capability."));
 
 	const status = (tokenOptions: ZigBackendTokenOptions = {}): Promise<ZigBackendStatus> => {
-		if (!lifecycle.capabilities.status) return statusUnavailable();
-		return withProcess(tokenOptions.signal, (state) =>
-			sendRequestOnProcess(lifecycle, state, "status", undefined, undefined, tokenOptions.signal).then(
+		// Capabilities describe the process that answered the handshake, so a
+		// fresh adapter has to start the sidecar before it can read this one.
+		return withProcess(tokenOptions.signal, (state) => {
+			if (!lifecycle.capabilities.status) return statusUnavailable();
+			return sendRequestOnProcess(lifecycle, state, "status", undefined, undefined, tokenOptions.signal).then(
 				(result) => {
 					const parsed = parseStatusResult(result);
 					if (parsed !== undefined) return parsed;
 					return Promise.reject(new Error("Zig backend returned a malformed status result."));
 				},
-			),
-		);
+			);
+		});
 	};
+
+	const start = (): Promise<void> => ensureProcess(lifecycle, options);
 
 	const parse = (source: string, tokenOptions: ZigBackendTokenOptions = {}): Promise<GDScriptParseResult> => {
 		const signal = tokenOptions.signal;
@@ -1521,6 +1527,7 @@ export const createZigBackend = (options: ZigBackendOptions = {}): ZigBackend =>
 		digestSymbols,
 		clearSymbols,
 		status,
+		start,
 		shutdown,
 	};
 };
