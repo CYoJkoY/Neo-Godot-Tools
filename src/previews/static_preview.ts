@@ -51,92 +51,72 @@ interface PreviewMessage {
 
 type PreviewModel = ScenePreviewModel | ShaderPreviewModel;
 
-export class StaticPreviewProvider implements vscode.CustomTextEditorProvider {
-	private readonly panels = new Map<string, Set<vscode.WebviewPanel>>();
-	private readonly parser = new SceneParser();
-
-	constructor(context: vscode.ExtensionContext) {
-		context.subscriptions.push(
-			vscode.window.registerCustomEditorProvider(SCENE_2D_PREVIEW_VIEW_TYPE, this, {
-				webviewOptions: { retainContextWhenHidden: true },
-				supportsMultipleEditorsPerDocument: true,
-			}),
-			vscode.window.registerCustomEditorProvider(SHADER_PREVIEW_VIEW_TYPE, this, {
-				webviewOptions: { retainContextWhenHidden: true },
-				supportsMultipleEditorsPerDocument: true,
-			}),
-			vscode.workspace.onDidChangeTextDocument((event) => {
-				const panels = this.panels.get(event.document.uri.toString());
-				if (!panels || !this.isPreviewDocument(event.document)) return;
-				for (const panel of panels) void this.sendModel(event.document, panel);
-			}),
-		);
-	}
-
-	async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
-		const key = document.uri.toString();
-		const panels = this.panels.get(key) ?? new Set<vscode.WebviewPanel>();
-		panels.add(panel);
-		this.panels.set(key, panels);
-		panel.webview.options = { enableScripts: true, localResourceRoots: this.previewRoots(document.uri) };
-		panel.webview.html = this.html(panel.webview);
-		panel.webview.onDidReceiveMessage((message: PreviewMessage) => void this.onMessage(document, message));
-		panel.onDidDispose(() => {
-			panels.delete(panel);
-			if (!panels.size) this.panels.delete(key);
-		});
-		await this.sendModel(document, panel);
-	}
-
-	private async onMessage(document: vscode.TextDocument, message: PreviewMessage): Promise<void> {
+export function createStaticPreviewProvider(context: vscode.ExtensionContext): vscode.CustomTextEditorProvider {
+	const panels = new Map<string, Set<vscode.WebviewPanel>>();
+	const parser = new SceneParser();
+	const isPreviewDocument = (document: vscode.TextDocument): boolean => {
+		const lower = document.uri.path.toLowerCase();
+		return lower.endsWith(".tscn") || lower.endsWith(".gdshader");
+	};
+	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
+		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
+		const project = findProjectRoot(documentUri);
+		if (project && !roots.some((root) => root.toString() === project.toString())) roots.push(project);
+		return roots;
+	};
+	const html = (webview: vscode.Webview): string => {
+		const nonce = createNonce();
+		return `<!doctype html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'"><style>${STATIC_PREVIEW_CSS}</style></head><body><header><strong id="title">Preview</strong><span id="meta"></span></header><main><div id="canvas" aria-label="Static preview"></div><aside id="details"></aside></main><script nonce="${nonce}">${STATIC_PREVIEW_SCRIPT}</script></body></html>`;
+	};
+	const buildModel = (document: vscode.TextDocument, webview?: vscode.Webview): PreviewModel | undefined => {
+		if (document.uri.path.toLowerCase().endsWith(".gdshader")) return buildShaderPreviewModel(document.getText(), document.uri);
+		if (!document.uri.path.toLowerCase().endsWith(".tscn")) return undefined;
+		try {
+			return buildScenePreviewModel(parser.parse_scene(document), webview);
+		} catch (error: unknown) {
+			return { kind: "scene", uri: document.uri.toString(), title: path.basename(document.uri.fsPath || document.uri.path), nodes: [], warnings: [`Unable to parse scene: ${String(error)}`] };
+		}
+	};
+	const sendModel = (document: vscode.TextDocument, panel: vscode.WebviewPanel): void => {
+		const model = buildModel(document, panel.webview);
+		if (!model) return;
+		panel.webview.options = { ...panel.webview.options, localResourceRoots: previewRoots(document.uri) };
+		void panel.webview.postMessage({ type: "model", model });
+	};
+	const onMessage = async (document: vscode.TextDocument, message: PreviewMessage): Promise<void> => {
 		if (message.command !== "openSource" || !Number.isInteger(message.position)) return;
 		const position = Math.max(0, Math.min(message.position ?? 0, document.getText().length));
 		const editor = await vscode.window.showTextDocument(document, { preview: true });
 		const start = document.positionAt(position);
 		editor.selection = new vscode.Selection(start, start);
 		editor.revealRange(new vscode.Range(start, start));
-	}
-
-	private async sendModel(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
-		const model = this.buildModel(document, panel.webview);
-		if (!model) return;
-		panel.webview.options = { ...panel.webview.options, localResourceRoots: this.previewRoots(document.uri) };
-		void panel.webview.postMessage({ type: "model", model });
-	}
-
-	private buildModel(document: vscode.TextDocument, webview?: vscode.Webview): PreviewModel | undefined {
-		if (document.uri.path.toLowerCase().endsWith(".gdshader")) return buildShaderPreviewModel(document.getText(), document.uri);
-		if (!document.uri.path.toLowerCase().endsWith(".tscn")) return undefined;
-		try {
-			const scene = this.parser.parse_scene(document);
-			return buildScenePreviewModel(scene, webview);
-		} catch (error: unknown) {
-			return {
-				kind: "scene",
-				uri: document.uri.toString(),
-				title: path.basename(document.uri.fsPath || document.uri.path),
-				nodes: [],
-				warnings: [`Unable to parse scene: ${String(error)}`],
-			};
-		}
-	}
-
-	private isPreviewDocument(document: vscode.TextDocument): boolean {
-		const lower = document.uri.path.toLowerCase();
-		return lower.endsWith(".tscn") || lower.endsWith(".gdshader");
-	}
-
-	private previewRoots(documentUri: vscode.Uri): vscode.Uri[] {
-		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
-		const project = findProjectRoot(documentUri);
-		if (project && !roots.some((root) => root.toString() === project.toString())) roots.push(project);
-		return roots;
-	}
-
-	private html(webview: vscode.Webview): string {
-		const nonce = createNonce();
-		return `<!doctype html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>${STATIC_PREVIEW_CSS}</style></head><body><header><strong id="title">Preview</strong><span id="meta"></span></header><main><div id="canvas" aria-label="Static preview"></div><aside id="details"></aside></main><script nonce="${nonce}">${STATIC_PREVIEW_SCRIPT}</script></body></html>`;
-	}
+	};
+	const provider: vscode.CustomTextEditorProvider = {
+		resolveCustomTextEditor: async (document, panel) => {
+			const key = document.uri.toString();
+			const documentPanels = panels.get(key) ?? new Set<vscode.WebviewPanel>();
+			documentPanels.add(panel);
+			panels.set(key, documentPanels);
+			panel.webview.options = { enableScripts: true, localResourceRoots: previewRoots(document.uri) };
+			panel.webview.html = html(panel.webview);
+			panel.webview.onDidReceiveMessage((message: PreviewMessage) => void onMessage(document, message));
+			panel.onDidDispose(() => {
+				documentPanels.delete(panel);
+				if (documentPanels.size === 0) panels.delete(key);
+			});
+			sendModel(document, panel);
+		},
+	};
+	context.subscriptions.push(
+		vscode.window.registerCustomEditorProvider(SCENE_2D_PREVIEW_VIEW_TYPE, provider, { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true }),
+		vscode.window.registerCustomEditorProvider(SHADER_PREVIEW_VIEW_TYPE, provider, { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true }),
+		vscode.workspace.onDidChangeTextDocument((event) => {
+			const documentPanels = panels.get(event.document.uri.toString());
+			if (!documentPanels || !isPreviewDocument(event.document)) return;
+			Array.from(documentPanels, (panel) => sendModel(event.document, panel));
+		}),
+	);
+	return provider;
 }
 
 export function buildScenePreviewModel(scene: Scene, webview?: vscode.Webview): ScenePreviewModel {
@@ -230,13 +210,14 @@ function defaultHeight(className: string): number {
 
 function findProjectRoot(uri: vscode.Uri): vscode.Uri | undefined {
 	if (uri.scheme !== "file") return vscode.workspace.getWorkspaceFolder(uri)?.uri;
-	let current = path.dirname(uri.fsPath);
-	for (let depth = 0; depth < 32; depth++) {
+	const findProject = (current: string, depth: number): vscode.Uri | undefined => {
 		if (fs.existsSync(path.join(current, "project.godot"))) return vscode.Uri.file(current);
 		const parent = path.dirname(current);
-		if (parent === current) break;
-		current = parent;
-	}
+		if (parent === current || depth === 32) return undefined;
+		return findProject(parent, depth + 1);
+	};
+	const project = findProject(path.dirname(uri.fsPath), 0);
+	if (project) return project;
 	return vscode.workspace.getWorkspaceFolder(uri)?.uri;
 }
 
