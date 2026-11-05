@@ -94,12 +94,13 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 			.map((mode) => mode.trim())
 			.filter(Boolean),
 	);
-	const functions = Array.from(
-		cleanSource.matchAll(
-			/\b(?:void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|mat[234]|[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
-		),
-		(match) => match[1],
-	);
+	const functions = new Set<string>();
+	// perf: deduplicate function names while consuming the match iterator.
+	for (const match of cleanSource.matchAll(
+		/\b(?:void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|mat[234]|[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
+	)) {
+		functions.add(match[1]);
+	}
 	let depth = 0;
 	let depthLine = 1;
 	// perf: scan braces once; lineResolver avoids repeated prefix splitting.
@@ -118,7 +119,7 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 		cleanSource,
 		shaderType,
 		renderModes,
-		functions: [...new Set(functions)],
+		functions: [...functions],
 		lineCount: countLines(source),
 		diagnostics,
 	};
