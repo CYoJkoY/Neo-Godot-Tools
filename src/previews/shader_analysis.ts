@@ -12,14 +12,6 @@ export interface ShaderAnalysis {
 	diagnostics: ShaderDiagnostic[];
 }
 
-function countLines(source: string): number {
-	if (source.length === 0) return 1;
-	let lines = 1;
-	// perf: count line endings without allocating one substring per line.
-	for (let index = 0; index < source.length; index++) if (source.charCodeAt(index) === 10) lines++;
-	return lines;
-}
-
 export function stripShaderComments(source: string): string {
 	let result = "";
 	let blockComment = false;
@@ -94,18 +86,21 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 			.map((mode) => mode.trim())
 			.filter(Boolean),
 	);
-	const functions = new Set<string>();
-	// perf: deduplicate function names while consuming the match iterator.
-	for (const match of cleanSource.matchAll(
-		/\b(?:void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|mat[234]|[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
-	)) {
-		functions.add(match[1]);
-	}
+	const functions = new Set(
+		Array.from(
+			cleanSource.matchAll(
+				/\b(?:void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|mat[234]|[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
+			),
+			(match) => match[1],
+		),
+	);
 	let depth = 0;
 	let depthLine = 1;
+	const lineCount = [1];
 	// perf: scan braces once; lineResolver avoids repeated prefix splitting.
 	for (let index = 0; index < cleanSource.length; index++) {
 		const character = cleanSource[index];
+		lineCount[0] += character === "\n" ? 1 : 0;
 		if (character === "{") {
 			if (depth === 0) depthLine = lineAt(index);
 			depth++;
@@ -120,7 +115,7 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 		shaderType,
 		renderModes,
 		functions: [...functions],
-		lineCount: countLines(source),
+		lineCount: lineCount[0],
 		diagnostics,
 	};
 }
