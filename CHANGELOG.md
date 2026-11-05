@@ -2,13 +2,28 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.2.2 — 2026-11-04 (pending)
+### 3.3.0 — 2026-11-05 (pending)
+
+Changes since [v3.2.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.2.2...v3.3.0).
+
+#### Changed
+
+- \[Issue-213\] feat(previews): add static scene and shader previews ([#214](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/214))
+- \[Issue-215\] feat(previews): extend shader and scene preview metadata ([#216](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/216))
+- \[Issue-217\] feat(previews): improve interactive previews and backend request throughput ([#218](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/218))
+- \[Issue-219\] feat(shader-lsp): enable shader document providers ([#220](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/220))
+
+### 3.2.2 — 2026-11-04
 
 Changes since [v3.2.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.2.1...v3.2.2).
 
 #### Changed
 
 - \[Issue-211\] fix(editor): sanitize Godot launch environment and resolve platform paths ([#212](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/212))
+
+#### Documentation
+
+- **changelog:** update changelog ([e47b67c](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/e47b67c01060bc96f5b3b4bee17ed0052ea7d2c2))
 
 ### 3.2.1 — 2026-11-03
 
