@@ -66,9 +66,15 @@ while x > 0:
 # --- IN ---
 var x = a  if  condition  else  b
 var y = value  if  x>  0  else  default
+var extra_elite_spawn_chance = effects[Keys.extra_elite_next_wave_chance_hash] if effects.has(Keys.extra_elite_next_wave_chance_hash) else 0
 # --- OUT ---
 var x = a if condition else b
 var y = value if x > 0 else default
+var extra_elite_spawn_chance = (
+    effects[Keys.extra_elite_next_wave_chance_hash]
+    if effects.has(Keys.extra_elite_next_wave_chance_hash)
+    else 0
+)
 
 # --- IN ---
 func f():
