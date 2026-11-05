@@ -550,7 +550,8 @@
 				],
 				"extensions": [
 					".gdshader",
-					".gdshaderinc"
+					".gdshaderinc",
+					".shader"
 				],
 				"configuration": "./configurations/gdshader.language-configuration.json"
 			}

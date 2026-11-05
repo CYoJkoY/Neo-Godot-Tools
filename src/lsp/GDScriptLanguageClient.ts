@@ -133,19 +133,28 @@ export default class GDScriptLanguageClient extends LanguageClient {
 			documentSelector: [
 				{ scheme: "file", language: "gdscript" },
 				{ scheme: "untitled", language: "gdscript" },
+				{ scheme: "file", language: "gdshader" },
+				{ scheme: "untitled", language: "gdshader" },
 			],
 			middleware: {
 				// The extension registers its own interactive providers so that local semantic
 				// results are authoritative and the Godot LSP is used only as a fallback.
 				// Keep the LanguageClient's corresponding providers inactive to avoid VS Code
 				// merging two independent hover/definition/etc. results into the UI.
-				provideHover: async () => undefined,
-				provideDefinition: async () => undefined,
-				provideReferences: async () => undefined,
-				provideRenameEdits: async () => undefined,
-				provideCompletionItem: async () => undefined,
-				provideSignatureHelp: async () => undefined,
-				provideDocumentSymbols: async () => undefined,
+				provideHover: (document, position, token, next) =>
+					document.languageId === "gdshader" ? next(document, position, token) : undefined,
+				provideDefinition: (document, position, token, next) =>
+					document.languageId === "gdshader" ? next(document, position, token) : undefined,
+				provideReferences: (document, position, options, token, next) =>
+					document.languageId === "gdshader" ? next(document, position, options, token) : undefined,
+				provideRenameEdits: (document, position, newName, token, next) =>
+					document.languageId === "gdshader" ? next(document, position, newName, token) : undefined,
+				provideCompletionItem: (document, position, context, token, next) =>
+					document.languageId === "gdshader" ? next(document, position, context, token) : undefined,
+				provideSignatureHelp: (document, position, context, token, next) =>
+					document.languageId === "gdshader" ? next(document, position, context, token) : undefined,
+				provideDocumentSymbols: (document, token, next) =>
+					document.languageId === "gdshader" ? next(document, token) : undefined,
 				provideWorkspaceSymbols: async () => undefined,
 			},
 		};

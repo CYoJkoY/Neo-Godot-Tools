@@ -98,6 +98,17 @@ describe("static previews", () => {
 		assert.equal(model.diagnostics[0]?.line, 4);
 	});
 
+	it("ignores commented shader syntax and reports the original line", () => {
+		const uri = vscode.Uri.file(path.join(os.tmpdir(), "commented.shader"));
+		const model = buildShaderPreviewModel(
+			"shader_type canvas_item; // render_mode bogus;\n/* void fake() { */\nvoid fragment() {\n  COLOR = vec4(1.0);\n}\n",
+			uri,
+		);
+		assert.deepEqual(model.functions, ["fragment"]);
+		assert.deepEqual(model.renderModes, []);
+		assert.deepEqual(model.diagnostics, []);
+	});
+
 	it("preserves local transforms for rotated and scaled nodes", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-scene-transform-"));
 		try {
