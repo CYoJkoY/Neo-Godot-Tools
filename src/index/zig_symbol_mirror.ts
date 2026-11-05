@@ -213,7 +213,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	const forgetUri = (uri: string): void => {
 		const ids = idsByUri.get(uri);
 		if (ids === undefined) return;
-		Array.from(ids).map((id) => symbolsById.delete(id));
+		for (const id of ids) symbolsById.delete(id);
 		idsByUri.delete(uri);
 	};
 
