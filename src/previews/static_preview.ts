@@ -227,7 +227,7 @@ export function buildScenePreviewModel(scene: Scene, webview?: vscode.Webview): 
 
 export function buildShaderPreviewModel(source: string, uri: vscode.Uri): ShaderPreviewModel {
 	const analysis = analyzeShaderSource(source);
-	const uniforms = parseShaderUniforms(analysis.cleanSource).map((uniform) => ({
+	const uniforms = parseShaderUniforms(analysis.cleanSource, "shader_parameter/", true).map((uniform) => ({
 		name: uniform.name.replace(/^shader_parameter\//, "").replace(/^shader_param\//, ""),
 		type: uniform.type,
 		defaultValue: uniform.defaultValue,
