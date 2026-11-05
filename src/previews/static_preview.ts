@@ -50,6 +50,10 @@ interface ShaderPreviewModel {
 	warnings: string[];
 }
 
+interface ScenePreviewResources {
+	textureUri(imagePath: string): string | undefined;
+}
+
 interface PreviewMessage {
 	command?: string;
 	position?: number;
@@ -201,7 +205,8 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 export function buildScenePreviewModel(scene: Scene, webview?: vscode.Webview): ScenePreviewModel {
 	const warnings: string[] = [];
 	const root = scene.root;
-	const nodes = root ? [buildPreviewNode(root, scene, warnings, webview)] : [];
+	const resources = createScenePreviewResources(scene, webview);
+	const nodes = root ? [buildPreviewNode(root, scene, warnings, resources)] : [];
 	return { kind: "scene", uri: vscode.Uri.file(scene.path).toString(), title: scene.title, nodes, warnings };
 }
 
@@ -235,7 +240,12 @@ export function buildShaderPreviewModel(source: string, uri: vscode.Uri): Shader
 	};
 }
 
-function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], webview?: vscode.Webview): PreviewNode {
+function buildPreviewNode(
+	node: SceneNode,
+	scene: Scene,
+	warnings: string[],
+	resources?: ScenePreviewResources,
+): PreviewNode {
 	const values = new Map(node.properties.map((property) => [property.name, parseVariant(property.raw).value]));
 	const position = vector(values.get("position"));
 	const scale = vector(values.get("scale"), [1, 1]) ?? [1, 1];
@@ -265,9 +275,9 @@ function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], web
 		color: color(values.get("color"), node.className),
 		text: text(values.get("text")),
 		texturePath,
-		textureUri: texturePath ? imageUriForScene(scene, texturePath, webview) : undefined,
+		textureUri: texturePath ? resources?.textureUri(texturePath) : undefined,
 		properties: node.properties.map((property) => ({ name: property.name, value: property.raw })),
-		children: node.children.map((child) => buildPreviewNode(child, scene, warnings, webview)),
+		children: node.children.map((child) => buildPreviewNode(child, scene, warnings, resources)),
 	};
 }
 
@@ -319,18 +329,32 @@ function findProjectRoot(uri: vscode.Uri): vscode.Uri | undefined {
 	return vscode.workspace.getWorkspaceFolder(uri)?.uri;
 }
 
-function imageUriForScene(scene: Scene, imagePath: string, webview?: vscode.Webview): string | undefined {
-	if (!webview?.asWebviewUri || !/\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)) return undefined;
-	const target = resolveSceneResourcePath(scene.path, imagePath);
-	if (!target || !fs.existsSync(target)) return undefined;
-	const targetUri = vscode.Uri.file(target);
+function createScenePreviewResources(
+	scene: Scene,
+	webview: vscode.Webview | undefined,
+): ScenePreviewResources | undefined {
+	if (!webview?.asWebviewUri) return undefined;
 	const roots = [
 		findProjectRoot(vscode.Uri.file(scene.path)),
 		...(vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? []),
 		vscode.Uri.file(path.dirname(scene.path)),
 	].filter((root): root is vscode.Uri => Boolean(root));
-	if (!insideRoots(targetUri, roots)) return undefined;
-	return webview.asWebviewUri(targetUri).toString();
+	const resolved = new Map<string, string | undefined>();
+	return {
+		textureUri: (imagePath: string): string | undefined => {
+			if (resolved.has(imagePath)) return resolved.get(imagePath);
+			let uri: string | undefined;
+			if (/\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)) {
+				const target = resolveSceneResourcePath(scene.path, imagePath);
+				if (target && fs.existsSync(target)) {
+					const targetUri = vscode.Uri.file(target);
+					if (insideRoots(targetUri, roots)) uri = webview.asWebviewUri(targetUri).toString();
+				}
+			}
+			resolved.set(imagePath, uri);
+			return uri;
+		},
+	};
 }
 
 function resolveSceneResourcePath(scenePath: string, resourcePath: string): string | undefined {
