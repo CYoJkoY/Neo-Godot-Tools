@@ -5,6 +5,7 @@ import { parseShaderUniforms } from "../resource_inspector/metadata.js";
 import { type VariantValue, parseVariant } from "../resource_inspector/values.js";
 import { SceneParser } from "../scene_tools/parser.js";
 import { Scene, SceneNode } from "../scene_tools/types.js";
+import { createLruCache } from "../utils/lru_cache.js";
 import { analyzeShaderSource } from "./shader_analysis.js";
 
 export const SCENE_2D_PREVIEW_VIEW_TYPE = "neoGodotTools.scene2dPreview";
@@ -80,8 +81,8 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const panels = new Map<string, Set<vscode.WebviewPanel>>();
 	const readyPanels = new Set<vscode.WebviewPanel>();
 	const parser = new SceneParser();
-	const sceneCache = new Map<string, { version: number; scene: Scene }>();
-	const shaderCache = new Map<string, { version: number; model: ShaderPreviewModel }>();
+	const sceneCache = createLruCache<string, { version: number; scene: Scene }>({ capacity: 32 });
+	const shaderCache = createLruCache<string, { version: number; model: ShaderPreviewModel }>({ capacity: 32 });
 	const pendingUpdates = new Map<string, vscode.TextDocument>();
 	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
