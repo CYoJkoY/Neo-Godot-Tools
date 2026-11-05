@@ -163,6 +163,7 @@ export class Scene {
 	public readonly sourceFingerprint: string;
 	public root: SceneNode | undefined;
 	public externalResources = new Map<string, GDResource>();
+	public externalResourcesByUid = new Map<string, GDResource>();
 	public subResources = new Map<string, SceneResource>();
 	public nodes = new Map<string, SceneNode>();
 

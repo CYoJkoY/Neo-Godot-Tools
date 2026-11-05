@@ -324,9 +324,7 @@ export class ScenePreviewProvider
 			}
 
 			if (node.customTypeScriptUid) {
-				const resource = [...source.externalResources.values()].find(
-					(resource) => resource.uid === node.customTypeScriptUid,
-				);
+				const resource = source.externalResourcesByUid.get(node.customTypeScriptUid);
 				if (resource?.path) return resource;
 			}
 

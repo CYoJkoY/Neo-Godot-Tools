@@ -180,7 +180,7 @@ export class SceneParser {
 			if (kind === "ext_resource") {
 				const attributes = section_attributes(line);
 				if (!attributes.id) continue;
-				scene.externalResources.set(attributes.id, {
+				const resource = {
 					body: line,
 					path: attributes.path,
 					type: attributes.type,
@@ -188,7 +188,9 @@ export class SceneParser {
 					id: attributes.id,
 					index,
 					line: lineAtOffset(index),
-				});
+				};
+				scene.externalResources.set(attributes.id, resource);
+				if (resource.uid) scene.externalResourcesByUid.set(resource.uid, resource);
 				continue;
 			}
 
@@ -472,8 +474,7 @@ export class SceneParser {
 	private resolve_custom_type(scene: Scene, node: SceneNode): string | undefined {
 		let resource: GDResourceLike | undefined;
 		if (node.customTypeScriptId) resource = scene.externalResources.get(node.customTypeScriptId);
-		if (!resource && node.customTypeScriptUid)
-			resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
+		if (!resource && node.customTypeScriptUid) resource = scene.externalResourcesByUid.get(node.customTypeScriptUid);
 		if (!resource && node.customTypeScriptSubResourceId) {
 			const subResource = scene.subResources.get(node.customTypeScriptSubResourceId);
 			const scriptId = subResource?.body.match(/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];

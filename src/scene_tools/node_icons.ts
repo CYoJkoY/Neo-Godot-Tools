@@ -211,11 +211,8 @@ function node_script_path(node: SceneNode, scene: Scene, projectDir: string | un
 	}
 	const uids = [node.customTypeScriptUid].filter(Boolean);
 	if (uids.length > 0) {
-		for (const resource of scene.externalResources.values()) {
-			if (resource.uid && uids.includes(resource.uid) && projectDir) {
-				return res_to_abs(projectDir, resource.path);
-			}
-		}
+		const resource = scene.externalResourcesByUid.get(uids[0]);
+		if (resource?.path && projectDir) return res_to_abs(projectDir, resource.path);
 	}
 	const subId = node.customTypeScriptSubResourceId;
 	if (subId) {
