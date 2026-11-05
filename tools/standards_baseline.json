@@ -780,6 +780,17 @@
 		},
 		"perf": 0
 	},
+	"src/previews/shader_analysis.ts": {
+		"counts": {
+			"class": 0,
+			"else": 6,
+			"for": 0,
+			"let": 11,
+			"throw": 0,
+			"while": 1
+		},
+		"perf": 3
+	},
 	"src/previews/static_preview.ts": {
 		"counts": {
 			"class": 0,
@@ -789,7 +800,7 @@
 			"throw": 0,
 			"while": 0
 		},
-		"perf": 1
+		"perf": 0
 	},
 	"src/providers/completions.ts": {
 		"counts": {
