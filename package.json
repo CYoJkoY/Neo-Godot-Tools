@@ -91,6 +91,9 @@
 				"selector": [
 					{
 						"filenamePattern": "*.gdshader"
+					},
+					{
+						"filenamePattern": "*.shader"
 					}
 				],
 				"priority": "option"

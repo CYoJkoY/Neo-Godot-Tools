@@ -25,6 +25,7 @@ interface PreviewNode {
 	text?: string;
 	texturePath?: string;
 	textureUri?: string;
+	properties: Array<{ name: string; value: string }>;
 	children: PreviewNode[];
 }
 
@@ -40,7 +41,11 @@ interface ShaderPreviewModel {
 	kind: "shader";
 	uri: string;
 	shaderType: string;
-	uniforms: Array<{ name: string; type: string; defaultValue?: string }>;
+	renderModes: string[];
+	uniforms: Array<{ name: string; type: string; defaultValue?: string; hint?: string; hintString?: string }>;
+	functions: string[];
+	lineCount: number;
+	diagnostics: Array<{ message: string; line: number }>;
 	warnings: string[];
 }
 
@@ -56,7 +61,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const parser = new SceneParser();
 	const isPreviewDocument = (document: vscode.TextDocument): boolean => {
 		const lower = document.uri.path.toLowerCase();
-		return lower.endsWith(".tscn") || lower.endsWith(".gdshader");
+		return lower.endsWith(".tscn") || /\.(?:gdshader|shader|gdshaderinc)$/i.test(lower);
 	};
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
@@ -69,12 +74,19 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		return `<!doctype html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'"><style>${STATIC_PREVIEW_CSS}</style></head><body><header><strong id="title">Preview</strong><span id="meta"></span></header><main><div id="canvas" aria-label="Static preview"></div><aside id="details"></aside></main><script nonce="${nonce}">${STATIC_PREVIEW_SCRIPT}</script></body></html>`;
 	};
 	const buildModel = (document: vscode.TextDocument, webview?: vscode.Webview): PreviewModel | undefined => {
-		if (document.uri.path.toLowerCase().endsWith(".gdshader")) return buildShaderPreviewModel(document.getText(), document.uri);
+		if (/\.(?:gdshader|shader|gdshaderinc)$/i.test(document.uri.path))
+			return buildShaderPreviewModel(document.getText(), document.uri);
 		if (!document.uri.path.toLowerCase().endsWith(".tscn")) return undefined;
 		try {
 			return buildScenePreviewModel(parser.parse_scene(document), webview);
 		} catch (error: unknown) {
-			return { kind: "scene", uri: document.uri.toString(), title: path.basename(document.uri.fsPath || document.uri.path), nodes: [], warnings: [`Unable to parse scene: ${String(error)}`] };
+			return {
+				kind: "scene",
+				uri: document.uri.toString(),
+				title: path.basename(document.uri.fsPath || document.uri.path),
+				nodes: [],
+				warnings: [`Unable to parse scene: ${String(error)}`],
+			};
 		}
 	};
 	const sendModel = (document: vscode.TextDocument, panel: vscode.WebviewPanel): void => {
@@ -108,8 +120,14 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		},
 	};
 	context.subscriptions.push(
-		vscode.window.registerCustomEditorProvider(SCENE_2D_PREVIEW_VIEW_TYPE, provider, { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true }),
-		vscode.window.registerCustomEditorProvider(SHADER_PREVIEW_VIEW_TYPE, provider, { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true }),
+		vscode.window.registerCustomEditorProvider(SCENE_2D_PREVIEW_VIEW_TYPE, provider, {
+			webviewOptions: { retainContextWhenHidden: true },
+			supportsMultipleEditorsPerDocument: true,
+		}),
+		vscode.window.registerCustomEditorProvider(SHADER_PREVIEW_VIEW_TYPE, provider, {
+			webviewOptions: { retainContextWhenHidden: true },
+			supportsMultipleEditorsPerDocument: true,
+		}),
 		vscode.workspace.onDidChangeTextDocument((event) => {
 			const documentPanels = panels.get(event.document.uri.toString());
 			if (!documentPanels || !isPreviewDocument(event.document)) return;
@@ -132,10 +150,45 @@ export function buildShaderPreviewModel(source: string, uri: vscode.Uri): Shader
 		name: uniform.name.replace(/^shader_parameter\//, "").replace(/^shader_param\//, ""),
 		type: uniform.type,
 		defaultValue: uniform.defaultValue,
+		hint: uniform.hint,
+		hintString: uniform.hintString,
 	}));
-	const warnings = shaderType === "canvas_item" ? [] : [`Static preview is limited to canvas_item shaders; shader_type is ${shaderType}.`];
+	const warnings =
+		shaderType === "canvas_item"
+			? []
+			: [`Static preview is limited to canvas_item shaders; shader_type is ${shaderType}.`];
 	warnings.push("The browser preview does not execute Godot shader code; it shows shader metadata only.");
-	return { kind: "shader", uri: uri.toString(), shaderType, uniforms, warnings };
+	// perf: extract all render modes in one pass over the shader source.
+	const renderModes = Array.from(source.matchAll(/\brender_mode\s+([^;]+);/g)).flatMap((match) =>
+		match[1]
+			.split(",")
+			.map((mode) => mode.trim())
+			.filter(Boolean),
+	);
+	// perf: collect function declarations without reparsing the source per function.
+	const functions = Array.from(source.matchAll(/\bvoid\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g), (match) => match[1]);
+	const diagnostics: ShaderPreviewModel["diagnostics"] = [];
+	const scan = { depth: 0, depthLine: 1 };
+	// perf: scan source once so diagnostics remain linear for large shaders.
+	for (const [index, character] of Array.from(source).entries()) {
+		if (character === "{" && scan.depth++ === 0) scan.depthLine = source.slice(0, index).split("\n").length;
+		if (character === "}" && --scan.depth < 0) {
+			diagnostics.push({ message: "Unexpected closing brace.", line: source.slice(0, index).split("\n").length });
+			scan.depth = 0;
+		}
+	}
+	if (scan.depth > 0) diagnostics.push({ message: "Unclosed shader block.", line: scan.depthLine });
+	return {
+		kind: "shader",
+		uri: uri.toString(),
+		shaderType,
+		renderModes,
+		uniforms,
+		functions,
+		lineCount: source.split(/\r?\n/).length,
+		diagnostics,
+		warnings,
+	};
 }
 
 function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], webview?: vscode.Webview): PreviewNode {
@@ -149,10 +202,10 @@ function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], web
 	const width = Math.max(1, Math.abs(size?.[0] ?? defaultWidth(node.className)));
 	const height = Math.max(1, Math.abs(size?.[1] ?? defaultHeight(node.className)));
 	const texture = values.get("texture");
-	const texturePath = texture?.kind === "ExtResource"
-		? scene.externalResources.get(texture.referenceId ?? "")?.path
-		: undefined;
-	if (node.className.includes("3D") || node.className === "Node3D") warnings.push(`${node.path || node.label}: 3D nodes are shown as placeholders.`);
+	const texturePath =
+		texture?.kind === "ExtResource" ? scene.externalResources.get(texture.referenceId ?? "")?.path : undefined;
+	if (node.className.includes("3D") || node.className === "Node3D")
+		warnings.push(`${node.path || node.label}: 3D nodes are shown as placeholders.`);
 	return {
 		path: node.path,
 		className: node.className,
@@ -169,6 +222,7 @@ function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], web
 		text: text(values.get("text")),
 		texturePath,
 		textureUri: texturePath ? imageUriForScene(scene, texturePath, webview) : undefined,
+		properties: node.properties.map((property) => ({ name: property.name, value: property.raw })),
 		children: node.children.map((child) => buildPreviewNode(child, scene, warnings, webview)),
 	};
 }
@@ -270,7 +324,7 @@ const STATIC_PREVIEW_CSS = `:root{color-scheme:dark;font-family:var(--vscode-fon
 const STATIC_PREVIEW_SCRIPT = [
 	"const vscode=acquireVsCodeApi();",
 	"const canvas=document.getElementById('canvas');const details=document.getElementById('details');const title=document.getElementById('title');const meta=document.getElementById('meta');let model;",
-	"function showDetails(node){details.replaceChildren();if(!node){details.innerHTML='<div class=\"empty\">Select a node in the preview.</div>';return}const h=document.createElement('h3');h.textContent=node.label;details.append(h);const info=document.createElement('div');info.textContent=node.className+String.fromCharCode(10)+node.path;info.style.whiteSpace='pre-wrap';details.append(info);const button=document.createElement('button');button.textContent='Open source';button.onclick=()=>vscode.postMessage({command:'openSource',position:node.position});details.append(button)}",
+	"function showDetails(node){details.replaceChildren();if(!node){details.innerHTML='<div class=\"empty\">Select a node in the preview.</div>';return}const h=document.createElement('h3');h.textContent=node.label;details.append(h);const info=document.createElement('div');info.textContent=node.className+String.fromCharCode(10)+node.path;info.style.whiteSpace='pre-wrap';details.append(info);if(node.properties?.length){const ph=document.createElement('h4');ph.textContent='Overrides';details.append(ph);node.properties.forEach((property)=>{const row=document.createElement('div');row.textContent=property.name+' = '+property.value;row.style.padding='3px 0';details.append(row)})}const button=document.createElement('button');button.textContent='Open source';button.onclick=()=>vscode.postMessage({command:'openSource',position:node.position});details.append(button)}",
 	"function nodeElement(node){const group=document.createElementNS('http://www.w3.org/2000/svg','g');group.setAttribute('transform','translate('+node.x+' '+node.y+') rotate('+node.rotation+') scale('+node.scaleX+' '+node.scaleY+')');group.dataset.path=node.path;if(node.textureUri){const image=document.createElementNS('http://www.w3.org/2000/svg','image');image.setAttribute('href',node.textureUri);image.setAttribute('x','0');image.setAttribute('y','0');image.setAttribute('width',node.width);image.setAttribute('height',node.height);image.setAttribute('preserveAspectRatio','xMidYMid slice');group.append(image)}const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');rect.setAttribute('width',node.width);rect.setAttribute('height',node.height);rect.setAttribute('rx','3');rect.setAttribute('fill',node.textureUri?'rgba(0,0,0,0)':node.color);rect.setAttribute('stroke','rgba(220,230,240,.7)');rect.setAttribute('stroke-width','1');group.append(rect);if(node.text){const label=document.createElementNS('http://www.w3.org/2000/svg','text');label.textContent=node.text;label.setAttribute('x','6');label.setAttribute('y','18');label.setAttribute('fill','white');label.setAttribute('font-size','12');group.append(label)}group.onclick=(event)=>{event.stopPropagation();document.querySelectorAll('g[data-path]').forEach((item)=>item.classList.remove('selected'));group.classList.add('selected');showDetails(node)};node.children.forEach((child)=>group.append(nodeElement(child)));return group}",
 	"function transformPoint(point,transform){return{x:transform.a*point.x+transform.c*point.y+transform.e,y:transform.b*point.x+transform.d*point.y+transform.f}}",
 	"function multiply(left,right){return{a:left.a*right.a+left.c*right.b,b:left.b*right.a+left.d*right.b,c:left.a*right.c+left.c*right.d,d:left.b*right.c+left.d*right.d,e:left.a*right.e+left.c*right.f+left.e,f:left.b*right.e+left.d*right.f+left.f}}",
@@ -278,6 +332,6 @@ const STATIC_PREVIEW_SCRIPT = [
 	"function includePoint(point,result){result.minX=Math.min(result.minX,point.x);result.minY=Math.min(result.minY,point.y);result.maxX=Math.max(result.maxX,point.x);result.maxY=Math.max(result.maxY,point.y)}",
 	"function sceneBounds(nodes,parentTransform,result){nodes.forEach((node)=>{const transform=multiply(parentTransform,localTransform(node));[[0,0],[node.width,0],[0,node.height],[node.width,node.height]].forEach((corner)=>includePoint(transformPoint({x:corner[0],y:corner[1]},transform),result));sceneBounds(node.children,transform,result)})}",
 	"function renderScene(){canvas.replaceChildren();const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');const bounds={minX:0,minY:0,maxX:0,maxY:0};const identity={a:1,b:0,c:0,d:1,e:0,f:0};sceneBounds(model.nodes,identity,bounds);const padding=40;const x=bounds.minX-padding;const y=bounds.minY-padding;const width=Math.max(1,bounds.maxX-bounds.minX+padding*2);const height=Math.max(1,bounds.maxY-bounds.minY+padding*2);svg.setAttribute('viewBox',x+' '+y+' '+width+' '+height);svg.setAttribute('width','800');svg.setAttribute('height','600');svg.onclick=()=>showDetails(undefined);model.nodes.forEach((node)=>svg.append(nodeElement(node)));canvas.append(svg);details.replaceChildren();const warnings=model.warnings??[];warnings.forEach((warning)=>{const div=document.createElement('div');div.className='warning';div.textContent=warning;details.append(div)});if(!warnings.length)showDetails(undefined)}",
-	"function renderShader(){canvas.replaceChildren();const card=document.createElement('div');card.className='empty';card.textContent='Static canvas_item shader metadata preview';canvas.append(card);details.replaceChildren();const h=document.createElement('h3');h.textContent='Shader uniforms';details.append(h);model.uniforms.forEach((uniform)=>{const row=document.createElement('div');row.textContent=uniform.name+' : '+uniform.type+(uniform.defaultValue?' = '+uniform.defaultValue:'');row.style.padding='5px 0';details.append(row)});(model.warnings??[]).forEach((warning)=>{const div=document.createElement('div');div.className='warning';div.textContent=warning;details.append(div)})}",
+	"function renderShader(){canvas.replaceChildren();const card=document.createElement('div');card.className='empty';card.textContent='Shader material preview surface';canvas.append(card);details.replaceChildren();const h=document.createElement('h3');h.textContent='Shader interface';details.append(h);const info=document.createElement('div');info.textContent='Type: '+model.shaderType+'\nLines: '+model.lineCount+'\nFunctions: '+(model.functions.join(', ')||'none')+'\nRender modes: '+(model.renderModes.join(', ')||'default');info.style.whiteSpace='pre-wrap';details.append(info);const uh=document.createElement('h3');uh.textContent='Uniforms';details.append(uh);model.uniforms.forEach((uniform)=>{const row=document.createElement('div');row.textContent=uniform.name+' : '+uniform.type+(uniform.hint?' ['+uniform.hint+']':'')+(uniform.defaultValue?' = '+uniform.defaultValue:'');row.style.padding='5px 0';details.append(row)});(model.diagnostics??[]).forEach((diagnostic)=>{const div=document.createElement('div');div.className='warning';div.textContent='Line '+diagnostic.line+': '+diagnostic.message;details.append(div)});(model.warnings??[]).forEach((warning)=>{const div=document.createElement('div');div.className='warning';div.textContent=warning;details.append(div)})}",
 	"function render(){if(!model)return;title.textContent=model.kind==='scene'?model.title:'Shader preview';meta.textContent=model.kind==='scene'?model.nodes.length+' root node(s)':model.shaderType;if(model.kind==='scene')renderScene();else renderShader()}window.addEventListener('message',(event)=>{if(event.data?.type==='model'){model=event.data.model;render()}});vscode.postMessage({command:'ready'});",
 ].join("");
