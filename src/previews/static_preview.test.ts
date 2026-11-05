@@ -85,6 +85,19 @@ describe("static previews", () => {
 		assert.match(spatial.warnings[1] ?? "", /does not execute/);
 	});
 
+	it("summarizes shader interfaces and reports structural diagnostics", () => {
+		const uri = vscode.Uri.file(path.join(os.tmpdir(), "preview.shader"));
+		const model = buildShaderPreviewModel(
+			"shader_type spatial;\nrender_mode unshaded, cull_disabled;\nuniform float gain : hint_range(0, 2) = 1.0;\nvoid fragment() {\n",
+			uri,
+		);
+		assert.deepEqual(model.renderModes, ["unshaded", "cull_disabled"]);
+		assert.deepEqual(model.functions, ["fragment"]);
+		assert.equal(model.uniforms[0]?.hint, "range");
+		assert.equal(model.diagnostics[0]?.message, "Unclosed shader block.");
+		assert.equal(model.diagnostics[0]?.line, 4);
+	});
+
 	it("preserves local transforms for rotated and scaled nodes", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-scene-transform-"));
 		try {

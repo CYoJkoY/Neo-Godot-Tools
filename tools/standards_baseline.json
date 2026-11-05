@@ -43,6 +43,50 @@
 		},
 		"perf": 20
 	},
+	"src/backend/zig_backend.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/dashboard/panel_html.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/dashboard/status_panel.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/dashboard/tech_stack.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
 	"src/debugger/debug_runtime.ts": {
 		"counts": {
 			"class": 4,
@@ -395,6 +439,17 @@
 		},
 		"perf": 0
 	},
+	"src/index/ascii_collation.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
 	"src/index/bindings.ts": {
 		"counts": {
 			"class": 0,
@@ -560,6 +615,17 @@
 		},
 		"perf": 0
 	},
+	"src/index/zig_symbol_mirror.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
 	"src/language/index.ts": {
 		"counts": {
 			"class": 0,
@@ -713,6 +779,17 @@
 			"while": 0
 		},
 		"perf": 0
+	},
+	"src/previews/static_preview.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 1
 	},
 	"src/providers/completions.ts": {
 		"counts": {
@@ -970,8 +1047,8 @@
 	"src/resource_inspector/provider.ts": {
 		"counts": {
 			"class": 1,
-			"else": 5,
-			"for": 16,
+			"else": 4,
+			"for": 15,
 			"let": 8,
 			"throw": 0,
 			"while": 0
@@ -1036,9 +1113,9 @@
 	"src/scene_tools/preview.ts": {
 		"counts": {
 			"class": 3,
-			"else": 4,
-			"for": 2,
-			"let": 3,
+			"else": 3,
+			"for": 1,
+			"let": 1,
 			"throw": 0,
 			"while": 0
 		},
@@ -1066,9 +1143,31 @@
 		},
 		"perf": 0
 	},
+	"src/scene_tools/property_inspector.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/scene_tools/resources.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
 	"src/scene_tools/types.ts": {
 		"counts": {
-			"class": 4,
+			"class": 2,
 			"else": 0,
 			"for": 1,
 			"let": 1,
@@ -1100,6 +1199,17 @@
 		"perf": 0
 	},
 	"src/utils/doc_anchor.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"src/utils/editor_launch.ts": {
 		"counts": {
 			"class": 0,
 			"else": 0,
@@ -1212,7 +1322,7 @@
 	"tools/changelog.ts": {
 		"counts": {
 			"class": 0,
-			"else": 3,
+			"else": 1,
 			"for": 5,
 			"let": 5,
 			"throw": 8,
@@ -1224,6 +1334,17 @@
 		"counts": {
 			"class": 0,
 			"else": 1,
+			"for": 0,
+			"let": 0,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/compare_semantic_benchmarks.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
 			"for": 0,
 			"let": 0,
 			"throw": 0,
@@ -1248,6 +1369,17 @@
 			"else": 0,
 			"for": 3,
 			"let": 2,
+			"throw": 0,
+			"while": 0
+		},
+		"perf": 0
+	},
+	"tools/profile_native_parse.ts": {
+		"counts": {
+			"class": 0,
+			"else": 0,
+			"for": 0,
+			"let": 0,
 			"throw": 0,
 			"while": 0
 		},
@@ -1313,8 +1445,8 @@
 			"class": 0,
 			"else": 0,
 			"for": 5,
-			"let": 5,
-			"throw": 2,
+			"let": 2,
+			"throw": 1,
 			"while": 1
 		},
 		"perf": 0
