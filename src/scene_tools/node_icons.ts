@@ -90,9 +90,10 @@ class ClassNameIndex {
 		const found = new Map<string, string>();
 		const skip = new Set([".git", ".godot", ".vscode", "bin", "build", "node_modules", "out"]);
 		const queue: string[] = [dir];
+		let queueIndex = 0;
 		let scanned = 0;
-		while (queue.length) {
-			const current = queue.shift()!;
+		while (queueIndex < queue.length) {
+			const current = queue[queueIndex++];
 			let entries: fs.Dirent[];
 			try {
 				entries = await fs.promises.readdir(current, { withFileTypes: true });
@@ -226,10 +227,11 @@ export async function apply_custom_class_icons(scene: Scene): Promise<void> {
 	const projectDir = find_project_dir(scene.path);
 	const visited = new Set<Scene>();
 	const queue: Scene[] = [scene];
+	let queueIndex = 0;
 	let processed = 0;
 
-	while (queue.length > 0) {
-		const current = queue.shift()!;
+	while (queueIndex < queue.length) {
+		const current = queue[queueIndex++];
 		if (visited.has(current)) continue;
 		visited.add(current);
 
