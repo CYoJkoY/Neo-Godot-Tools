@@ -12,6 +12,14 @@ export interface ShaderAnalysis {
 	diagnostics: ShaderDiagnostic[];
 }
 
+function countLines(source: string): number {
+	if (source.length === 0) return 1;
+	let lines = 1;
+	// perf: count line endings without allocating one substring per line.
+	for (let index = 0; index < source.length; index++) if (source.charCodeAt(index) === 10) lines++;
+	return lines;
+}
+
 export function stripShaderComments(source: string): string {
 	let result = "";
 	let blockComment = false;
@@ -111,7 +119,7 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 		shaderType,
 		renderModes,
 		functions: [...new Set(functions)],
-		lineCount: source.length === 0 ? 1 : source.split(/\r?\n/).length,
+		lineCount: countLines(source),
 		diagnostics,
 	};
 }
