@@ -55,6 +55,13 @@ interface PreviewMessage {
 	position?: number;
 }
 
+function isPreviewMessage(value: unknown): value is PreviewMessage {
+	if (typeof value !== "object" || value === null) return false;
+	const message = value as Record<string, unknown>;
+	if (message["command"] === "ready") return true;
+	return message["command"] === "openSource" && Number.isInteger(message["position"]);
+}
+
 type PreviewModel = ScenePreviewModel | ShaderPreviewModel;
 type PreviewKind = PreviewModel["kind"];
 
@@ -140,7 +147,9 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			panels.set(key, documentPanels);
 			panel.webview.options = { enableScripts: true, localResourceRoots: previewRoots(document.uri) };
 			panel.webview.html = html(panel.webview);
-			panel.webview.onDidReceiveMessage((message: PreviewMessage) => void onMessage(document, panel, message));
+			panel.webview.onDidReceiveMessage((message: unknown) => {
+				if (isPreviewMessage(message)) void onMessage(document, panel, message);
+			});
 			panel.onDidDispose(() => {
 				readyPanels.delete(panel);
 				documentPanels.delete(panel);
