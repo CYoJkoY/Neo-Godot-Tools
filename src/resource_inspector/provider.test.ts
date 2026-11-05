@@ -9,7 +9,6 @@ import {
 	ResourceModel,
 	diagnosticsEnabled,
 	formatPropertyValue,
-	getOpenIn,
 	resolveResourceUri,
 } from "./provider.js";
 import { scriptClassNameIndex } from "./script_index.js";
@@ -22,10 +21,6 @@ function withSetting(key: string, value: unknown, run: () => Promise<void>): Pro
 	return run().finally(() => {
 		configuration[key] = previous;
 	});
-}
-
-function withConfiguration(value: unknown, run: () => Promise<void>): Promise<void> {
-	return withSetting("neoGodotTools.resource.inspector.openIn", value, run);
 }
 
 function makeDocument(uri: vscode.Uri, text: string): vscode.TextDocument {
@@ -48,19 +43,16 @@ function makeDocument(uri: vscode.Uri, text: string): vscode.TextDocument {
 }
 
 describe("resource inspector provider", () => {
-	it("declares the sidebar view as a webview in package.json", () => {
+	it("does not contribute a resource inspector sidebar view", () => {
 		// The unit runner sets the repository root; the fallback keeps the test
 		// runnable from a plain `node --test out-test/src/...` invocation.
 		const root = process.env["NEO_GODOT_TOOLS_TEST_EXTENSION_ROOT"] ?? path.resolve(__dirname, "..", "..", "..");
 		const pkgPath = path.join(root, "package.json");
 		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		const views = pkg.contributes?.views?.neoGodotTools ?? [];
-		const inspectorView = views.find((view: { id: string }) => view.id === "neoGodotTools.resourceInspector");
-		assert.ok(inspectorView, "neoGodotTools.resourceInspector view must be contributed");
 		assert.equal(
-			inspectorView.type,
-			"webview",
-			"sidebar view must have type='webview' so VS Code invokes registerWebviewViewProvider",
+			views.some((view: { id: string }) => view.id === "neoGodotTools.resourceInspector"),
+			false,
 		);
 	});
 
@@ -81,125 +73,16 @@ describe("resource inspector provider", () => {
 			calls.push({ command, args });
 		};
 		try {
-			await withConfiguration("editor", () => provider.openResourceInspector(uri));
+			await provider.openResourceInspector(uri);
 			assert.equal(calls[0].command, "vscode.openWith");
 			assert.equal(calls[0].args[0], uri);
 			assert.equal(calls[0].args[1], "neoGodotTools.resourceInspector");
-
-			await withConfiguration("panel", () => provider.openResourceInspector(uri));
-			assert.equal(calls[1].command, "neoGodotTools.resourceInspector.focus");
 		} finally {
 			(vscode.commands as { executeCommand: unknown }).executeCommand = executeCommand;
 			provider.dispose();
 		}
 	});
 
-	it("automatically detects opened and switched .tres files in the sidebar view", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-auto-"));
-		const firstPath = path.join(root, "first.tres");
-		const secondPath = path.join(root, "second.tres");
-		const firstText = `[gd_resource type="Resource" format=3]\n\n[resource]\nspeed = 3.0\n`;
-		const secondText = `[gd_resource type="Resource" format=3]\n\n[resource]\nhealth = 50\n`;
-		fs.writeFileSync(firstPath, firstText);
-		fs.writeFileSync(secondPath, secondText);
-
-		const firstDoc = makeDocument(vscode.Uri.file(firstPath), firstText);
-		const secondDoc = makeDocument(vscode.Uri.file(secondPath), secondText);
-
-		let activeListener: ((editor?: vscode.TextEditor) => void) | undefined;
-		const prevOnActive = vscode.window.onDidChangeActiveTextEditor;
-		const prevOpenDoc = vscode.workspace.openTextDocument;
-		const prevActiveEditor = vscode.window.activeTextEditor;
-
-		(vscode.window as { onDidChangeActiveTextEditor: unknown }).onDidChangeActiveTextEditor = (
-			listener: (editor?: vscode.TextEditor) => void,
-		) => {
-			activeListener = listener;
-			return { dispose: () => {} };
-		};
-		(vscode.workspace as { openTextDocument: unknown }).openTextDocument = async (target: vscode.Uri | string) => {
-			const fsPath = typeof target === "string" ? target : target.fsPath;
-			return fsPath === secondPath ? secondDoc : firstDoc;
-		};
-
-		const context = {
-			subscriptions: [],
-			extensionUri: vscode.Uri.file(os.homedir()),
-		} as unknown as vscode.ExtensionContext;
-		const provider = new ResourceInspectorProvider(context);
-
-		const posted: Array<{ type: string; model?: ResourceModel }> = [];
-		let receiveMessage: ((msg: Record<string, unknown>) => void) | undefined;
-		const mockView = {
-			visible: true,
-			description: undefined as string | undefined,
-			webview: {
-				options: {},
-				html: "",
-				onDidReceiveMessage: (cb: (msg: Record<string, unknown>) => void) => {
-					receiveMessage = cb;
-					return { dispose: () => {} };
-				},
-				postMessage: async (msg: { type: string; model?: ResourceModel }) => {
-					posted.push(msg);
-					return true;
-				},
-			},
-			onDidChangeVisibility: () => ({ dispose: () => {} }),
-		} as unknown as vscode.WebviewView;
-
-		try {
-			await provider.resolveWebviewView(mockView);
-			assert.equal(posted[posted.length - 1]?.type, "empty");
-
-			// Webview posts "ready" when no .tres is active: must respond with "empty", not hang.
-			receiveMessage?.({ command: "ready" });
-			await new Promise((resolve) => setTimeout(resolve, 10));
-			assert.equal(posted[posted.length - 1]?.type, "empty");
-
-			// User opens first.tres in the editor -> sidebar automatically detects it.
-			const firstEditor = { document: firstDoc } as vscode.TextEditor;
-			(vscode.window as { activeTextEditor: unknown }).activeTextEditor = firstEditor;
-			activeListener?.(firstEditor);
-			await new Promise((resolve) => setTimeout(resolve, 20));
-
-			const firstMsg = posted[posted.length - 1];
-			assert.equal(firstMsg?.type, "model");
-			assert.equal(firstMsg?.model?.fileName, "first.tres");
-			assert.equal(mockView.description, "first.tres");
-			assert.ok(firstMsg?.model?.properties.some((prop) => prop.name === "speed" && prop.raw === "3.0"));
-
-			// User switches to second.tres -> sidebar automatically switches to second.tres.
-			const secondEditor = { document: secondDoc } as vscode.TextEditor;
-			(vscode.window as { activeTextEditor: unknown }).activeTextEditor = secondEditor;
-			activeListener?.(secondEditor);
-			await new Promise((resolve) => setTimeout(resolve, 20));
-
-			const secondMsg = posted[posted.length - 1];
-			assert.equal(secondMsg?.type, "model");
-			assert.equal(secondMsg?.model?.fileName, "second.tres");
-			assert.equal(mockView.description, "second.tres");
-			assert.ok(secondMsg?.model?.properties.some((prop) => prop.name === "health" && prop.raw === "50"));
-
-			// Locking pins second.tres even when first.tres becomes active.
-			await provider.lockInspector();
-			assert.equal(mockView.description, "🔒 second.tres");
-			(vscode.window as { activeTextEditor: unknown }).activeTextEditor = firstEditor;
-			activeListener?.(firstEditor);
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			assert.equal(posted[posted.length - 1]?.model?.fileName, "second.tres");
-
-			// Unlocking follows the active editor (first.tres) again.
-			await provider.unlockInspector();
-			assert.equal(posted[posted.length - 1]?.model?.fileName, "first.tres");
-		} finally {
-			(vscode.window as { onDidChangeActiveTextEditor: unknown }).onDidChangeActiveTextEditor = prevOnActive;
-			(vscode.workspace as { openTextDocument: unknown }).openTextDocument = prevOpenDoc;
-			(vscode.window as { activeTextEditor: unknown }).activeTextEditor = prevActiveEditor;
-			provider.dispose();
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
 
 	it("detects unserialized @export properties from attached and base scripts", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-exports-"));
@@ -326,8 +209,9 @@ shader_param/strength = 0.8
 			const latestRoots = webview.options.localResourceRoots;
 			resolveOld({ ...model, resourceType: "Outdated metadata" });
 			await pending;
-			assert.equal(posted.length, 1);
-			assert.equal(posted[0].model.resourceType, model.resourceType);
+			assert.equal(posted.length, 3, "each reload has a fast model and the newest reload has a complete model");
+			assert.equal(posted.at(-1)?.model.resourceType, model.resourceType);
+			assert.ok(posted.every((message) => message.model.resourceType !== "Outdated metadata"));
 			assert.equal(webview.options.localResourceRoots, latestRoots);
 		} finally {
 			provider.dispose();
@@ -356,8 +240,6 @@ shader_param/strength = 0.8
 			},
 		} as unknown as vscode.Webview;
 		const protocol = provider as unknown as {
-			panelUri: vscode.Uri;
-			view: { webview: vscode.Webview };
 			sendModel(
 				document: vscode.TextDocument,
 				webview: vscode.Webview,
@@ -373,18 +255,16 @@ shader_param/strength = 0.8
 			'[gd_resource type="Resource" format=3]\n[resource]\n',
 		);
 		try {
-			protocol.view = { webview };
-			protocol.panelUri = first.uri;
-			const pending = protocol.sendModel(first, webview, false);
-			protocol.panelUri = second.uri;
+			const pendingFirst = protocol.sendModel(first, webview, false);
+			const pendingSecond = protocol.sendModel(second, webview, false);
 			resolveNative({
 				children: [{ name: "resource_name", kind: 7, detail: "var Resource.resource_name: String" }],
 			});
-			await pending;
-			assert.equal(posted.length, 0);
-			assert.equal(webview.options.localResourceRoots, initialRoots);
-			await protocol.sendModel(second, webview, false);
-			assert.equal(posted.length, 1);
+			await Promise.all([pendingFirst, pendingSecond]);
+			assert.equal(posted.length, 3, "the first fast model may be visible before the second selection settles");
+			const latest = posted.at(-1) as { model?: ResourceModel } | undefined;
+			assert.equal(latest?.model?.uri, second.uri.toString());
+			assert.equal(posted.filter((message) => (message as { model?: { uri?: string } }).model?.uri === first.uri.toString()).length, 1);
 			assert.notEqual(webview.options.localResourceRoots, initialRoots);
 		} finally {
 			provider.dispose();
@@ -460,7 +340,7 @@ shader_param/strength = 0.8
 			const text = `[gd_resource type="Resource" format=3]\n[ext_resource type="Texture2D" path="res://icon with space.svg" id="2_tex"]\n[ext_resource type="Texture2D" path="res://missing.png" id="3_tex"]\n[sub_resource type="AtlasTexture" id="Atlas_1"]\natlas = ExtResource("2_tex")\n[resource]\nicon = ExtResource("2_tex")\nimage_file = "res://icon with space.svg"\natlas_icon = SubResource("Atlas_1")\nunsupported = "res://image.dds"\nunsafe_image = "res://escape.png"\n`;
 			const doc = makeDocument(vscode.Uri.file(path.join(root, "thing.tres")), text);
 			const webview = {
-				asWebviewUri: (uri: vscode.Uri) => vscode.Uri.parse(`https://images.example${uri.path}`),
+				asWebviewUri: (uri: vscode.Uri) => vscode.Uri.parse(`https://images.example/${uri.path}`),
 			} as vscode.Webview;
 			const model = await provider.buildModel(doc, webview);
 			const byName = new Map(model.properties.map((prop) => [prop.name, prop]));
@@ -480,7 +360,7 @@ shader_param/strength = 0.8
 			assert.match(byName.get("unsafe_image")?.imagePreview?.message ?? "", /restricted/);
 			assert.equal(
 				resolveResourceUri(doc.uri, path.join(root, "icon with space.svg"))?.fsPath,
-				path.join(root, "icon with space.svg"),
+				path.join(root, "icon with space.svg").replace(/\\/g, "/"),
 			);
 			assert.equal(resolveResourceUri(doc.uri, "https://example.com/image.png"), undefined);
 		} finally {
@@ -535,12 +415,6 @@ shader_param/strength = 0.8
 		}
 	});
 
-	it("reads the openIn setting defensively", async () => {
-		assert.equal(getOpenIn(), "editor");
-		await withConfiguration("panel", async () => assert.equal(getOpenIn(), "panel"));
-		await withConfiguration("something-else", async () => assert.equal(getOpenIn(), "editor"));
-	});
-
 	it("keeps resource diagnostics off unless they are enabled", async () => {
 		// The inspector edits resources; flagging them is opt-in because partial
 		// metadata cannot tell a mistake from a property it does not know.
@@ -564,11 +438,11 @@ shader_param/strength = 0.8
 
 			assert.equal(
 				resolveResourceUri(resource, "res://assets/icon.svg")?.fsPath,
-				path.join(root, "assets", "icon.svg"),
+				path.join(root, "assets", "icon.svg").replace(/\\/g, "/"),
 			);
 			assert.equal(
 				resolveResourceUri(resource, "../assets/icon.svg")?.fsPath,
-				path.join(root, "assets", "icon.svg"),
+				path.join(root, "assets", "icon.svg").replace(/\\/g, "/"),
 			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -618,7 +492,7 @@ shader_param/strength = 0.8
 			workspace.findFiles = async () => [];
 			scriptClassNameIndex.invalidate();
 			const found = await scriptClassNameIndex.find("Hero", vscode.Uri.file(path.join(root, "hero.tres")));
-			assert.equal(found?.fsPath, path.join(root, "hero.gd"));
+			assert.equal(found?.fsPath, path.join(root, "hero.gd").replace(/\\/g, "/"));
 		} finally {
 			workspace.workspaceFolders = previousFolders;
 			workspace.findFiles = previousFindFiles;

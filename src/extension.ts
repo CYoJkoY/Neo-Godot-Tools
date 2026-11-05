@@ -48,6 +48,7 @@ import {
 	createWorkspaceSymbolProvider,
 } from "./providers";
 import { ResourceInspectorProvider } from "./resource_inspector/provider";
+import { createStaticPreviewProvider } from "./previews/static_preview.js";
 import { ScenePreviewProvider } from "./scene_tools";
 import { attemptSettingsUpdate, clean_godot_path, editor_environment } from "./utils";
 import {
@@ -72,6 +73,7 @@ interface Extension {
 	debug?: GodotDebugger;
 	scenePreviewProvider?: ScenePreviewProvider;
 	resourceInspector?: ResourceInspectorProvider;
+	staticPreviewProvider?: vscode.CustomTextEditorProvider;
 	linkProvider?: GDDocumentLinkProvider;
 	dropsProvider?: GDDocumentDropEditProvider;
 	hoverProvider?: GDHoverProvider;
@@ -135,6 +137,7 @@ export function activate(context: vscode.ExtensionContext) {
 	globals.resourceInspector = new ResourceInspectorProvider(context, {
 		lspClient: () => globals.lsp?.client,
 	});
+	globals.staticPreviewProvider = createStaticPreviewProvider(context);
 	globals.lsp.onStatusChanged(() => {
 		void globals.resourceInspector?.refresh();
 		globals.scenePreviewProvider?.refresh_property_inspector();

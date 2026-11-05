@@ -1,9 +1,7 @@
 /**
  * Resource Inspector — a Godot-like inspector for `.tres` files.
  *
- * The same provider backs both entry points requested by the feature:
- *  - `CustomTextEditorProvider` (editor tab, `Open With... > Resource Inspector`),
- *  - `WebviewViewProvider` (the "Resource Inspector" side panel).
+ * The provider backs the custom editor opened with `Open With... > Resource Inspector`.
  *
  * All edits are written through `WorkspaceEdit` so the raw text document stays
  * the source of truth and `Open With... > Text Editor` keeps working.
@@ -52,7 +50,6 @@ import { scriptClassNameIndex } from "./script_index.js";
 import { formatVariant, parseVariant, variantValuesEqual } from "./values.js";
 
 export const RESOURCE_INSPECTOR_VIEW_TYPE = "neoGodotTools.resourceInspector";
-export const RESOURCE_INSPECTOR_VIEW_ID = "neoGodotTools.resourceInspector";
 const RESOURCE_INSPECTOR_DIAGNOSTICS_SETTING = "neoGodotTools.resource.inspector.diagnostics";
 const LOCKED_RESOURCE_STATE_KEY = "neoGodotTools.resourceInspector.lockedResource";
 
@@ -103,13 +100,6 @@ export interface ResourceModel {
 		imagePreview?: ImagePreview;
 	}>;
 	diagnostics: Array<{ message: string; severity: "error" | "warning"; line: number }>;
-	openIn: string;
-}
-
-export interface WorkspaceResourceItem {
-	uri: string;
-	label: string;
-	resourcePath: string;
 }
 
 export interface ResourceInspectorOptions {
@@ -120,7 +110,7 @@ export interface ResourceInspectorOptions {
 
 const SCRIPT_PROPERTY = "script";
 
-export class ResourceInspectorProvider implements vscode.CustomTextEditorProvider, vscode.WebviewViewProvider {
+export class ResourceInspectorProvider implements vscode.CustomTextEditorProvider {
 	private readonly diagnostics = vscode.languages.createDiagnosticCollection("neoGodotTools.resourceInspector");
 	private readonly editors = new Map<string, Set<vscode.WebviewPanel>>();
 	private readonly syncedVersions = new Map<string, number>();
@@ -132,7 +122,6 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	private readonly watcher = vscode.workspace.createFileSystemWatcher("**/*.tres");
 	private readonly scriptWatcher = vscode.workspace.createFileSystemWatcher("**/*.gd");
 	private readonly pendingModelUpdates = new Map<string, ReturnType<typeof setTimeout>>();
-	private view?: vscode.WebviewView;
 	private panelUri?: vscode.Uri;
 	private locked = false;
 
@@ -154,16 +143,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				webviewOptions: { retainContextWhenHidden: true },
 				supportsMultipleEditorsPerDocument: true,
 			}),
-			vscode.window.registerWebviewViewProvider(RESOURCE_INSPECTOR_VIEW_ID, this, {
-				webviewOptions: { retainContextWhenHidden: true },
-			}),
-			vscode.window.onDidChangeActiveTextEditor((editor) => void this.onActiveEditorChanged(editor)),
-			...(vscode.window.onDidChangeVisibleTextEditors
-				? [vscode.window.onDidChangeVisibleTextEditors((editors) => void this.onVisibleEditorsChanged(editors))]
-				: []),
 			vscode.workspace.onDidChangeTextDocument((event) => void this.onDocumentChanged(event)),
-			vscode.workspace.onDidOpenTextDocument((document) => void this.onDocumentOpened(document)),
-			vscode.workspace.onDidSaveTextDocument((document) => void this.onDocumentSaved(document)),
 			vscode.workspace.onDidCloseTextDocument((document) => void this.onDocumentClosed(document)),
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (!event.affectsConfiguration(RESOURCE_INSPECTOR_DIAGNOSTICS_SETTING)) return;
@@ -202,19 +182,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			return;
 		}
 		this.panelUri = target;
-		if (getOpenIn() === "panel") {
-			await vscode.commands.executeCommand(`${RESOURCE_INSPECTOR_VIEW_ID}.focus`);
-			await this.refreshView();
-			return;
-		}
 		await vscode.commands.executeCommand("vscode.openWith", target, RESOURCE_INSPECTOR_VIEW_TYPE);
-		await this.refreshView();
 	}
 
 	/** Public refresh entry point for commands and LSP connection status updates. */
 	async refresh(): Promise<void> {
 		this.nativePropertiesCache.clear();
-		await this.refreshView();
 		for (const [uriText, panels] of this.editors.entries()) {
 			const uri = vscode.Uri.parse(uriText);
 			for (const panel of panels) {
@@ -228,13 +201,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (!doc) return;
 		this.panelUri = doc.uri;
 		this.setLocked(true);
-		await this.refreshView();
+		await this.refresh();
 	}
 
 	async unlockInspector(): Promise<void> {
 		this.setLocked(false);
-		await this.onActiveEditorChanged(vscode.window.activeTextEditor);
-		await this.refreshView();
+		await this.refresh();
 	}
 
 	private setLocked(locked: boolean): void {
@@ -279,7 +251,6 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		panel.webview.html = await this.html(panel.webview);
 		if (!this.locked) this.panelUri = document.uri;
 		void this.reloadDocument(document.uri, panel.webview, true);
-		void this.refreshView();
 
 		panel.webview.onDidReceiveMessage((message) => void this.onMessage(document.uri, message, panel));
 		panel.onDidDispose(() => {
@@ -290,97 +261,8 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			if (panel.active) {
 				if (!this.locked) this.panelUri = document.uri;
 				void this.reloadDocument(document.uri, panel.webview, true);
-				void this.refreshView();
 			}
 		});
-	}
-
-	// ------------------------------------------------------------- webview view
-
-	async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
-		this.view = view;
-		view.webview.options = { enableScripts: true };
-		view.webview.html = await this.html(view.webview);
-		view.webview.onDidReceiveMessage((message) => {
-			void this.onViewMessage(message);
-		});
-		view.onDidChangeVisibility(() => {
-			if (view.visible) void this.refreshView();
-		});
-		await this.refreshView();
-	}
-
-	private async onViewMessage(message: WebviewMessage): Promise<void> {
-		switch (message.command) {
-			case "ready":
-			case "reload":
-				await this.refreshView();
-				return;
-			case "openResource": {
-				const raw = String(message.uri ?? "").trim();
-				if (!raw) return;
-				const target = raw.includes("://") ? vscode.Uri.parse(raw) : vscode.Uri.file(raw);
-				this.panelUri = target;
-				try {
-					const doc = await vscode.workspace.openTextDocument(target);
-					void vscode.window.showTextDocument(doc, { preview: true, preserveFocus: true });
-				} catch {
-					/* ignore if unable to show in editor */
-				}
-				await this.refreshView();
-				return;
-			}
-			case "browseResourceFile": {
-				const picked = await vscode.window.showOpenDialog({
-					canSelectMany: false,
-					filters: { "Godot resources": ["tres"] },
-				});
-				if (!picked?.length) return;
-				this.panelUri = picked[0];
-				try {
-					const doc = await vscode.workspace.openTextDocument(picked[0]);
-					void vscode.window.showTextDocument(doc, { preview: true, preserveFocus: true });
-				} catch {
-					/* ignore */
-				}
-				await this.refreshView();
-				return;
-			}
-			case "toggleLock": {
-				if (!this.locked) {
-					const doc = await this.currentDocument();
-					if (doc) this.panelUri = doc.uri;
-				}
-				this.setLocked(!this.locked);
-				await this.refreshView();
-				return;
-			}
-			case "openScript": {
-				await this.openCurrentScript();
-				return;
-			}
-			default: {
-				const doc = await this.currentDocument();
-				const uri = doc?.uri ?? this.panelUri ?? vscode.window.activeTextEditor?.document.uri;
-				if (uri) await this.onMessage(uri, message);
-				return;
-			}
-		}
-	}
-
-	private async refreshView(): Promise<void> {
-		if (!this.view) return;
-		const document = await this.currentDocument();
-		if (!document) {
-			this.view.description = undefined;
-			const resources = await this.discoverWorkspaceResources();
-			void this.view.webview.postMessage({ type: "empty", resources });
-			return;
-		}
-		this.panelUri = document.uri;
-		const fileName = path.basename(document.uri.fsPath || document.uri.path);
-		this.view.description = this.locked ? `🔒 ${fileName}` : fileName;
-		await this.sendModel(document, this.view.webview);
 	}
 
 	/** A resource open in the active editor, if the active editor holds one. */
@@ -475,42 +357,16 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		}
 	}
 
-	private async discoverWorkspaceResources(): Promise<WorkspaceResourceItem[]> {
-		const results: WorkspaceResourceItem[] = [];
-		const seen = new Set<string>();
-		const addUri = (uri: vscode.Uri) => {
-			const key = uri.toString();
-			if (seen.has(key) || !isResourceFile(uri)) return;
-			seen.add(key);
-			results.push({
-				uri: key,
-				label: path.basename(uri.fsPath || uri.path),
-				resourcePath: toResPath(uri, uri),
-			});
-		};
-
-		for (const doc of vscode.workspace.textDocuments) {
-			if (isResourceDocument(doc)) addUri(doc.uri);
-		}
-		try {
-			const found = await vscode.workspace.findFiles("**/*.tres", "**/.*", 25);
-			for (const uri of found ?? []) addUri(uri);
-		} catch {
-			/* ignore when workspace.findFiles is unavailable */
-		}
-		return results.slice(0, 25);
-	}
-
 	// -------------------------------------------------------------- messaging
 
 	private async onMessage(uri: vscode.Uri, message: WebviewMessage, panel?: vscode.WebviewPanel): Promise<void> {
 		switch (message.command) {
 			case "ready":
 			case "reload":
-				await this.reloadDocument(uri, panel ? panel.webview : this.view?.webview, true);
+				await this.reloadDocument(uri, panel?.webview, true);
 				return;
 			case "keepChanges":
-				await this.reloadDocument(uri, panel ? panel.webview : this.view?.webview, false);
+				await this.reloadDocument(uri, panel?.webview, false);
 				return;
 			case "openText":
 				await vscode.commands.executeCommand("vscode.openWith", uri, "default");
@@ -520,7 +376,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				return;
 			case "toggleLock":
 				this.setLocked(!this.locked);
-				await this.reloadDocument(uri, panel ? panel.webview : this.view?.webview, false);
+				await this.reloadDocument(uri, panel?.webview, false);
 				return;
 			case "openExtResource": {
 				await this.openExtResource(uri, String(message.id ?? ""));
@@ -857,19 +713,81 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const generation = (this.modelGenerations.get(webview) ?? 0) + 1;
 		this.modelGenerations.set(webview, generation);
 		this.syncedVersions.set(document.uri.toString(), version);
+		const fastModel = this.buildFastModel(document, webview);
+		if (this.modelGenerations.get(webview) !== generation || document.version !== version) return;
+		webview.options = { ...webview.options, localResourceRoots: previewRoots(document.uri) };
+		if (updateDiagnostics) this.publishDiagnostics(document, fastModel);
+		void webview.postMessage({ type: "model", model: fastModel });
+
 		const model = await this.buildModel(document, webview);
 		// Async script/LSP metadata must not overwrite newer edits or a newly
 		// selected resource, including its webview preview permissions. A script
 		// edit can trigger a newer model without changing the .tres version.
-		if (
-			this.modelGenerations.get(webview) !== generation ||
-			document.version !== version ||
-			(this.view?.webview === webview && this.panelUri?.toString() !== document.uri.toString())
-		)
+		if (this.modelGenerations.get(webview) !== generation || document.version !== version)
 			return;
 		webview.options = { ...webview.options, localResourceRoots: previewRoots(document.uri) };
 		if (updateDiagnostics) this.publishDiagnostics(document, model);
 		void webview.postMessage({ type: "model", model });
+	}
+
+	/** Builds the file-backed portion without reading scripts or querying the LSP. */
+	private buildFastModel(document: vscode.TextDocument, webview?: vscode.Webview): ResourceModel {
+		const parsed = this.parsedDocument(document);
+		const metadata = collectPropertyMetadata({ document: parsed });
+		const known = new Map(metadata.map((property) => [property.name, property]));
+		const extResources = parsed.extResources.map((resource) => {
+			const uri = resource.path ? resolveResourceUri(document.uri, resource.path) : undefined;
+			return {
+				id: resource.id,
+				type: resource.type,
+				path: resource.path,
+				uid: resource.uid,
+				broken: !uri || !fs.existsSync(uri.fsPath),
+				imagePreview: imagePreviewForPath(document.uri, resource.path, webview),
+			};
+		});
+		const properties = this.mergePropertiesWithMetadata(parsed.properties, metadata, known);
+		const subResources = parsed.subResources.map((subResource) =>
+			this.buildFastSubResourceModel(parsed, subResource),
+		);
+		for (const property of [...properties, ...subResources.flatMap((sub) => sub.properties)]) {
+			property.imagePreview = imagePreviewForPath(document.uri, imagePathForValue(property.raw, parsed), webview);
+		}
+		return {
+			uri: document.uri.toString(),
+			fileName: path.basename(document.uri.fsPath || document.uri.path),
+			resourcePath: toResPath(document.uri, document.uri),
+			locked: this.locked,
+			version: document.version,
+			resourceType: parsed.resourceType,
+			scriptClass: parsed.scriptClass,
+			format: parsed.format,
+			uid: parsed.uid,
+			properties,
+			subResources,
+			subResourceTypes: parsed.subResources.map((subResource) => ({ id: subResource.id, type: subResource.type })),
+			extResources,
+			diagnostics: validateResourceDocument(parsed, metadata, { complete: false }),
+		};
+	}
+
+	private buildFastSubResourceModel(
+		document: ResourceDocument,
+		subResource: SubResourceEntry,
+	): { id: string; type: string; properties: PropertyModel[] } {
+		const subDoc: ResourceDocument = {
+			text: "",
+			lineEnding: document.lineEnding,
+			resourceType: subResource.type,
+			headerLine: subResource.line,
+			extResources: document.extResources,
+			subResources: document.subResources,
+			properties: subResource.properties,
+			format: document.format,
+		};
+		const metadata = collectPropertyMetadata({ document: subDoc });
+		const known = new Map(metadata.map((meta) => [meta.name, meta]));
+		return { id: subResource.id, type: subResource.type, properties: this.mergePropertiesWithMetadata(subResource.properties, metadata, known, subResource.id) };
 	}
 
 	async buildModel(document: vscode.TextDocument, webview?: vscode.Webview): Promise<ResourceModel> {
@@ -931,7 +849,6 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			})),
 			extResources,
 			diagnostics,
-			openIn: getOpenIn(),
 		};
 	}
 
@@ -1061,83 +978,8 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	// --------------------------------------------------------- event handlers
 
-	private async onActiveEditorChanged(editor?: vscode.TextEditor): Promise<void> {
-		if (this.locked && this.panelUri && fs.existsSync(this.panelUri.fsPath)) {
-			return;
-		}
-		if (editor && isResourceDocument(editor.document)) {
-			this.panelUri = editor.document.uri;
-			await this.refreshView();
-			return;
-		}
-		if (editor?.document.uri.fsPath.toLowerCase().endsWith(".gd")) {
-			if (!this.panelUri) {
-				const related = this.findRelatedResourceForScript(editor.document.uri);
-				if (related) {
-					this.panelUri = related;
-					await this.refreshView();
-				}
-			} else {
-				await this.refreshView();
-			}
-		}
-	}
-
-	private async onVisibleEditorsChanged(editors: readonly vscode.TextEditor[]): Promise<void> {
-		if (this.locked && this.panelUri && fs.existsSync(this.panelUri.fsPath)) return;
-		const active = vscode.window.activeTextEditor?.document;
-		if (active && isResourceDocument(active)) {
-			this.panelUri = active.uri;
-			await this.refreshView();
-			return;
-		}
-		if (!this.panelUri) {
-			const visible = editors.find((editor) => isResourceDocument(editor.document));
-			if (visible) {
-				this.panelUri = visible.document.uri;
-				await this.refreshView();
-			}
-		}
-	}
-
-	private async onDocumentOpened(document: vscode.TextDocument): Promise<void> {
-		if (!isResourceDocument(document)) return;
-		if (!this.locked) {
-			const activeUri = vscode.window.activeTextEditor?.document.uri;
-			if (
-				!this.panelUri ||
-				this.panelUri.toString() === document.uri.toString() ||
-				!activeUri ||
-				activeUri.toString() === document.uri.toString()
-			) {
-				this.panelUri = document.uri;
-				await this.refreshView();
-				return;
-			}
-		}
-		if (this.panelUri?.toString() === document.uri.toString()) await this.refreshView();
-	}
-
-	private async onDocumentSaved(document: vscode.TextDocument): Promise<void> {
-		const filePath = document.uri.fsPath.toLowerCase();
-		if (filePath.endsWith(".gd") || filePath.endsWith(".gdshader") || isResourceDocument(document)) {
-			await this.refreshView();
-		}
-	}
-
 	private async onDocumentClosed(document: vscode.TextDocument): Promise<void> {
 		this.parsedDocuments.invalidate(document.uri.toString());
-		if (!isResourceDocument(document)) return;
-		if (!this.locked && this.panelUri?.toString() === document.uri.toString()) {
-			const nextVisible = vscode.window.visibleTextEditors.find(
-				(editor) =>
-					isResourceDocument(editor.document) && editor.document.uri.toString() !== document.uri.toString(),
-			);
-			if (nextVisible) {
-				this.panelUri = nextVisible.document.uri;
-				await this.refreshView();
-			}
-		}
 	}
 
 	private async onFileSystemChanged(uri: vscode.Uri): Promise<void> {
@@ -1145,9 +987,9 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		// cached parse of an unchanged version can be stale here.
 		this.parsedDocuments.invalidate(uri.toString());
 		if (!isResourceFile(uri)) return;
-		if (this.panelUri?.toString() === uri.toString() || !this.panelUri) {
-			if (!this.locked && !this.panelUri) this.panelUri = uri;
-			await this.refreshView();
+		const panels = this.editors.get(uri.toString());
+		if (panels) {
+			await Promise.all([...panels].filter((panel) => panel.visible).map((panel) => this.reloadDocument(uri, panel.webview, true)));
 		}
 	}
 
@@ -1156,7 +998,6 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (this.panelUri?.toString() === uri.toString()) {
 			this.panelUri = undefined;
 			this.setLocked(false);
-			await this.refreshView();
 		}
 	}
 
@@ -1166,7 +1007,6 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (lowerPath.endsWith(".gd") || lowerPath.endsWith(".gdshader")) {
 			// If an attached script or shader is edited while a resource is being
 			// inspected, refresh the inspector so new @export/uniform properties appear.
-			if (this.view?.visible && this.panelUri) void this.refreshView();
 			for (const [resUriText, panels] of this.editors.entries()) {
 				const resUri = vscode.Uri.parse(resUriText);
 				for (const panel of panels) {
@@ -1183,9 +1023,6 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		const webviews: vscode.Webview[] = [...(this.editors.get(uri.toString()) ?? [])]
 			.filter((panel) => panel.visible)
 			.map((panel) => panel.webview);
-		if (this.view?.visible && this.panelUri?.toString() === uri.toString()) {
-			webviews.push(this.view.webview);
-		}
 		if (!webviews.length) return;
 
 		const previous = this.syncedVersions.get(uri.toString());
@@ -1424,12 +1261,6 @@ function isResourceDocument(document: vscode.TextDocument | undefined): boolean 
 	if (!document) return false;
 	if (isResourceFile(document.uri)) return true;
 	return document.languageId === "gdresource" && document.uri.path.toLowerCase().endsWith(".tres");
-}
-
-/** Configuration `neoGodotTools.resource.inspector.openIn`. */
-export function getOpenIn(): "editor" | "panel" {
-	const value = vscode.workspace.getConfiguration("neoGodotTools").get<string>("resource.inspector.openIn");
-	return value === "panel" ? "panel" : "editor";
 }
 
 /**
