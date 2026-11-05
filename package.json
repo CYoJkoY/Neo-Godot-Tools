@@ -74,6 +74,26 @@
 					}
 				],
 				"priority": "option"
+			},
+			{
+				"viewType": "neoGodotTools.scene2dPreview",
+				"displayName": "2D Scene Preview",
+				"selector": [
+					{
+						"filenamePattern": "*.tscn"
+					}
+				],
+				"priority": "option"
+			},
+			{
+				"viewType": "neoGodotTools.shaderPreview",
+				"displayName": "Shader Preview",
+				"selector": [
+					{
+						"filenamePattern": "*.gdshader"
+					}
+				],
+				"priority": "option"
 			}
 		],
 		"commands": [
@@ -475,19 +495,6 @@
 					"default": true,
 					"description": "Whether to enable inlay hints in GDResource (.tscn, .tres, etc) files"
 				},
-				"neoGodotTools.resource.inspector.openIn": {
-					"type": "string",
-					"enum": [
-						"editor",
-						"panel"
-					],
-					"enumDescriptions": [
-						"Open .tres files in a dedicated Resource Inspector editor tab",
-						"Show the Resource Inspector in the side panel"
-					],
-					"default": "editor",
-					"description": "Where the Resource Inspector opens when using the Open Resource Inspector command."
-				},
 				"neoGodotTools.resource.inspector.diagnostics": {
 					"type": "boolean",
 					"default": false,
@@ -787,12 +794,6 @@
 					"id": "neoGodotTools.scenePreview",
 					"name": "Scene Preview",
 					"icon": "resources/godot_icon.svg"
-				},
-				{
-					"id": "neoGodotTools.resourceInspector",
-					"name": "Resource Inspector",
-					"type": "webview",
-					"icon": "resources/godot_icon.svg"
 				}
 			]
 		},
@@ -915,31 +916,6 @@
 				{
 					"command": "neoGodotTools.scenePreview.openCurrentScene",
 					"when": "view == neoGodotTools.scenePreview",
-					"group": "navigation@4"
-				},
-				{
-					"command": "neoGodotTools.resourceInspector.lock",
-					"when": "view == neoGodotTools.resourceInspector && !neoGodotTools.context.resourceInspector.locked",
-					"group": "navigation@1"
-				},
-				{
-					"command": "neoGodotTools.resourceInspector.unlock",
-					"when": "view == neoGodotTools.resourceInspector && neoGodotTools.context.resourceInspector.locked",
-					"group": "navigation@1"
-				},
-				{
-					"command": "neoGodotTools.resourceInspector.refresh",
-					"when": "view == neoGodotTools.resourceInspector",
-					"group": "navigation@2"
-				},
-				{
-					"command": "neoGodotTools.resourceInspector.openScript",
-					"when": "view == neoGodotTools.resourceInspector",
-					"group": "navigation@3"
-				},
-				{
-					"command": "neoGodotTools.resourceInspector.openCurrentResource",
-					"when": "view == neoGodotTools.resourceInspector",
 					"group": "navigation@4"
 				}
 			],
