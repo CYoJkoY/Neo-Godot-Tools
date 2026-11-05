@@ -59,6 +59,7 @@ type PreviewModel = ScenePreviewModel | ShaderPreviewModel;
 
 export function createStaticPreviewProvider(context: vscode.ExtensionContext): vscode.CustomTextEditorProvider {
 	const panels = new Map<string, Set<vscode.WebviewPanel>>();
+	const readyPanels = new Set<vscode.WebviewPanel>();
 	const parser = new SceneParser();
 	const sceneCache = new Map<string, { version: number; scene: Scene }>();
 	const shaderCache = new Map<string, { version: number; model: ShaderPreviewModel }>();
@@ -103,6 +104,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		}
 	};
 	const sendModel = (document: vscode.TextDocument, panel: vscode.WebviewPanel): void => {
+		if (!readyPanels.has(panel)) return;
 		const model = buildModel(document, panel.webview);
 		if (!model) return;
 		panel.webview.options = { ...panel.webview.options, localResourceRoots: previewRoots(document.uri) };
@@ -114,6 +116,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		message: PreviewMessage,
 	): Promise<void> => {
 		if (message.command === "ready") {
+			readyPanels.add(panel);
 			sendModel(document, panel);
 			return;
 		}
@@ -134,6 +137,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			panel.webview.html = html(panel.webview);
 			panel.webview.onDidReceiveMessage((message: PreviewMessage) => void onMessage(document, panel, message));
 			panel.onDidDispose(() => {
+				readyPanels.delete(panel);
 				documentPanels.delete(panel);
 				if (documentPanels.size === 0) panels.delete(key);
 			});
