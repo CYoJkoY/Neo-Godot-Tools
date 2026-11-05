@@ -2,7 +2,16 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.3.0 — 2026-11-05 (pending)
+### 3.3.1 — 2026-11-06 (pending)
+
+Changes since [v3.3.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.0...v3.3.1).
+
+#### Changed
+
+- \[Issue-221\] fix(preview): restore TSCN and GDShader previews ([#222](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/222))
+- \[Issue-223\] perf(preview): optimize TSCN and GDShader preview workflow ([#224](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/224))
+
+### 3.3.0 — 2026-11-06
 
 Changes since [v3.2.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.2.2...v3.3.0).
 
@@ -12,6 +21,10 @@ Changes since [v3.2.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.2.2
 - \[Issue-215\] feat(previews): extend shader and scene preview metadata ([#216](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/216))
 - \[Issue-217\] feat(previews): improve interactive previews and backend request throughput ([#218](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/218))
 - \[Issue-219\] feat(shader-lsp): enable shader document providers ([#220](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/220))
+
+#### Documentation
+
+- **changelog:** update changelog ([8b5d0c2](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/8b5d0c220cc577c12779efede788bcb1c5f43d13))
 
 ### 3.2.2 — 2026-11-04
 
