@@ -55,7 +55,7 @@ interface PreviewMessage {
 	position?: number;
 }
 
-function isPreviewMessage(value: unknown): value is PreviewMessage {
+export function isPreviewMessage(value: unknown): value is PreviewMessage {
 	if (typeof value !== "object" || value === null) return false;
 	const message = value as Record<string, unknown>;
 	if (message["command"] === "ready") return true;

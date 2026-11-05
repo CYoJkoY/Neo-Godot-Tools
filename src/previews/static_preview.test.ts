@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import * as vscode from "vscode";
 import { SceneParser } from "../scene_tools/parser.js";
-import { buildScenePreviewModel, buildShaderPreviewModel } from "./static_preview.js";
+import { buildScenePreviewModel, buildShaderPreviewModel, isPreviewMessage } from "./static_preview.js";
 import { analyzeShaderSource } from "./shader_analysis.js";
 
 function makeDocument(uri: vscode.Uri, source: string): vscode.TextDocument {
@@ -114,6 +114,14 @@ describe("static previews", () => {
 		assert.equal(analyzeShaderSource("").lineCount, 1);
 		assert.equal(analyzeShaderSource("shader_type canvas_item;\nvoid fragment() {}\n").lineCount, 3);
 		assert.equal(analyzeShaderSource("shader_type canvas_item;\r\nvoid fragment() {}\r\n").lineCount, 3);
+	});
+
+	it("accepts only supported preview messages", () => {
+		assert.equal(isPreviewMessage({ command: "ready" }), true);
+		assert.equal(isPreviewMessage({ command: "openSource", position: 12 }), true);
+		assert.equal(isPreviewMessage({ command: "openSource", position: 1.5 }), false);
+		assert.equal(isPreviewMessage({ command: "openSource" }), false);
+		assert.equal(isPreviewMessage(null), false);
 	});
 
 	it("preserves local transforms for rotated and scaled nodes", () => {
