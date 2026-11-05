@@ -1,11 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { get_extension_uri } from "../utils";
-import { createLruCache } from "../utils/lru_cache";
 import { yieldToEventLoop } from "../utils/scheduling";
+import { createLruCache } from "../utils/lru_cache";
 import type { Scene, SceneNode } from "./types";
+import { icon_exists } from "./icon_cache";
 
-const ICON_ROOT = get_extension_uri("resources", "godot_icons").fsPath;
 const DEFAULT_NODE_ICON = "Node";
 /** Skip pathological files while scanning scripts for custom classes. */
 const MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
@@ -15,19 +14,6 @@ const CLASS_INDEX_TTL_MS = 60_000;
  * permanent; the bound only keeps a project with thousands of distinct classes
  * from growing the map forever.
  */
-const iconCache = createLruCache<string, boolean>({ capacity: 2048 });
-
-function icon_exists(className: string): boolean {
-	if (!className) return false;
-	const cached = iconCache.get(className);
-	if (cached !== undefined) return cached;
-	const exists =
-		fs.existsSync(path.join(ICON_ROOT, "light", `${className}.svg`)) ||
-		fs.existsSync(path.join(ICON_ROOT, "dark", `${className}.svg`));
-	iconCache.set(className, exists);
-	return exists;
-}
-
 function res_to_abs(projectDir: string, resPath: string): string | undefined {
 	if (!resPath.startsWith("res://")) return undefined;
 	return path.join(projectDir, resPath.slice("res://".length));
