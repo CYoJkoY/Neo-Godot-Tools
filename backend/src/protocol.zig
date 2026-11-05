@@ -1076,30 +1076,6 @@ fn handleObject(
     return .{ .response = try buildError(allocator, request_id, .unknown_method, "unknown method") };
 }
 
-/// Rejects empty input, malformed input and trailing JSON values before the
-/// dynamic parser runs. `parseFromSliceLeaky` asserts that the scanner has
-/// consumed exactly one document; a scanner precondition keeps that assert
-/// out of the server's reachable input space.
-fn isSingleJsonDocument(arena: Allocator, body: []const u8) !bool {
-    var scanner = std.json.Scanner.initCompleteInput(arena, body);
-    defer scanner.deinit();
-
-    // `peekNextTokenType` only reads from the complete input; unlike `next`
-    // and `skipValue`, it cannot allocate.
-    const first = scanner.peekNextTokenType() catch return false;
-    if (first == .end_of_document) return false;
-
-    scanner.skipValue() catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return false,
-    };
-    const trailing = scanner.next() catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return false,
-    };
-    return trailing == .end_of_document;
-}
-
 fn handleBodyInner(
     allocator: Allocator,
     body: []const u8,
@@ -1108,13 +1084,6 @@ fn handleBodyInner(
     store: ?*symbols.Store,
     registry: ?*metrics.Registry,
 ) BuilderError!Result {
-    const valid_document = isSingleJsonDocument(arena, body) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    if (!valid_document) {
-        return .{ .response = try buildError(allocator, .null, .parse, "body is not valid JSON") };
-    }
-
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{
         .parse_numbers = false,
     }) catch |err| switch (err) {
