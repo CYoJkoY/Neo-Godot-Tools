@@ -108,7 +108,15 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		panel.webview.options = { ...panel.webview.options, localResourceRoots: previewRoots(document.uri) };
 		void panel.webview.postMessage({ type: "model", model });
 	};
-	const onMessage = async (document: vscode.TextDocument, message: PreviewMessage): Promise<void> => {
+	const onMessage = async (
+		document: vscode.TextDocument,
+		panel: vscode.WebviewPanel,
+		message: PreviewMessage,
+	): Promise<void> => {
+		if (message.command === "ready") {
+			sendModel(document, panel);
+			return;
+		}
 		if (message.command !== "openSource" || !Number.isInteger(message.position)) return;
 		const position = Math.max(0, Math.min(message.position ?? 0, document.getText().length));
 		const editor = await vscode.window.showTextDocument(document, { preview: true });
@@ -124,12 +132,11 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			panels.set(key, documentPanels);
 			panel.webview.options = { enableScripts: true, localResourceRoots: previewRoots(document.uri) };
 			panel.webview.html = html(panel.webview);
-			panel.webview.onDidReceiveMessage((message: PreviewMessage) => void onMessage(document, message));
+			panel.webview.onDidReceiveMessage((message: PreviewMessage) => void onMessage(document, panel, message));
 			panel.onDidDispose(() => {
 				documentPanels.delete(panel);
 				if (documentPanels.size === 0) panels.delete(key);
 			});
-			sendModel(document, panel);
 		},
 	};
 	context.subscriptions.push(
