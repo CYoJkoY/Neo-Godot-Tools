@@ -71,6 +71,15 @@ export class SceneNode extends TreeItem {
 	}
 
 	public parse_body(): void {
+		const hasMetadata = this.body.includes("metadata/_custom_type_script = ");
+		const hasScript = this.body.includes("script = ExtResource");
+		const hasTileData = this.body.includes("tile_data");
+		if (!hasMetadata && !hasScript && !hasTileData) {
+			const content = new MarkdownString();
+			content.appendCodeblock(this.body, "gdresource");
+			this.tooltip = content;
+			return;
+		}
 		const lines = this.body.split("\n");
 		const newLines: string[] = [];
 		for (const raw of lines) {
