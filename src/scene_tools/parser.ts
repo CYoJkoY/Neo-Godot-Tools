@@ -92,11 +92,8 @@ export class SceneParser {
 
 	public parse_scene(document: TextDocument): Scene {
 		const filePath = document.uri.fsPath;
-		const scene = this.parse_text(
-			filePath,
-			document.getText(),
-			(offset) => document.lineAt(document.positionAt(offset)).lineNumber + 1,
-		);
+		const text = document.getText();
+		const scene = this.parse_text(filePath, text, lineResolver(text));
 		this.prepare_scene(scene);
 		return scene;
 	}

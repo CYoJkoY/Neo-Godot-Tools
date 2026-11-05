@@ -86,17 +86,21 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 			.map((mode) => mode.trim())
 			.filter(Boolean),
 	);
-	const functions = Array.from(
-		cleanSource.matchAll(
-			/\b(?:void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|mat[234]|[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
+	const functions = new Set(
+		Array.from(
+			cleanSource.matchAll(
+				/\b(?:void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|mat[234]|[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
+			),
+			(match) => match[1],
 		),
-		(match) => match[1],
 	);
 	let depth = 0;
 	let depthLine = 1;
+	const lineCount = [1];
 	// perf: scan braces once; lineResolver avoids repeated prefix splitting.
 	for (let index = 0; index < cleanSource.length; index++) {
 		const character = cleanSource[index];
+		lineCount[0] += character === "\n" ? 1 : 0;
 		if (character === "{") {
 			if (depth === 0) depthLine = lineAt(index);
 			depth++;
@@ -110,8 +114,8 @@ export function analyzeShaderSource(source: string): ShaderAnalysis {
 		cleanSource,
 		shaderType,
 		renderModes,
-		functions: [...new Set(functions)],
-		lineCount: source.length === 0 ? 1 : source.split(/\r?\n/).length,
+		functions: [...functions],
+		lineCount: lineCount[0],
 		diagnostics,
 	};
 }

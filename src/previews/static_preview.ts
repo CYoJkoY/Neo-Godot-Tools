@@ -55,17 +55,31 @@ interface PreviewMessage {
 	position?: number;
 }
 
+export function isPreviewMessage(value: unknown): value is PreviewMessage {
+	if (typeof value !== "object" || value === null) return false;
+	const message = value as Record<string, unknown>;
+	if (message["command"] === "ready") return true;
+	return message["command"] === "openSource" && Number.isInteger(message["position"]);
+}
+
 type PreviewModel = ScenePreviewModel | ShaderPreviewModel;
+type PreviewKind = PreviewModel["kind"];
+
+function previewKind(uri: vscode.Uri): PreviewKind | undefined {
+	const lower = uri.path.toLowerCase();
+	if (lower.endsWith(".tscn")) return "scene";
+	if (/\.(?:gdshader|shader|gdshaderinc)$/.test(lower)) return "shader";
+	return undefined;
+}
 
 export function createStaticPreviewProvider(context: vscode.ExtensionContext): vscode.CustomTextEditorProvider {
 	const panels = new Map<string, Set<vscode.WebviewPanel>>();
+	const readyPanels = new Set<vscode.WebviewPanel>();
 	const parser = new SceneParser();
 	const sceneCache = new Map<string, { version: number; scene: Scene }>();
 	const shaderCache = new Map<string, { version: number; model: ShaderPreviewModel }>();
-	const isPreviewDocument = (document: vscode.TextDocument): boolean => {
-		const lower = document.uri.path.toLowerCase();
-		return lower.endsWith(".tscn") || /\.(?:gdshader|shader|gdshaderinc)$/i.test(lower);
-	};
+	const pendingUpdates = new Map<string, vscode.TextDocument>();
+	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
 		const project = findProjectRoot(documentUri);
@@ -77,7 +91,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		return `<!doctype html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'"><style>${STATIC_PREVIEW_CSS}</style></head><body><header><strong id="title">Preview</strong><span id="meta"></span><nav aria-label="Preview controls"><button id="fit" type="button">Fit</button><button id="zoomOut" type="button">-</button><span id="zoomLabel">100%</span><button id="zoomIn" type="button">+</button></nav></header><main><div id="canvas" aria-label="Static preview" tabindex="0"></div><aside id="details"></aside></main><script nonce="${nonce}">${STATIC_PREVIEW_SCRIPT}</script></body></html>`;
 	};
 	const buildModel = (document: vscode.TextDocument, webview?: vscode.Webview): PreviewModel | undefined => {
-		if (/\.(?:gdshader|shader|gdshaderinc)$/i.test(document.uri.path)) {
+		if (previewKind(document.uri) === "shader") {
 			const key = document.uri.toString();
 			const cached = shaderCache.get(key);
 			if (cached?.version === document.version) return cached.model;
@@ -85,7 +99,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			shaderCache.set(key, { version: document.version, model });
 			return model;
 		}
-		if (!document.uri.path.toLowerCase().endsWith(".tscn")) return undefined;
+		if (previewKind(document.uri) !== "scene") return undefined;
 		try {
 			const key = document.uri.toString();
 			const cached = sceneCache.get(key);
@@ -103,10 +117,25 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		}
 	};
 	const sendModel = (document: vscode.TextDocument, panel: vscode.WebviewPanel): void => {
+		if (!readyPanels.has(panel)) return;
 		const model = buildModel(document, panel.webview);
 		if (!model) return;
 		panel.webview.options = { ...panel.webview.options, localResourceRoots: previewRoots(document.uri) };
 		void panel.webview.postMessage({ type: "model", model });
+	};
+	const queueModelUpdate = (document: vscode.TextDocument): void => {
+		const key = document.uri.toString();
+		const alreadyQueued = pendingUpdates.has(key);
+		pendingUpdates.set(key, document);
+		if (alreadyQueued) return;
+		queueMicrotask(() => {
+			const latest = pendingUpdates.get(key);
+			pendingUpdates.delete(key);
+			if (!latest) return;
+			const documentPanels = panels.get(key);
+			if (!documentPanels) return;
+			Array.from(documentPanels, (panel) => sendModel(latest, panel));
+		});
 	};
 	const onMessage = async (
 		document: vscode.TextDocument,
@@ -114,6 +143,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		message: PreviewMessage,
 	): Promise<void> => {
 		if (message.command === "ready") {
+			readyPanels.add(panel);
 			sendModel(document, panel);
 			return;
 		}
@@ -132,8 +162,11 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			panels.set(key, documentPanels);
 			panel.webview.options = { enableScripts: true, localResourceRoots: previewRoots(document.uri) };
 			panel.webview.html = html(panel.webview);
-			panel.webview.onDidReceiveMessage((message: PreviewMessage) => void onMessage(document, panel, message));
+			panel.webview.onDidReceiveMessage((message: unknown) => {
+				if (isPreviewMessage(message)) void onMessage(document, panel, message);
+			});
 			panel.onDidDispose(() => {
+				readyPanels.delete(panel);
 				documentPanels.delete(panel);
 				if (documentPanels.size === 0) panels.delete(key);
 			});
@@ -149,16 +182,15 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			supportsMultipleEditorsPerDocument: true,
 		}),
 		vscode.workspace.onDidChangeTextDocument((event) => {
-			const documentPanels = panels.get(event.document.uri.toString());
 			if (!isPreviewDocument(event.document)) return;
-			if (event.document.uri.path.toLowerCase().endsWith(".tscn"))
+			if (previewKind(event.document.uri) === "scene")
 				sceneCache.delete(event.document.uri.toString());
-			if (/\.(?:gdshader|shader|gdshaderinc)$/i.test(event.document.uri.path))
+			if (previewKind(event.document.uri) === "shader")
 				shaderCache.delete(event.document.uri.toString());
-			if (!documentPanels) return;
-			Array.from(documentPanels, (panel) => sendModel(event.document, panel));
+			queueModelUpdate(event.document);
 		}),
 		vscode.workspace.onDidCloseTextDocument((document) => {
+			pendingUpdates.delete(document.uri.toString());
 			sceneCache.delete(document.uri.toString());
 			shaderCache.delete(document.uri.toString());
 		}),
@@ -342,7 +374,7 @@ const STATIC_PREVIEW_SCRIPT = [
 	"function multiply(left,right){return{a:left.a*right.a+left.c*right.b,b:left.b*right.a+left.d*right.b,c:left.a*right.c+left.c*right.d,d:left.b*right.c+left.d*right.d,e:left.a*right.e+left.c*right.f+left.e,f:left.b*right.e+left.d*right.f+left.f}}",
 	"function localTransform(node){const angle=node.rotation*Math.PI/180;const cos=Math.cos(angle),sin=Math.sin(angle);return{a:cos*node.scaleX,b:sin*node.scaleX,c:-sin*node.scaleY,d:cos*node.scaleY,e:node.x,f:node.y}}",
 	"function includePoint(point,result){result.minX=Math.min(result.minX,point.x);result.minY=Math.min(result.minY,point.y);result.maxX=Math.max(result.maxX,point.x);result.maxY=Math.max(result.maxY,point.y)}",
-	"function sceneBounds(nodes,parentTransform,result){nodes.forEach((node)=>{const transform=multiply(parentTransform,localTransform(node));[[0,0],[node.width,0],[0,node.height],[node.width,node.height]].forEach((corner)=>includePoint(transformPoint({x:corner[0],y:corner[1]},transform),result));sceneBounds(node.children,transform,result)})}",
+	"function sceneBounds(nodes,parentTransform,result){nodes.forEach((node)=>{const transform=multiply(parentTransform,localTransform(node));includePoint(transformPoint({x:0,y:0},transform),result);includePoint(transformPoint({x:node.width,y:0},transform),result);includePoint(transformPoint({x:0,y:node.height},transform),result);includePoint(transformPoint({x:node.width,y:node.height},transform),result);sceneBounds(node.children,transform,result)})}",
 	"function renderScene(){canvas.replaceChildren();const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');const bounds={minX:0,minY:0,maxX:0,maxY:0};const identity={a:1,b:0,c:0,d:1,e:0,f:0};sceneBounds(model.nodes,identity,bounds);const padding=40;const x=bounds.minX-padding;const y=bounds.minY-padding;const width=Math.max(1,bounds.maxX-bounds.minX+padding*2);const height=Math.max(1,bounds.maxY-bounds.minY+padding*2);svg.setAttribute('viewBox',x+' '+y+' '+width+' '+height);svg.setAttribute('width',String(Math.max(1,width*zoom)));svg.setAttribute('height',String(Math.max(1,height*zoom)));svg.onclick=()=>showDetails(undefined);model.nodes.forEach((node)=>svg.append(nodeElement(node)));canvas.append(svg);if(selectedPath){const selected=document.querySelector('g[data-path=\"'+CSS.escape(selectedPath)+'\"]');selected?.classList.add('selected')}details.replaceChildren();const warnings=model.warnings??[];warnings.forEach((warning)=>{const div=document.createElement('div');div.className='warning';div.textContent=warning;details.append(div)});if(!warnings.length&&!selectedPath)showDetails(undefined);zoomLabel.textContent=Math.round(zoom*100)+'%'}",
 	"function addUniformControl(uniform){const row=document.createElement('label');row.className='uniform';const name=document.createElement('span');name.textContent=uniform.name;row.append(name);const value=document.createElement('span');value.textContent=uniform.defaultValue||uniform.type;row.append(value);if(uniform.hint==='range'){const bounds=(uniform.hintString||'').split(',').map((part)=>Number(part.trim()));const input=document.createElement('input');input.type='range';input.min=String(Number.isFinite(bounds[0])?bounds[0]:0);input.max=String(Number.isFinite(bounds[1])?bounds[1]:1);input.step=String(Number.isFinite(bounds[2])&&bounds[2]>0?bounds[2]:0.01);const initial=Number.parseFloat(uniform.defaultValue||'');input.value=String(Number.isFinite(initial)?Math.min(Number(input.max),Math.max(Number(input.min),initial)):(Number(input.min)+Number(input.max))/2);input.oninput=()=>{value.textContent=input.value};row.append(input)}const hint=document.createElement('small');hint.textContent=uniform.type+(uniform.hintString?' · '+uniform.hintString:'');row.append(hint);details.append(row)}",
 	"function renderShader(){canvas.replaceChildren();const swatch=document.createElement('div');swatch.className='shader-swatch';const swatchText=document.createElement('span');swatchText.textContent=model.shaderType+' material';swatch.append(swatchText);canvas.append(swatch);details.replaceChildren();const h=document.createElement('h3');h.textContent='Shader interface';details.append(h);const info=document.createElement('div');info.textContent='Type: '+model.shaderType+'\nLines: '+model.lineCount+'\nFunctions: '+(model.functions.join(', ')||'none')+'\nRender modes: '+(model.renderModes.join(', ')||'default');info.style.whiteSpace='pre-wrap';details.append(info);const uh=document.createElement('h3');uh.textContent='Uniforms';details.append(uh);model.uniforms.forEach(addUniformControl);(model.diagnostics??[]).forEach((diagnostic)=>{const div=document.createElement('div');div.className='warning';div.textContent='Line '+diagnostic.line+': '+diagnostic.message;details.append(div)});(model.warnings??[]).forEach((warning)=>{const div=document.createElement('div');div.className='warning';div.textContent=warning;details.append(div)})}",
