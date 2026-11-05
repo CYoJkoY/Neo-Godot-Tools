@@ -10,6 +10,7 @@ import { analyzeShaderSource } from "./shader_analysis.js";
 
 export const SCENE_2D_PREVIEW_VIEW_TYPE = "neoGodotTools.scene2dPreview";
 export const SHADER_PREVIEW_VIEW_TYPE = "neoGodotTools.shaderPreview";
+const PREVIEW_UPDATE_DELAY_MS = 16;
 
 interface PreviewNode {
 	path: string;
@@ -83,7 +84,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const parser = new SceneParser();
 	const sceneCache = createLruCache<string, { version: number; scene: Scene }>({ capacity: 32 });
 	const shaderCache = createLruCache<string, { version: number; model: ShaderPreviewModel }>({ capacity: 32 });
-	const pendingUpdates = new Map<string, vscode.TextDocument>();
+	const pendingUpdates = new Map<string, { document: vscode.TextDocument; timer: ReturnType<typeof setTimeout> }>();
 	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
@@ -130,17 +131,20 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	};
 	const queueModelUpdate = (document: vscode.TextDocument): void => {
 		const key = document.uri.toString();
-		const alreadyQueued = pendingUpdates.has(key);
-		pendingUpdates.set(key, document);
-		if (alreadyQueued) return;
-		queueMicrotask(() => {
+		const pending = pendingUpdates.get(key);
+		if (pending !== undefined) {
+			pending.document = document;
+			return;
+		}
+		const timer = setTimeout(() => {
 			const latest = pendingUpdates.get(key);
 			pendingUpdates.delete(key);
 			if (!latest) return;
 			const documentPanels = panels.get(key);
 			if (!documentPanels) return;
-			Array.from(documentPanels, (panel) => sendModel(latest, panel));
-		});
+			Array.from(documentPanels, (panel) => sendModel(latest.document, panel));
+		}, PREVIEW_UPDATE_DELAY_MS);
+		pendingUpdates.set(key, { document, timer });
 	};
 	const onMessage = async (
 		document: vscode.TextDocument,
@@ -173,7 +177,14 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			panel.onDidDispose(() => {
 				readyPanels.delete(panel);
 				documentPanels.delete(panel);
-				if (documentPanels.size === 0) panels.delete(key);
+			if (documentPanels.size === 0) {
+				panels.delete(key);
+				const pending = pendingUpdates.get(key);
+				if (pending !== undefined) {
+					clearTimeout(pending.timer);
+					pendingUpdates.delete(key);
+				}
+			}
 			});
 		},
 	};
@@ -195,7 +206,10 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			queueModelUpdate(event.document);
 		}),
 		vscode.workspace.onDidCloseTextDocument((document) => {
-			pendingUpdates.delete(document.uri.toString());
+			const key = document.uri.toString();
+			const pending = pendingUpdates.get(key);
+			if (pending !== undefined) clearTimeout(pending.timer);
+			pendingUpdates.delete(key);
 			sceneCache.delete(document.uri.toString());
 			shaderCache.delete(document.uri.toString());
 		}),
