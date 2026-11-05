@@ -78,6 +78,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const parser = new SceneParser();
 	const sceneCache = new Map<string, { version: number; scene: Scene }>();
 	const shaderCache = new Map<string, { version: number; model: ShaderPreviewModel }>();
+	const pendingUpdates = new Map<string, vscode.TextDocument>();
 	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
@@ -121,6 +122,20 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		if (!model) return;
 		panel.webview.options = { ...panel.webview.options, localResourceRoots: previewRoots(document.uri) };
 		void panel.webview.postMessage({ type: "model", model });
+	};
+	const queueModelUpdate = (document: vscode.TextDocument): void => {
+		const key = document.uri.toString();
+		const alreadyQueued = pendingUpdates.has(key);
+		pendingUpdates.set(key, document);
+		if (alreadyQueued) return;
+		queueMicrotask(() => {
+			const latest = pendingUpdates.get(key);
+			pendingUpdates.delete(key);
+			if (!latest) return;
+			const documentPanels = panels.get(key);
+			if (!documentPanels) return;
+			Array.from(documentPanels, (panel) => sendModel(latest, panel));
+		});
 	};
 	const onMessage = async (
 		document: vscode.TextDocument,
@@ -167,16 +182,15 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			supportsMultipleEditorsPerDocument: true,
 		}),
 		vscode.workspace.onDidChangeTextDocument((event) => {
-			const documentPanels = panels.get(event.document.uri.toString());
 			if (!isPreviewDocument(event.document)) return;
 			if (previewKind(event.document.uri) === "scene")
 				sceneCache.delete(event.document.uri.toString());
 			if (previewKind(event.document.uri) === "shader")
 				shaderCache.delete(event.document.uri.toString());
-			if (!documentPanels) return;
-			Array.from(documentPanels, (panel) => sendModel(event.document, panel));
+			queueModelUpdate(event.document);
 		}),
 		vscode.workspace.onDidCloseTextDocument((document) => {
+			pendingUpdates.delete(document.uri.toString());
 			sceneCache.delete(document.uri.toString());
 			shaderCache.delete(document.uri.toString());
 		}),
