@@ -56,6 +56,14 @@ interface PreviewMessage {
 }
 
 type PreviewModel = ScenePreviewModel | ShaderPreviewModel;
+type PreviewKind = PreviewModel["kind"];
+
+function previewKind(uri: vscode.Uri): PreviewKind | undefined {
+	const lower = uri.path.toLowerCase();
+	if (lower.endsWith(".tscn")) return "scene";
+	if (/\.(?:gdshader|shader|gdshaderinc)$/.test(lower)) return "shader";
+	return undefined;
+}
 
 export function createStaticPreviewProvider(context: vscode.ExtensionContext): vscode.CustomTextEditorProvider {
 	const panels = new Map<string, Set<vscode.WebviewPanel>>();
@@ -63,10 +71,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const parser = new SceneParser();
 	const sceneCache = new Map<string, { version: number; scene: Scene }>();
 	const shaderCache = new Map<string, { version: number; model: ShaderPreviewModel }>();
-	const isPreviewDocument = (document: vscode.TextDocument): boolean => {
-		const lower = document.uri.path.toLowerCase();
-		return lower.endsWith(".tscn") || /\.(?:gdshader|shader|gdshaderinc)$/i.test(lower);
-	};
+	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
 		const project = findProjectRoot(documentUri);
@@ -78,7 +83,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		return `<!doctype html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'"><style>${STATIC_PREVIEW_CSS}</style></head><body><header><strong id="title">Preview</strong><span id="meta"></span><nav aria-label="Preview controls"><button id="fit" type="button">Fit</button><button id="zoomOut" type="button">-</button><span id="zoomLabel">100%</span><button id="zoomIn" type="button">+</button></nav></header><main><div id="canvas" aria-label="Static preview" tabindex="0"></div><aside id="details"></aside></main><script nonce="${nonce}">${STATIC_PREVIEW_SCRIPT}</script></body></html>`;
 	};
 	const buildModel = (document: vscode.TextDocument, webview?: vscode.Webview): PreviewModel | undefined => {
-		if (/\.(?:gdshader|shader|gdshaderinc)$/i.test(document.uri.path)) {
+		if (previewKind(document.uri) === "shader") {
 			const key = document.uri.toString();
 			const cached = shaderCache.get(key);
 			if (cached?.version === document.version) return cached.model;
@@ -86,7 +91,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			shaderCache.set(key, { version: document.version, model });
 			return model;
 		}
-		if (!document.uri.path.toLowerCase().endsWith(".tscn")) return undefined;
+		if (previewKind(document.uri) !== "scene") return undefined;
 		try {
 			const key = document.uri.toString();
 			const cached = sceneCache.get(key);
@@ -155,9 +160,9 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		vscode.workspace.onDidChangeTextDocument((event) => {
 			const documentPanels = panels.get(event.document.uri.toString());
 			if (!isPreviewDocument(event.document)) return;
-			if (event.document.uri.path.toLowerCase().endsWith(".tscn"))
+			if (previewKind(event.document.uri) === "scene")
 				sceneCache.delete(event.document.uri.toString());
-			if (/\.(?:gdshader|shader|gdshaderinc)$/i.test(event.document.uri.path))
+			if (previewKind(event.document.uri) === "shader")
 				shaderCache.delete(event.document.uri.toString());
 			if (!documentPanels) return;
 			Array.from(documentPanels, (panel) => sendModel(event.document, panel));
