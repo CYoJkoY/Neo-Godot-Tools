@@ -40,9 +40,8 @@ export class MessageIO extends EventEmitter {
 			socket.on("connect", () => {
 				this.socket = socket;
 
-				for (const message of this.messageCache) {
-					socket.write(message);
-				}
+				const cursor = { index: 0 };
+				while (cursor.index < this.messageCache.length) socket.write(this.messageCache[cursor.index++]);
 				this.messageCache.length = 0;
 
 				this.emit("connected");

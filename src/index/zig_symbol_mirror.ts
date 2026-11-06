@@ -213,7 +213,8 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	const forgetUri = (uri: string): void => {
 		const ids = idsByUri.get(uri);
 		if (ids === undefined) return;
-		for (const id of ids) symbolsById.delete(id);
+		// biome-ignore lint/complexity/noForEach: typed ids are deleted in one pass without allocating an array.
+		ids.forEach((id) => symbolsById.delete(id));
 		idsByUri.delete(uri);
 	};
 

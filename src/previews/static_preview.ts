@@ -358,14 +358,14 @@ function createScenePreviewResources(
 	return {
 		textureUri: (imagePath: string): string | undefined => {
 			if (resolved.has(imagePath)) return resolved.get(imagePath);
-			let uri: string | undefined;
-			if (/\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)) {
-				const target = resolveSceneResourcePath(scene.path, imagePath);
-				if (target && fs.existsSync(target)) {
+			const uri = /\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)
+				? (() => {
+					const target = resolveSceneResourcePath(scene.path, imagePath);
+					if (!target || !fs.existsSync(target)) return undefined;
 					const targetUri = vscode.Uri.file(target);
-					if (insideRoots(targetUri, roots)) uri = webview.asWebviewUri(targetUri).toString();
-				}
-			}
+					return insideRoots(targetUri, roots) ? webview.asWebviewUri(targetUri).toString() : undefined;
+				})()
+				: undefined;
 			resolved.set(imagePath, uri);
 			return uri;
 		},
