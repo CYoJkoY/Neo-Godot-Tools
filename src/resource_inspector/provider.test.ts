@@ -488,11 +488,18 @@ shader_param/strength = 0.8
 		try {
 			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
 			fs.writeFileSync(path.join(root, "hero.gd"), "class_name Hero\nextends Resource\n");
+			fs.mkdirSync(path.join(root, "scripts", "nested"), { recursive: true });
+			fs.writeFileSync(path.join(root, "scripts", "nested", "mage.gd"), "class_name Mage\nextends Resource\n");
+			fs.mkdirSync(path.join(root, "node_modules", "ignored"), { recursive: true });
+			fs.writeFileSync(path.join(root, "node_modules", "ignored", "ignored.gd"), "class_name Ignored\n");
 			workspace.workspaceFolders = [{ uri: vscode.Uri.file(root), name: "project", index: 0 }];
 			workspace.findFiles = async () => [];
 			scriptClassNameIndex.invalidate();
 			const found = await scriptClassNameIndex.find("Hero", vscode.Uri.file(path.join(root, "hero.tres")));
 			assert.equal(found?.fsPath, path.join(root, "hero.gd").replace(/\\/g, "/"));
+			const nested = await scriptClassNameIndex.find("Mage", vscode.Uri.file(path.join(root, "mage.tres")));
+			assert.equal(nested?.fsPath, path.join(root, "scripts", "nested", "mage.gd").replace(/\\/g, "/"));
+			assert.equal(await scriptClassNameIndex.find("Ignored", vscode.Uri.file(path.join(root, "ignored.tres"))), undefined);
 		} finally {
 			workspace.workspaceFolders = previousFolders;
 			workspace.findFiles = previousFindFiles;
