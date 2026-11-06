@@ -108,6 +108,7 @@ interface MemoryBackendOptions {
 	/** Called with the uris of every ingest and the uri of every removal. */
 	readonly onIngest?: (uris: readonly string[]) => void;
 	readonly onRemove?: (uri: string) => void;
+	readonly onQuery?: (query: string) => void;
 }
 
 /** Keeps the native table in memory, so a flush can succeed without the binary. */
@@ -142,7 +143,10 @@ function memoryBackend(options: MemoryBackendOptions = {}): ZigBackend {
 			files: idsByUri.size,
 			symbols: [...idsByUri.values()].reduce((total, ids) => total + ids.length, 0),
 		}),
-		querySymbols: async () => new Uint32Array([...idsByUri.values()].flatMap((ids) => [...ids])),
+		querySymbols: async (_revision, query) => {
+			options.onQuery?.(query);
+			return new Uint32Array([...idsByUri.values()].flatMap((ids) => [...ids]));
+		},
 	});
 }
 
@@ -373,6 +377,27 @@ describe("ZigSymbolMirror", () => {
 			gate.release();
 			await query;
 			await waitFor(() => removals.includes(removed), "the removal of the deleted file");
+		} finally {
+			mirror.dispose();
+		}
+	});
+
+	it("coalesces concurrent native queries for the same prefix", async () => {
+		const index = workspace(COLLATION_SOURCES);
+		let queryCalls = 0;
+		const onQuery = (query: string): void => {
+			if (query === "script") queryCalls += 1;
+		};
+		const mirror = createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(index.symbols),
+			backend: memoryBackend({ onQuery }),
+		});
+		try {
+			for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
+			await awaitNative(mirror);
+			const [first, second] = await Promise.all([mirror.workspaceSymbols("script"), mirror.workspaceSymbols("script")]);
+			assert.deepEqual(first, second);
+			assert.equal(queryCalls, 1);
 		} finally {
 			mirror.dispose();
 		}

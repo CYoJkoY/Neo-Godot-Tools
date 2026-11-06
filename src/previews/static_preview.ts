@@ -5,10 +5,12 @@ import { parseShaderUniforms } from "../resource_inspector/metadata.js";
 import { type VariantValue, parseVariant } from "../resource_inspector/values.js";
 import { SceneParser } from "../scene_tools/parser.js";
 import { Scene, SceneNode } from "../scene_tools/types.js";
+import { createLruCache } from "../utils/lru_cache.js";
 import { analyzeShaderSource } from "./shader_analysis.js";
 
 export const SCENE_2D_PREVIEW_VIEW_TYPE = "neoGodotTools.scene2dPreview";
 export const SHADER_PREVIEW_VIEW_TYPE = "neoGodotTools.shaderPreview";
+const PREVIEW_UPDATE_DELAY_MS = 16;
 
 interface PreviewNode {
 	path: string;
@@ -50,6 +52,10 @@ interface ShaderPreviewModel {
 	warnings: string[];
 }
 
+interface ScenePreviewResources {
+	textureUri(imagePath: string): string | undefined;
+}
+
 interface PreviewMessage {
 	command?: string;
 	position?: number;
@@ -76,9 +82,9 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const panels = new Map<string, Set<vscode.WebviewPanel>>();
 	const readyPanels = new Set<vscode.WebviewPanel>();
 	const parser = new SceneParser();
-	const sceneCache = new Map<string, { version: number; scene: Scene }>();
-	const shaderCache = new Map<string, { version: number; model: ShaderPreviewModel }>();
-	const pendingUpdates = new Map<string, vscode.TextDocument>();
+	const sceneCache = createLruCache<string, { version: number; scene: Scene }>({ capacity: 32 });
+	const shaderCache = createLruCache<string, { version: number; model: ShaderPreviewModel }>({ capacity: 32 });
+	const pendingUpdates = new Map<string, { document: vscode.TextDocument; timer: ReturnType<typeof setTimeout> }>();
 	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
@@ -125,17 +131,20 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	};
 	const queueModelUpdate = (document: vscode.TextDocument): void => {
 		const key = document.uri.toString();
-		const alreadyQueued = pendingUpdates.has(key);
-		pendingUpdates.set(key, document);
-		if (alreadyQueued) return;
-		queueMicrotask(() => {
+		const pending = pendingUpdates.get(key);
+		if (pending !== undefined) {
+			pending.document = document;
+			return;
+		}
+		const timer = setTimeout(() => {
 			const latest = pendingUpdates.get(key);
 			pendingUpdates.delete(key);
 			if (!latest) return;
 			const documentPanels = panels.get(key);
 			if (!documentPanels) return;
-			Array.from(documentPanels, (panel) => sendModel(latest, panel));
-		});
+			Array.from(documentPanels, (panel) => sendModel(latest.document, panel));
+		}, PREVIEW_UPDATE_DELAY_MS);
+		pendingUpdates.set(key, { document, timer });
 	};
 	const onMessage = async (
 		document: vscode.TextDocument,
@@ -168,7 +177,14 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			panel.onDidDispose(() => {
 				readyPanels.delete(panel);
 				documentPanels.delete(panel);
-				if (documentPanels.size === 0) panels.delete(key);
+			if (documentPanels.size === 0) {
+				panels.delete(key);
+				const pending = pendingUpdates.get(key);
+				if (pending !== undefined) {
+					clearTimeout(pending.timer);
+					pendingUpdates.delete(key);
+				}
+			}
 			});
 		},
 	};
@@ -190,7 +206,10 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			queueModelUpdate(event.document);
 		}),
 		vscode.workspace.onDidCloseTextDocument((document) => {
-			pendingUpdates.delete(document.uri.toString());
+			const key = document.uri.toString();
+			const pending = pendingUpdates.get(key);
+			if (pending !== undefined) clearTimeout(pending.timer);
+			pendingUpdates.delete(key);
 			sceneCache.delete(document.uri.toString());
 			shaderCache.delete(document.uri.toString());
 		}),
@@ -201,13 +220,14 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 export function buildScenePreviewModel(scene: Scene, webview?: vscode.Webview): ScenePreviewModel {
 	const warnings: string[] = [];
 	const root = scene.root;
-	const nodes = root ? [buildPreviewNode(root, scene, warnings, webview)] : [];
+	const resources = createScenePreviewResources(scene, webview);
+	const nodes = root ? [buildPreviewNode(root, scene, warnings, resources)] : [];
 	return { kind: "scene", uri: vscode.Uri.file(scene.path).toString(), title: scene.title, nodes, warnings };
 }
 
 export function buildShaderPreviewModel(source: string, uri: vscode.Uri): ShaderPreviewModel {
 	const analysis = analyzeShaderSource(source);
-	const uniforms = parseShaderUniforms(analysis.cleanSource).map((uniform) => ({
+	const uniforms = parseShaderUniforms(analysis.cleanSource, "shader_parameter/", true).map((uniform) => ({
 		name: uniform.name.replace(/^shader_parameter\//, "").replace(/^shader_param\//, ""),
 		type: uniform.type,
 		defaultValue: uniform.defaultValue,
@@ -235,7 +255,12 @@ export function buildShaderPreviewModel(source: string, uri: vscode.Uri): Shader
 	};
 }
 
-function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], webview?: vscode.Webview): PreviewNode {
+function buildPreviewNode(
+	node: SceneNode,
+	scene: Scene,
+	warnings: string[],
+	resources?: ScenePreviewResources,
+): PreviewNode {
 	const values = new Map(node.properties.map((property) => [property.name, parseVariant(property.raw).value]));
 	const position = vector(values.get("position"));
 	const scale = vector(values.get("scale"), [1, 1]) ?? [1, 1];
@@ -265,9 +290,9 @@ function buildPreviewNode(node: SceneNode, scene: Scene, warnings: string[], web
 		color: color(values.get("color"), node.className),
 		text: text(values.get("text")),
 		texturePath,
-		textureUri: texturePath ? imageUriForScene(scene, texturePath, webview) : undefined,
+		textureUri: texturePath ? resources?.textureUri(texturePath) : undefined,
 		properties: node.properties.map((property) => ({ name: property.name, value: property.raw })),
-		children: node.children.map((child) => buildPreviewNode(child, scene, warnings, webview)),
+		children: node.children.map((child) => buildPreviewNode(child, scene, warnings, resources)),
 	};
 }
 
@@ -319,18 +344,32 @@ function findProjectRoot(uri: vscode.Uri): vscode.Uri | undefined {
 	return vscode.workspace.getWorkspaceFolder(uri)?.uri;
 }
 
-function imageUriForScene(scene: Scene, imagePath: string, webview?: vscode.Webview): string | undefined {
-	if (!webview?.asWebviewUri || !/\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)) return undefined;
-	const target = resolveSceneResourcePath(scene.path, imagePath);
-	if (!target || !fs.existsSync(target)) return undefined;
-	const targetUri = vscode.Uri.file(target);
+function createScenePreviewResources(
+	scene: Scene,
+	webview: vscode.Webview | undefined,
+): ScenePreviewResources | undefined {
+	if (!webview?.asWebviewUri) return undefined;
 	const roots = [
 		findProjectRoot(vscode.Uri.file(scene.path)),
 		...(vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? []),
 		vscode.Uri.file(path.dirname(scene.path)),
 	].filter((root): root is vscode.Uri => Boolean(root));
-	if (!insideRoots(targetUri, roots)) return undefined;
-	return webview.asWebviewUri(targetUri).toString();
+	const resolved = new Map<string, string | undefined>();
+	return {
+		textureUri: (imagePath: string): string | undefined => {
+			if (resolved.has(imagePath)) return resolved.get(imagePath);
+			const uri = /\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)
+				? (() => {
+					const target = resolveSceneResourcePath(scene.path, imagePath);
+					if (!target || !fs.existsSync(target)) return undefined;
+					const targetUri = vscode.Uri.file(target);
+					return insideRoots(targetUri, roots) ? webview.asWebviewUri(targetUri).toString() : undefined;
+				})()
+				: undefined;
+			resolved.set(imagePath, uri);
+			return uri;
+		},
+	};
 }
 
 function resolveSceneResourcePath(scenePath: string, resourcePath: string): string | undefined {

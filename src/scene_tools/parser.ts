@@ -93,7 +93,7 @@ export class SceneParser {
 	public parse_scene(document: TextDocument): Scene {
 		const filePath = document.uri.fsPath;
 		const text = document.getText();
-		const scene = this.parse_text(filePath, text, lineResolver(text));
+		const scene = this.parse_text(filePath, text, lineResolver(text), fs.statSync(filePath).mtimeMs);
 		this.prepare_scene(scene);
 		return scene;
 	}
@@ -113,7 +113,7 @@ export class SceneParser {
 			return undefined;
 		}
 
-		return this.parse_text(filePath, text, lineResolver(text));
+		return this.parse_text(filePath, text, lineResolver(text), stats.mtimeMs);
 	}
 
 	private prepare_scene(scene: Scene): void {
@@ -150,17 +150,21 @@ export class SceneParser {
 	 * anchored alternation walks the file once and keeps the document order that
 	 * the section-body slices rely on.
 	 */
-	private parse_text(filePath: string, text: string, lineAtOffset: (offset: number) => number): Scene {
-		const stats = fs.statSync(filePath);
+	private parse_text(
+		filePath: string,
+		text: string,
+		lineAtOffset: (offset: number) => number,
+		mtime: number,
+	): Scene {
 		const sourceFingerprint = createHash("sha1").update(text).digest("hex");
 		const existing = this.scenes.get(filePath);
-		if (existing && existing.mtime === stats.mtimeMs && existing.sourceFingerprint === sourceFingerprint)
+		if (existing && existing.mtime === mtime && existing.sourceFingerprint === sourceFingerprint)
 			return existing;
 
 		const scene = new Scene({
 			path: filePath,
 			title: basename(filePath),
-			mtime: stats.mtimeMs,
+			mtime,
 			source: text,
 			fingerprint: sourceFingerprint,
 		});
@@ -180,7 +184,7 @@ export class SceneParser {
 			if (kind === "ext_resource") {
 				const attributes = section_attributes(line);
 				if (!attributes.id) continue;
-				scene.externalResources.set(attributes.id, {
+				const resource = {
 					body: line,
 					path: attributes.path,
 					type: attributes.type,
@@ -188,7 +192,9 @@ export class SceneParser {
 					id: attributes.id,
 					index,
 					line: lineAtOffset(index),
-				});
+				};
+				scene.externalResources.set(attributes.id, resource);
+				if (resource.uid) scene.externalResourcesByUid.set(resource.uid, resource);
 				continue;
 			}
 
@@ -472,8 +478,7 @@ export class SceneParser {
 	private resolve_custom_type(scene: Scene, node: SceneNode): string | undefined {
 		let resource: GDResourceLike | undefined;
 		if (node.customTypeScriptId) resource = scene.externalResources.get(node.customTypeScriptId);
-		if (!resource && node.customTypeScriptUid)
-			resource = [...scene.externalResources.values()].find((item) => item.uid === node.customTypeScriptUid);
+		if (!resource && node.customTypeScriptUid) resource = scene.externalResourcesByUid.get(node.customTypeScriptUid);
 		if (!resource && node.customTypeScriptSubResourceId) {
 			const subResource = scene.subResources.get(node.customTypeScriptSubResourceId);
 			const scriptId = subResource?.body.match(/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/)?.[1];

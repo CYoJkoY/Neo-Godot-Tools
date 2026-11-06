@@ -97,9 +97,10 @@ export class ScriptClassNameIndex {
 		const result: vscode.Uri[] = [];
 		const skip = new Set([".git", ".godot", ".vscode", "node_modules", "out", "build", "bin"]);
 		const queue: string[] = [root];
-		while (queue.length) {
+		const cursor = { index: 0 };
+		while (cursor.index < queue.length) {
 			if (result.length > 20_000) break;
-			const current = queue.shift()!;
+			const current = queue[cursor.index++];
 			let entries: fs.Dirent[];
 			try {
 				entries = await fs.promises.readdir(current, { withFileTypes: true });

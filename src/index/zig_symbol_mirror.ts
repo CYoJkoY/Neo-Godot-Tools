@@ -17,6 +17,7 @@ import {
 	createZigBackend,
 } from "../backend/zig_backend.js";
 import { withTimeout } from "../utils/scheduling.js";
+import { createLruCache } from "../utils/lru_cache.js";
 import { asciiCollationSupported, isPrintableAscii } from "./ascii_collation.js";
 import type { SymbolIndex } from "./symbol_index.js";
 import type { IndexedSymbol } from "./symbol.js";
@@ -126,7 +127,8 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	const removals = new Map<string, number>();
 	const symbolsById = new Map<number, IndexedSymbol>();
 	const idsByUri = new Map<string, Uint32Array>();
-	const queryCache = new Map<string, readonly IndexedSymbol[]>();
+	const queryCache = createLruCache<string, readonly IndexedSymbol[]>({ capacity: MAX_CACHED_QUERIES });
+	const queryInFlight = new Map<string, Promise<readonly IndexedSymbol[] | undefined>>();
 	const state = {
 		revision: 0,
 		stamp: 0,
@@ -175,6 +177,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		upserts.clear();
 		removals.clear();
 		queryCache.clear();
+		queryInFlight.clear();
 		report(`Zig symbol mirror is off: ${reason}`);
 		return false;
 	};
@@ -186,12 +189,12 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		upserts.clear();
 		removals.clear();
 		queryCache.clear();
+		queryInFlight.clear();
 		report(`Zig symbol mirror is off: ${reason}`);
 		return false;
 	};
 
 	const cacheQuery = (query: string, symbols: readonly IndexedSymbol[]): readonly IndexedSymbol[] => {
-		if (queryCache.size >= MAX_CACHED_QUERIES) queryCache.clear();
 		queryCache.set(query, symbols);
 		return symbols;
 	};
@@ -210,7 +213,8 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	const forgetUri = (uri: string): void => {
 		const ids = idsByUri.get(uri);
 		if (ids === undefined) return;
-		Array.from(ids).map((id) => symbolsById.delete(id));
+		// biome-ignore lint/complexity/noForEach: typed ids are deleted in one pass without allocating an array.
+		ids.forEach((id) => symbolsById.delete(id));
 		idsByUri.delete(uri);
 	};
 
@@ -242,6 +246,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		}
 		state.revision = result.revision;
 		queryCache.clear();
+		queryInFlight.clear();
 		return true;
 	};
 
@@ -292,6 +297,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		state.revision = applied;
 		forgetUri(uri);
 		queryCache.clear();
+		queryInFlight.clear();
 		if (removals.get(uri) === stamp) removals.delete(uri);
 		return drainRemovals();
 	};
@@ -333,6 +339,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		symbolsById.clear();
 		idsByUri.clear();
 		queryCache.clear();
+		queryInFlight.clear();
 		if (!(await ingestAll(snapshot))) return false;
 		const digest = await backend.digestSymbols().catch((error: unknown) => {
 			recordFailure(error);
@@ -473,8 +480,12 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	};
 
 	const queryNative = (query: string, retried: boolean): Promise<readonly IndexedSymbol[] | undefined> => {
+		if (!retried) {
+			const pending = queryInFlight.get(query);
+			if (pending !== undefined) return pending;
+		}
 		const revision = state.revision;
-		return backend.querySymbols(revision, query).then(
+		const request = backend.querySymbols(revision, query).then(
 			// Ids only mean something while the table that issued them is current;
 			// a concurrent flush bumps the revision and falls back to the index.
 			(ids) => (state.revision === revision ? readIds(query, ids) : undefined),
@@ -485,6 +496,18 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 				return resync().then((restored) => (restored ? queryNative(query, true) : undefined));
 			},
 		);
+		if (!retried) {
+			queryInFlight.set(query, request);
+			void request.then(
+				() => {
+					if (queryInFlight.get(query) === request) queryInFlight.delete(query);
+				},
+				() => {
+					if (queryInFlight.get(query) === request) queryInFlight.delete(query);
+				},
+			);
+		}
+		return request;
 	};
 
 	const workspaceSymbols = async (query: string): Promise<readonly IndexedSymbol[] | undefined> => {
@@ -538,6 +561,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		symbolsById.clear();
 		idsByUri.clear();
 		queryCache.clear();
+		queryInFlight.clear();
 		// The native store still holds the old table; the next flush rebuilds it.
 		state.synced = false;
 	};
@@ -552,6 +576,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		symbolsById.clear();
 		idsByUri.clear();
 		queryCache.clear();
+		queryInFlight.clear();
 		if (ownsBackend) void backend.shutdown().catch(() => undefined);
 	};
 

@@ -2422,11 +2422,9 @@ function wrap_long_ternary_expression(
 	if (expressionStart <= 0 && firstValue !== "return") return undefined;
 	if (expressionStart >= firstIfIndex) return undefined;
 
-	const elseIndexes = markers
-		.filter((marker) => marker.value === "else")
-		.map((marker) => marker.index);
-	const segments = [...elseIndexes, tokens.length].map((endIndex, segmentIndex) => {
-		const segmentStart = segmentIndex === 0 ? expressionStart : elseIndexes[segmentIndex - 1];
+	const markerIndexes = markers.map((marker) => marker.index);
+	const segments = [...markerIndexes, tokens.length].map((endIndex, segmentIndex) => {
+		const segmentStart = segmentIndex === 0 ? expressionStart : markerIndexes[segmentIndex - 1];
 		return renderedTokens.slice(segmentStart, endIndex).join("").trim();
 	});
 	if (segments.some((segment) => segment.length === 0)) return undefined;

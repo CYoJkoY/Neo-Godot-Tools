@@ -324,9 +324,7 @@ export class ScenePreviewProvider
 			}
 
 			if (node.customTypeScriptUid) {
-				const resource = [...source.externalResources.values()].find(
-					(resource) => resource.uid === node.customTypeScriptUid,
-				);
+				const resource = source.externalResourcesByUid.get(node.customTypeScriptUid);
 				if (resource?.path) return resource;
 			}
 
@@ -419,10 +417,7 @@ export class ScenePreviewProvider
 
 	private get_scene_children(element?: SceneNode): SceneNode[] {
 		if (!this.scene?.root) return [];
-		if (!element) return [this.scene.root];
-
-		const parentPath = element.path;
-		return [...this.scene.nodes.values()].filter((node) => node !== this.scene?.root && node.parent === parentPath);
+		return element ? element.children : [this.scene.root];
 	}
 
 	public async getChildren(element?: SceneTreeElement): Promise<SceneTreeElement[]> {

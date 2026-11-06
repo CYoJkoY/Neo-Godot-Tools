@@ -582,11 +582,12 @@ export function parseScriptExports(source: string): PropertyMetadata[] {
 export function parseShaderUniforms(
 	shaderSource: string | undefined,
 	prefix: "shader_parameter/" | "shader_param/" = "shader_parameter/",
+	commentsStripped = false,
 ): PropertyMetadata[] {
 	if (!shaderSource) return [];
-	const withoutComments = shaderSource
-		.replace(/\/\*[\s\S]*?\*\//g, "")
-		.replace(/\/\/[^\n]*/g, "");
+	const withoutComments = commentsStripped
+		? shaderSource
+		: shaderSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 	const results: PropertyMetadata[] = [];
 	const uniformRe = /\buniform\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([^=;]+))?\s*(?:=\s*([^;]+))?\s*;/g;
 

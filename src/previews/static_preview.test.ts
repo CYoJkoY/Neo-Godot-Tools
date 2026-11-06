@@ -63,6 +63,32 @@ describe("static previews", () => {
 		}
 	});
 
+	it("caches duplicate scene texture URI resolution", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-scene-texture-cache-"));
+		try {
+			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
+			fs.mkdirSync(path.join(root, "assets"));
+			fs.writeFileSync(path.join(root, "assets", "icon.svg"), "<svg/>");
+			const scenePath = path.join(root, "cache.tscn");
+			const source = `[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Texture2D" path="res://assets/icon.svg" id="1_icon"]\n\n[node name="Root" type="Node2D"]\n\n[node name="First" type="Sprite2D" parent="."]\ntexture = ExtResource("1_icon")\n\n[node name="Second" type="Sprite2D" parent="."]\ntexture = ExtResource("1_icon")\n`;
+			fs.writeFileSync(scenePath, source);
+			const scene = new SceneParser().parse_scene(makeDocument(vscode.Uri.file(scenePath), source));
+			let calls = 0;
+			const webview = {
+				asWebviewUri: (uri: vscode.Uri) => {
+					calls += 1;
+					return vscode.Uri.parse(uri.toString());
+				},
+			} as unknown as vscode.Webview;
+
+			const model = buildScenePreviewModel(scene, webview);
+			assert.equal(model.nodes[0]?.children.length, 2);
+			assert.equal(calls, 1);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("extracts canvas shader uniforms and warns for unsupported preview types", () => {
 		const uri = vscode.Uri.file(path.join(os.tmpdir(), "preview.gdshader"));
 		const model = buildShaderPreviewModel(

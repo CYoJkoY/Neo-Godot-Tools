@@ -1,11 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { get_extension_uri } from "../utils";
-import { createLruCache } from "../utils/lru_cache";
 import { yieldToEventLoop } from "../utils/scheduling";
+import { createLruCache } from "../utils/lru_cache";
 import type { Scene, SceneNode } from "./types";
+import { icon_exists } from "./icon_cache";
 
-const ICON_ROOT = get_extension_uri("resources", "godot_icons").fsPath;
 const DEFAULT_NODE_ICON = "Node";
 /** Skip pathological files while scanning scripts for custom classes. */
 const MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
@@ -15,19 +14,6 @@ const CLASS_INDEX_TTL_MS = 60_000;
  * permanent; the bound only keeps a project with thousands of distinct classes
  * from growing the map forever.
  */
-const iconCache = createLruCache<string, boolean>({ capacity: 2048 });
-
-function icon_exists(className: string): boolean {
-	if (!className) return false;
-	const cached = iconCache.get(className);
-	if (cached !== undefined) return cached;
-	const exists =
-		fs.existsSync(path.join(ICON_ROOT, "light", `${className}.svg`)) ||
-		fs.existsSync(path.join(ICON_ROOT, "dark", `${className}.svg`));
-	iconCache.set(className, exists);
-	return exists;
-}
-
 function res_to_abs(projectDir: string, resPath: string): string | undefined {
 	if (!resPath.startsWith("res://")) return undefined;
 	return path.join(projectDir, resPath.slice("res://".length));
@@ -104,9 +90,10 @@ class ClassNameIndex {
 		const found = new Map<string, string>();
 		const skip = new Set([".git", ".godot", ".vscode", "bin", "build", "node_modules", "out"]);
 		const queue: string[] = [dir];
+		const cursor = { index: 0 };
 		let scanned = 0;
-		while (queue.length) {
-			const current = queue.shift()!;
+		while (cursor.index < queue.length) {
+			const current = queue[cursor.index++];
 			let entries: fs.Dirent[];
 			try {
 				entries = await fs.promises.readdir(current, { withFileTypes: true });
@@ -211,11 +198,8 @@ function node_script_path(node: SceneNode, scene: Scene, projectDir: string | un
 	}
 	const uids = [node.customTypeScriptUid].filter(Boolean);
 	if (uids.length > 0) {
-		for (const resource of scene.externalResources.values()) {
-			if (resource.uid && uids.includes(resource.uid) && projectDir) {
-				return res_to_abs(projectDir, resource.path);
-			}
-		}
+		const resource = scene.externalResourcesByUid.get(uids[0]);
+		if (resource?.path && projectDir) return res_to_abs(projectDir, resource.path);
 	}
 	const subId = node.customTypeScriptSubResourceId;
 	if (subId) {
@@ -243,10 +227,11 @@ export async function apply_custom_class_icons(scene: Scene): Promise<void> {
 	const projectDir = find_project_dir(scene.path);
 	const visited = new Set<Scene>();
 	const queue: Scene[] = [scene];
+	const cursor = { index: 0 };
 	let processed = 0;
 
-	while (queue.length > 0) {
-		const current = queue.shift()!;
+	while (cursor.index < queue.length) {
+		const current = queue[cursor.index++];
 		if (visited.has(current)) continue;
 		visited.add(current);
 

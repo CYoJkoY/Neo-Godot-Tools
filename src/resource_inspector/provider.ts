@@ -733,6 +733,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	/** Builds the file-backed portion without reading scripts or querying the LSP. */
 	private buildFastModel(document: vscode.TextDocument, webview?: vscode.Webview): ResourceModel {
 		const parsed = this.parsedDocument(document);
+		const imagePreview = createImagePreviewResolver(document.uri, webview);
 		const metadata = collectPropertyMetadata({ document: parsed });
 		const known = new Map(metadata.map((property) => [property.name, property]));
 		const extResources = parsed.extResources.map((resource) => {
@@ -743,7 +744,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				path: resource.path,
 				uid: resource.uid,
 				broken: !uri || !fs.existsSync(uri.fsPath),
-				imagePreview: imagePreviewForPath(document.uri, resource.path, webview),
+				imagePreview: imagePreview(resource.path),
 			};
 		});
 		const properties = this.mergePropertiesWithMetadata(parsed.properties, metadata, known);
@@ -751,7 +752,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			this.buildFastSubResourceModel(parsed, subResource),
 		);
 		for (const property of [...properties, ...subResources.flatMap((sub) => sub.properties)]) {
-			property.imagePreview = imagePreviewForPath(document.uri, imagePathForValue(property.raw, parsed), webview);
+			property.imagePreview = imagePreview(imagePathForValue(property.raw, parsed));
 		}
 		return {
 			uri: document.uri.toString(),
@@ -792,6 +793,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 
 	async buildModel(document: vscode.TextDocument, webview?: vscode.Webview): Promise<ResourceModel> {
 		const parsed = this.parsedDocument(document);
+		const imagePreview = createImagePreviewResolver(document.uri, webview);
 		const { scriptSource, scriptPath, nativeBaseType } = await this.readScriptChain(document.uri, parsed);
 		const shaderSource =
 			(nativeBaseType ?? parsed.resourceType) === "ShaderMaterial"
@@ -817,7 +819,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				path: resource.path,
 				uid: resource.uid,
 				broken,
-				imagePreview: imagePreviewForPath(document.uri, resource.path, webview),
+				imagePreview: imagePreview(resource.path),
 			};
 		});
 
@@ -827,7 +829,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		);
 
 		for (const property of [...properties, ...subResources.flatMap((sub) => sub.properties)]) {
-			property.imagePreview = imagePreviewForPath(document.uri, imagePathForValue(property.raw, parsed), webview);
+			property.imagePreview = imagePreview(imagePathForValue(property.raw, parsed));
 		}
 
 		return {
@@ -1333,6 +1335,20 @@ function insidePreviewRoots(uri: vscode.Uri, roots: vscode.Uri[]): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function createImagePreviewResolver(
+	resourceUri: vscode.Uri,
+	webview?: vscode.Webview,
+): (imagePath?: string) => ImagePreview | undefined {
+	const previews = new Map<string, ImagePreview | undefined>();
+	return (imagePath?: string): ImagePreview | undefined => {
+		const key = imagePath ?? "";
+		if (previews.has(key)) return previews.get(key);
+		const preview = imagePreviewForPath(resourceUri, imagePath, webview);
+		previews.set(key, preview);
+		return preview;
+	};
 }
 
 function imagePreviewForPath(

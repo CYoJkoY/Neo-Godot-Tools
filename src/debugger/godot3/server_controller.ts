@@ -63,6 +63,7 @@ class Command {
 
 export class ServerController {
 	private commandBuffer: Buffer[] = [];
+	private commandBufferIndex = 0;
 	private encoder = new VariantEncoder();
 	private decoder = new VariantDecoder();
 	private draining = false;
@@ -645,12 +646,13 @@ export class ServerController {
 			return;
 		}
 
-		while (!this.draining && this.commandBuffer.length > 0) {
-			const command = this.commandBuffer.shift();
-			if (command === undefined) {
-				break;
-			}
+		while (!this.draining && this.commandBufferIndex < this.commandBuffer.length) {
+			const command = this.commandBuffer[this.commandBufferIndex++];
 			this.draining = !this.socket.write(command);
+		}
+		if (this.commandBufferIndex === this.commandBuffer.length) {
+			this.commandBuffer.length = 0;
+			this.commandBufferIndex = 0;
 		}
 	}
 

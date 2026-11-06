@@ -1,11 +1,8 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { MarkdownString, TreeItem, TreeItemCollapsibleState, Uri } from "vscode";
-import { get_extension_uri } from "../utils";
 import type { SceneProperty } from "./properties";
+import { icon_exists, icon_path } from "./icon_cache";
 const DEFAULT_NODE_ICON = "Node";
 
-const iconDir = get_extension_uri("resources", "godot_icons").fsPath;
 
 /** Everything the parser knows when it creates a node. */
 export interface SceneNodeInit {
@@ -71,6 +68,15 @@ export class SceneNode extends TreeItem {
 	}
 
 	public parse_body(): void {
+		const hasMetadata = this.body.includes("metadata/_custom_type_script = ");
+		const hasScript = this.body.includes("script = ExtResource");
+		const hasTileData = this.body.includes("tile_data");
+		if (!hasMetadata && !hasScript && !hasTileData) {
+			const content = new MarkdownString();
+			content.appendCodeblock(this.body, "gdresource");
+			this.tooltip = content;
+			return;
+		}
 		const lines = this.body.split("\n");
 		const newLines: string[] = [];
 		for (const raw of lines) {
@@ -107,11 +113,9 @@ export class SceneNode extends TreeItem {
 	}
 
 	private update_icon(): void {
-		const iconName = `${this.iconClass || this.className}.svg`;
-		const hasIcon = (name: string) =>
-			fs.existsSync(path.join(iconDir, "light", name)) || fs.existsSync(path.join(iconDir, "dark", name));
-		if (!hasIcon(iconName)) {
-			if (!this.iconClass && !hasIcon(`${this.className}.svg`)) {
+		const iconClass = this.iconClass || this.className;
+		if (!icon_exists(iconClass)) {
+			if (!this.iconClass && !icon_exists(this.className)) {
 				this.setIconClass(DEFAULT_NODE_ICON);
 				return;
 			}
@@ -119,8 +123,8 @@ export class SceneNode extends TreeItem {
 			return;
 		}
 		this.iconPath = {
-			light: Uri.file(path.join(iconDir, "light", iconName)),
-			dark: Uri.file(path.join(iconDir, "dark", iconName)),
+			light: Uri.file(icon_path(iconClass, "light")),
+			dark: Uri.file(icon_path(iconClass, "dark")),
 		};
 	}
 }
@@ -154,6 +158,7 @@ export class Scene {
 	public readonly sourceFingerprint: string;
 	public root: SceneNode | undefined;
 	public externalResources = new Map<string, GDResource>();
+	public externalResourcesByUid = new Map<string, GDResource>();
 	public subResources = new Map<string, SceneResource>();
 	public nodes = new Map<string, SceneNode>();
 
