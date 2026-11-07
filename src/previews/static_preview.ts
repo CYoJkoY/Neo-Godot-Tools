@@ -6,11 +6,15 @@ import { type VariantValue, parseVariant } from "../resource_inspector/values.js
 import { SceneParser } from "../scene_tools/parser.js";
 import { Scene, SceneNode } from "../scene_tools/types.js";
 import { createLruCache } from "../utils/lru_cache.js";
+import { type GodotRenderer, createGodotRenderer, describeRenderError } from "./godot_render_service.js";
 import { analyzeShaderSource } from "./shader_analysis.js";
 
 export const SCENE_2D_PREVIEW_VIEW_TYPE = "neoGodotTools.scene2dPreview";
 export const SHADER_PREVIEW_VIEW_TYPE = "neoGodotTools.shaderPreview";
 const PREVIEW_UPDATE_DELAY_MS = 16;
+const NATIVE_RENDER_DEBOUNCE_MS = 500;
+const NATIVE_RENDER_WIDTH = 960;
+const NATIVE_RENDER_HEIGHT = 540;
 
 interface PreviewNode {
 	path: string;
@@ -79,6 +83,29 @@ function previewKind(uri: vscode.Uri): PreviewKind | undefined {
 	return undefined;
 }
 
+/** Godot can only show a meaningful surface for these shader stages here. */
+export function nativeRenderSupport(
+	kind: PreviewKind,
+	uriPath: string,
+	text: string,
+): { supported: true } | { supported: false; message: string } {
+	if (kind !== "shader") return { supported: true };
+	if (uriPath.toLowerCase().endsWith(".gdshaderinc"))
+		return {
+			supported: false,
+			message: "Shader include files have no standalone output. Showing declarations only.",
+		};
+	const analysis = analyzeShaderSource(text);
+	if (!/^\s*shader_type\s+/m.test(analysis.cleanSource))
+		return { supported: false, message: "Add a shader_type declaration to render this file with Godot." };
+	if (analysis.shaderType !== "canvas_item" && analysis.shaderType !== "spatial" && analysis.shaderType !== "sky")
+		return {
+			supported: false,
+			message: `Godot needs scene geometry for ${analysis.shaderType} shaders. Showing declarations only. Canvas, spatial, and sky shaders render natively.`,
+		};
+	return { supported: true };
+}
+
 export function createStaticPreviewProvider(context: vscode.ExtensionContext): vscode.CustomTextEditorProvider {
 	const panels = new Map<string, Set<vscode.WebviewPanel>>();
 	const readyPanels = new Set<vscode.WebviewPanel>();
@@ -86,11 +113,14 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 	const sceneCache = createLruCache<string, { version: number; scene: Scene }>({ capacity: 32 });
 	const shaderCache = createLruCache<string, { version: number; model: ShaderPreviewModel }>({ capacity: 32 });
 	const pendingUpdates = new Map<string, { document: vscode.TextDocument; timer: ReturnType<typeof setTimeout> }>();
+	const renderStates = new Map<vscode.WebviewPanel, { token: number; timer?: ReturnType<typeof setTimeout> }>();
+	const renderer = createPreviewRenderer(context);
 	const isPreviewDocument = (document: vscode.TextDocument): boolean => previewKind(document.uri) !== undefined;
 	const previewRoots = (documentUri: vscode.Uri): vscode.Uri[] => {
 		const roots = vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [];
 		const project = findProjectRoot(documentUri);
 		if (project && !roots.some((root) => root.toString() === project.toString())) roots.push(project);
+		if (renderer) roots.push(vscode.Uri.file(renderer.storageDirectory));
 		return roots;
 	};
 	const html = (webview: vscode.Webview): string => {
@@ -129,7 +159,74 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		const model = buildModel(document, panel.webview);
 		if (!model) return;
 		panel.webview.options = { ...panel.webview.options, localResourceRoots: previewRoots(document.uri) };
-		void panel.webview.postMessage({ type: "model", model });
+		void panel.webview.postMessage({ type: "model", model, dirty: document.isDirty });
+	};
+	const postRenderState = (panel: vscode.WebviewPanel, message: Record<string, unknown>): void => {
+		void panel.webview.postMessage({ type: "render", ...message });
+	};
+	const requestRender = (document: vscode.TextDocument, panel: vscode.WebviewPanel, delayMs: number): void => {
+		const kind = previewKind(document.uri);
+		if (kind === undefined) return;
+		const state = renderStates.get(panel) ?? { token: 0, timer: undefined };
+		renderStates.set(panel, state);
+		state.token += 1;
+		const token = state.token;
+		if (state.timer !== undefined) clearTimeout(state.timer);
+		state.timer = undefined;
+		const approximate = document.isDirty;
+		const support = nativeRenderSupport(kind, document.uri.path, document.getText());
+		if (!support.supported) {
+			postRenderState(panel, { state: "unavailable", approximate, message: support.message });
+			return;
+		}
+		const activeRenderer = renderer;
+		if (!activeRenderer) {
+			postRenderState(panel, {
+				state: "unavailable",
+				approximate,
+				message: "Native Godot rendering is not available in this window.",
+			});
+			return;
+		}
+		if (document.uri.scheme !== "file") {
+			postRenderState(panel, {
+				state: "unavailable",
+				approximate,
+				message: "Save this file inside a Godot project to render it with Godot.",
+			});
+			return;
+		}
+		postRenderState(panel, { state: "rendering", approximate });
+		state.timer = setTimeout(() => {
+			state.timer = undefined;
+			void activeRenderer
+				.render({
+					kind,
+					entryFile: document.uri.fsPath,
+					text: document.getText(),
+					width: NATIVE_RENDER_WIDTH,
+					height: NATIVE_RENDER_HEIGHT,
+				})
+				.then((output) => {
+					if (renderStates.get(panel) !== state || state.token !== token) {
+						fs.rmSync(output.pngPath, { force: true });
+						return;
+					}
+					postRenderState(panel, {
+						state: "ready",
+						approximate,
+						engine: output.engine,
+						ms: Math.round(output.ms),
+						width: output.width,
+						height: output.height,
+						imageUri: panel.webview.asWebviewUri(vscode.Uri.file(output.pngPath)).toString(),
+					});
+				})
+				.catch((error: unknown) => {
+					if (renderStates.get(panel) !== state || state.token !== token) return;
+					postRenderState(panel, { state: "failed", approximate, message: describeRenderError(error) });
+				});
+		}, delayMs);
 	};
 	const queueModelUpdate = (document: vscode.TextDocument): void => {
 		const key = document.uri.toString();
@@ -144,7 +241,10 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			if (!latest) return;
 			const documentPanels = panels.get(key);
 			if (!documentPanels) return;
-			Array.from(documentPanels, (panel) => sendModel(latest.document, panel));
+			Array.from(documentPanels, (panel) => {
+				sendModel(latest.document, panel);
+				requestRender(latest.document, panel, NATIVE_RENDER_DEBOUNCE_MS);
+			});
 		}, PREVIEW_UPDATE_DELAY_MS);
 		pendingUpdates.set(key, { document, timer });
 	};
@@ -160,6 +260,7 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		if (message.command === "ready") {
 			readyPanels.add(panel);
 			sendModel(document, panel);
+			requestRender(document, panel, 0);
 			return;
 		}
 		if (message.command !== "openSource" || !Number.isInteger(message.position)) return;
@@ -182,15 +283,18 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			});
 			panel.onDidDispose(() => {
 				readyPanels.delete(panel);
+				const renderState = renderStates.get(panel);
+				if (renderState?.timer !== undefined) clearTimeout(renderState.timer);
+				renderStates.delete(panel);
 				documentPanels.delete(panel);
-			if (documentPanels.size === 0) {
-				panels.delete(key);
-				const pending = pendingUpdates.get(key);
-				if (pending !== undefined) {
-					clearTimeout(pending.timer);
-					pendingUpdates.delete(key);
+				if (documentPanels.size === 0) {
+					panels.delete(key);
+					const pending = pendingUpdates.get(key);
+					if (pending !== undefined) {
+						clearTimeout(pending.timer);
+						pendingUpdates.delete(key);
+					}
 				}
-			}
 			});
 		},
 	};
@@ -205,10 +309,8 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 		}),
 		vscode.workspace.onDidChangeTextDocument((event) => {
 			if (!isPreviewDocument(event.document)) return;
-			if (previewKind(event.document.uri) === "scene")
-				sceneCache.delete(event.document.uri.toString());
-			if (previewKind(event.document.uri) === "shader")
-				shaderCache.delete(event.document.uri.toString());
+			if (previewKind(event.document.uri) === "scene") sceneCache.delete(event.document.uri.toString());
+			if (previewKind(event.document.uri) === "shader") shaderCache.delete(event.document.uri.toString());
 			queueModelUpdate(event.document);
 		}),
 		vscode.workspace.onDidCloseTextDocument((document) => {
@@ -218,6 +320,14 @@ export function createStaticPreviewProvider(context: vscode.ExtensionContext): v
 			pendingUpdates.delete(key);
 			sceneCache.delete(document.uri.toString());
 			shaderCache.delete(document.uri.toString());
+		}),
+		vscode.workspace.onDidSaveTextDocument((document) => {
+			if (!isPreviewDocument(document)) return;
+			const documentPanels = panels.get(document.uri.toString());
+			if (!documentPanels) return;
+			Array.from(documentPanels, (panel) => {
+				if (readyPanels.has(panel)) requestRender(document, panel, 0);
+			});
 		}),
 	);
 	return provider;
@@ -271,8 +381,12 @@ function buildPreviewNode(
 	const position = vector(values.get("position"));
 	const scale = vector(values.get("scale"), [1, 1]) ?? [1, 1];
 	const size = vector(values.get("size")) ?? [
-		values.has("offset_right") ? number(values.get("offset_right")) - number(values.get("offset_left")) : defaultWidth(node.className),
-		values.has("offset_bottom") ? number(values.get("offset_bottom")) - number(values.get("offset_top")) : defaultHeight(node.className),
+		values.has("offset_right")
+			? number(values.get("offset_right")) - number(values.get("offset_left"))
+			: defaultWidth(node.className),
+		values.has("offset_bottom")
+			? number(values.get("offset_bottom")) - number(values.get("offset_top"))
+			: defaultHeight(node.className),
 	];
 	const width = Math.max(1, Math.abs(size?.[0] ?? defaultWidth(node.className)));
 	const height = Math.max(1, Math.abs(size?.[1] ?? defaultHeight(node.className)));
@@ -366,11 +480,11 @@ function createScenePreviewResources(
 			if (resolved.has(imagePath)) return resolved.get(imagePath);
 			const uri = /\.(?:png|svg|jpe?g|webp|gif|bmp|ico|avif)$/i.test(imagePath)
 				? (() => {
-					const target = resolveSceneResourcePath(scene.path, imagePath);
-					if (!target || !fs.existsSync(target)) return undefined;
-					const targetUri = vscode.Uri.file(target);
-					return insideRoots(targetUri, roots) ? webview.asWebviewUri(targetUri).toString() : undefined;
-				})()
+						const target = resolveSceneResourcePath(scene.path, imagePath);
+						if (!target || !fs.existsSync(target)) return undefined;
+						const targetUri = vscode.Uri.file(target);
+						return insideRoots(targetUri, roots) ? webview.asWebviewUri(targetUri).toString() : undefined;
+					})()
 				: undefined;
 			resolved.set(imagePath, uri);
 			return uri;
@@ -404,6 +518,17 @@ function insideRoots(file: vscode.Uri, roots: vscode.Uri[]): boolean {
 	}
 }
 
+function createPreviewRenderer(context: vscode.ExtensionContext): GodotRenderer | undefined {
+	try {
+		const renderer = createGodotRenderer(context.extensionUri, context.globalStorageUri);
+		context.subscriptions.push({ dispose: () => renderer.dispose() });
+		return renderer;
+	} catch (error) {
+		console.warn("[neo-godot-tools] native Godot previews are unavailable", error);
+		return undefined;
+	}
+}
+
 function createNonce(): string {
 	return Array.from({ length: 24 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
 }
@@ -412,7 +537,7 @@ export const STATIC_PREVIEW_CSS = `:root{color-scheme:light dark;font-family:var
 
 export const STATIC_PREVIEW_SCRIPT = [
 	"(() => {const vscode=acquireVsCodeApi();",
-	"const canvas=document.getElementById('canvas');const details=document.getElementById('details');const titleElement=document.getElementById('title');const meta=document.getElementById('meta');const zoomLabel=document.getElementById('zoomLabel');let model;let zoom=1;let selectedPath='';",
+	"const canvas=document.getElementById('canvas');const details=document.getElementById('details');const titleElement=document.getElementById('title');const meta=document.getElementById('meta');const zoomLabel=document.getElementById('zoomLabel');let model;let zoom=1;let selectedPath='';let nativeImage;let autoFit=true;let renderState='static';let renderDetail='';let renderDirty=false;",
 	"function appendText(parent,tag,value,style){const element=document.createElement(tag);element.textContent=value;if(style)element.className=style;parent.append(element);return element}function showStatus(heading,message){canvas.replaceChildren();const section=document.createElement('section');section.className='status';section.setAttribute('role','status');appendText(section,'h2',heading);appendText(section,'p',message);canvas.append(section)}function showDetails(node){details.replaceChildren();if(!node){appendText(details,'div','Select a node to inspect its source properties. This is an approximate static diagram; scripts and layout are not evaluated.','empty');return}selectedPath=node.path;appendText(details,'h3',node.label);appendText(details,'div',node.className+' · '+(node.path||'.'));if(node.properties?.length){appendText(details,'h4','Overrides');node.properties.forEach((property)=>appendText(details,'div',property.name+' = '+property.value))}const button=appendText(details,'button','Open source');button.onclick=()=>vscode.postMessage({command:'openSource',position:node.position})}",
 	"function nodeElement(node){const group=document.createElementNS('http://www.w3.org/2000/svg','g');group.setAttribute('transform','translate('+node.x+' '+node.y+') rotate('+node.rotation+') scale('+node.scaleX+' '+node.scaleY+')');group.dataset.path=node.path;const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');rect.setAttribute('width',node.width);rect.setAttribute('height',node.height);rect.setAttribute('rx','3');rect.setAttribute('fill',node.color);rect.setAttribute('stroke','rgba(220,230,240,.7)');rect.setAttribute('stroke-width','1');group.append(rect);if(node.textureUri){const image=document.createElementNS('http://www.w3.org/2000/svg','image');image.setAttribute('href',node.textureUri);image.setAttribute('x','0');image.setAttribute('y','0');image.setAttribute('width',node.width);image.setAttribute('height',node.height);image.setAttribute('preserveAspectRatio','xMidYMid slice');group.append(image)}const label=document.createElementNS('http://www.w3.org/2000/svg','text');label.textContent=node.text||node.label;label.setAttribute('x','6');label.setAttribute('y','18');label.setAttribute('fill','var(--vscode-foreground)');label.setAttribute('font-size','12');group.append(label);group.onclick=(event)=>{event.stopPropagation();document.querySelectorAll('g[data-path]').forEach((item)=>item.classList.remove('selected'));group.classList.add('selected');showDetails(node)};node.children.forEach((child)=>group.append(nodeElement(child)));return group}",
 	"function transformPoint(point,transform){return{x:transform.a*point.x+transform.c*point.y+transform.e,y:transform.b*point.x+transform.d*point.y+transform.f}}",
@@ -422,6 +547,10 @@ export const STATIC_PREVIEW_SCRIPT = [
 	"function sceneBounds(nodes,parentTransform,result){nodes.forEach((node)=>{const transform=multiply(parentTransform,localTransform(node));includePoint(transformPoint({x:0,y:0},transform),result);includePoint(transformPoint({x:node.width,y:0},transform),result);includePoint(transformPoint({x:0,y:node.height},transform),result);includePoint(transformPoint({x:node.width,y:node.height},transform),result);sceneBounds(node.children,transform,result)})}",
 	"function renderScene(){canvas.replaceChildren();if(model.error||!model.nodes.length){showStatus(model.error?'Unable to read scene':'No scene nodes found',model.error||'Add a node in the scene source, or open the project in Godot.');showDetails(undefined);return}const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');const bounds={minX:Infinity,minY:Infinity,maxX:-Infinity,maxY:-Infinity};const identity={a:1,b:0,c:0,d:1,e:0,f:0};sceneBounds(model.nodes,identity,bounds);const padding=40;const x=bounds.minX-padding;const y=bounds.minY-padding;const width=Math.max(1,bounds.maxX-bounds.minX+padding*2);const height=Math.max(1,bounds.maxY-bounds.minY+padding*2);svg.setAttribute('viewBox',x+' '+y+' '+width+' '+height);svg.setAttribute('width',String(Math.max(1,width*zoom)));svg.setAttribute('height',String(Math.max(1,height*zoom)));svg.onclick=()=>showDetails(undefined);model.nodes.forEach((node)=>svg.append(nodeElement(node)));canvas.append(svg);if(selectedPath)document.querySelectorAll('g[data-path]').forEach((item)=>{if(item.dataset.path===selectedPath)item.classList.add('selected')});showDetails(undefined);model.warnings.forEach((warning)=>appendText(details,'div',warning,'warning'));zoomLabel.textContent=Math.round(zoom*100)+'%'}",
 	"function addUniformControl(uniform){const row=appendText(details,'div',uniform.name+' = '+(uniform.defaultValue||'(no default)'),'uniform');appendText(row,'small',uniform.type+(uniform.hintString?' · '+uniform.hintString:''))}",
+	"function renderNative(){canvas.replaceChildren();const figure=document.createElement('figure');figure.className='native-frame';const image=document.createElement('img');image.className='native-render';image.src=nativeImage.uri;image.alt=(model.kind==='scene'?model.title:'Shader preview')+' rendered by Godot';image.style.width=Math.round(nativeImage.width*zoom)+'px';image.style.height='auto';figure.append(image);zoomLabel.textContent=Math.round(zoom*100)+'%';const caption=document.createElement('figcaption');caption.textContent=(nativeImage.engine==='4'?'Godot 4':'Godot 3')+' render · '+nativeImage.width+' × '+nativeImage.height+(nativeImage.ms?' · '+nativeImage.ms+' ms':'');figure.append(caption);canvas.append(figure);details.replaceChildren();appendText(details,'h3',model.kind==='scene'?'Godot render':'Shader output');appendText(details,'div',model.kind==='scene'?'The native render shows the scene as Godot composes it. Switch to the static sketch to select nodes and read source properties.':'Rendered on a checkerboard by the configured Godot executable.','empty');if(model.kind==='shader'){appendText(details,'h4','Uniform defaults');if(!model.uniforms.length)appendText(details,'div','No uniforms declared.','empty');model.uniforms.forEach(addUniformControl);model.diagnostics.forEach((diagnostic)=>appendText(details,'div','Line '+diagnostic.line+': '+diagnostic.message,'warning'))}model.warnings.filter((warning)=>!/does not execute|not executed/.test(warning)).forEach((warning)=>appendText(details,'div',warning,'warning'))}",
+	"function fitNative(){const availableWidth=Math.max(1,canvas.clientWidth-80);const availableHeight=Math.max(1,canvas.clientHeight-80);zoom=Math.max(.25,Math.min(4,Math.min(availableWidth/nativeImage.width,availableHeight/nativeImage.height)));render()}",
+	"function updateRenderState(){const base=model.kind==='scene'?model.nodes.length+' root node(s)':model.shaderType;if(renderState==='rendering'){meta.textContent=base+' · '+(renderDirty?'updating unsaved':'rendering in Godot');meta.title='Building a native render with the configured Godot executable.';meta.dataset.state='busy'}else if(renderState==='ready'){meta.textContent=base+' · '+(renderDirty?'live render · unsaved':'Godot render')+(nativeImage.ms?' · '+nativeImage.ms+' ms':'');meta.title='Rendered by the configured Godot executable.';meta.dataset.state='ready'}else if(renderState==='failed'){meta.textContent=base+' · Godot render failed';meta.title=renderDetail||'Godot could not render this file.';meta.dataset.state='failed'}else if(renderState==='unavailable'){meta.textContent=base+' · static preview';meta.title=renderDetail;meta.dataset.state='static'}else{meta.textContent=base+' · static preview';meta.title='Approximate sketch built from scene text. Project scripts are not executed.';meta.dataset.state='static'}}",
+	"function applyRenderState(data){renderDirty=Boolean(data.approximate);renderDetail=data.message||'';if(data.state==='ready'&&data.imageUri){nativeImage={uri:data.imageUri,width:Math.max(1,data.width||1),height:Math.max(1,data.height||1),engine:data.engine,ms:data.ms};renderState='ready';if(autoFit)fitNative();else render()}else if(data.state==='rendering'){renderState='rendering';if(nativeImage)updateRenderState();else render()}else{nativeImage=undefined;renderState=data.state==='failed'?'failed':'unavailable';render()}}",
 	"function renderShader(){canvas.replaceChildren();const sheet=document.createElement('section');sheet.className='shader-sheet';appendText(sheet,'p','STATIC INTERFACE STUDY');appendText(sheet,'h2',model.shaderType+' shader');appendText(sheet,'p','Godot shader code is not executed here. This sheet describes declarations, not rendered material output.','capability');const facts=appendText(sheet,'div','','facts');appendText(facts,'div',model.uniforms.length+' uniforms','fact');appendText(facts,'div',model.functions.length+' functions','fact');appendText(facts,'div',model.lineCount+' lines','fact');appendText(sheet,'p','Functions: '+(model.functions.join(', ')||'none'));appendText(sheet,'p','Render modes: '+(model.renderModes.join(', ')||'default'));canvas.append(sheet);details.replaceChildren();appendText(details,'h3','Uniform defaults');if(!model.uniforms.length)appendText(details,'div','No uniforms declared.','empty');model.uniforms.forEach(addUniformControl);model.diagnostics.forEach((diagnostic)=>appendText(details,'div','Line '+diagnostic.line+': '+diagnostic.message,'warning'));model.warnings.forEach((warning)=>appendText(details,'div',warning,'warning'))}",
-	"function render(){if(!model)return;titleElement.textContent=model.kind==='scene'?model.title:'Shader preview';meta.textContent=model.kind==='scene'?model.nodes.length+' root node(s)':model.shaderType;if(model.kind==='scene')renderScene();else renderShader()}function fitScene(){const svg=canvas.querySelector('svg');if(!svg)return;const box=svg.viewBox.baseVal;const availableWidth=Math.max(1,canvas.clientWidth-80);const availableHeight=Math.max(1,canvas.clientHeight-80);zoom=Math.max(.25,Math.min(4,Math.min(availableWidth/box.width,availableHeight/box.height)));render()}document.getElementById('zoomIn').onclick=()=>{zoom=Math.min(4,zoom*1.25);render()};document.getElementById('zoomOut').onclick=()=>{zoom=Math.max(.25,zoom/1.25);render()};document.getElementById('fit').onclick=fitScene;document.getElementById('openSource').onclick=()=>vscode.postMessage({command:'openSource',position:0});document.getElementById('openGodot').onclick=()=>vscode.postMessage({command:'openGodot'});canvas.onkeydown=(event)=>{if(event.key==='+'||event.key==='='){zoom=Math.min(4,zoom*1.25);render()}if(event.key==='-'){zoom=Math.max(.25,zoom/1.25);render()}};window.addEventListener('error',(event)=>showStatus('Preview error',event.message||'Unable to display this preview.'));window.addEventListener('message',(event)=>{if(event.data?.type==='model'){model=event.data.model;selectedPath='';render();if(model.kind==='scene'&&model.nodes.length)fitScene()}});vscode.postMessage({command:'ready'});})();",
+	"function render(){if(!model)return;titleElement.textContent=model.kind==='scene'?model.title:'Shader preview';if(nativeImage){renderNative()}else if(model.kind==='scene')renderScene();else renderShader();updateRenderState()}function fitScene(){if(nativeImage){fitNative();return}const svg=canvas.querySelector('svg');if(!svg)return;const box=svg.viewBox.baseVal;const availableWidth=Math.max(1,canvas.clientWidth-80);const availableHeight=Math.max(1,canvas.clientHeight-80);zoom=Math.max(.25,Math.min(4,Math.min(availableWidth/box.width,availableHeight/box.height)));render()}document.getElementById('zoomIn').onclick=()=>{autoFit=false;zoom=Math.min(4,zoom*1.25);render()};document.getElementById('zoomOut').onclick=()=>{autoFit=false;zoom=Math.max(.25,zoom/1.25);render()};document.getElementById('fit').onclick=()=>{autoFit=true;fitScene()};document.getElementById('openSource').onclick=()=>vscode.postMessage({command:'openSource',position:0});document.getElementById('openGodot').onclick=()=>vscode.postMessage({command:'openGodot'});canvas.onkeydown=(event)=>{if(event.key==='+'||event.key==='='){autoFit=false;zoom=Math.min(4,zoom*1.25);render()}if(event.key==='-'){autoFit=false;zoom=Math.max(.25,zoom/1.25);render()}};window.addEventListener('error',(event)=>showStatus('Preview error',event.message||'Unable to display this preview.'));window.addEventListener('message',(event)=>{const data=event.data;if(!data)return;if(data.type==='model'){model=data.model;selectedPath='';renderDirty=Boolean(data.dirty);render();if(autoFit&&model.kind==='scene'&&model.nodes.length)fitScene()}else if(data.type==='render'){applyRenderState(data)}});vscode.postMessage({command:'ready'});})();",
 ].join("");
