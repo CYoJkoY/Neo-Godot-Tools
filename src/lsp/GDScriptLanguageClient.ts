@@ -17,6 +17,7 @@ import { languageProfiler } from "../performance/profiler";
 import { createLogger, get_configuration, get_project_dir } from "../utils";
 import { createLruCache } from "../utils/lru_cache";
 import { MessageIO } from "./MessageIO";
+import { stopAfterStart } from "./client_lifecycle";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
 
@@ -108,6 +109,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	public sentMessages = createLruCache<string | number, RequestMessage>({ capacity: 512 });
 	private readonly requestStarts = createLruCache<string | number, number>({ capacity: 512 });
 	private rejected = false;
+	private startPromise?: Promise<void>;
 
 	events = new EventEmitter();
 
@@ -166,6 +168,20 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		this.io.requestFilter = this.request_filter.bind(this);
 		this.io.responseFilter = this.response_filter.bind(this);
 		this.io.notificationFilter = this.notification_filter.bind(this);
+	}
+
+	override start(): Promise<void> {
+		const starting = super.start();
+		this.startPromise = starting;
+		const clearStart = () => {
+			if (this.startPromise === starting) this.startPromise = undefined;
+		};
+		void starting.then(clearStart, clearStart);
+		return starting;
+	}
+
+	override async stop(): Promise<void> {
+		await stopAfterStart(this.startPromise, () => this.isRunning(), () => super.stop());
 	}
 
 	connect(target: TargetLSP = TargetLSP.EDITOR) {
