@@ -267,8 +267,56 @@ export interface EditResult {
 	createdIds: string[];
 }
 
+/** Adds resource declarations and assigns references without changing the array container. */
+export function editResourceArray(
+	text: string,
+	name: string,
+	resources: readonly { type: string; path?: string }[],
+	target?: string,
+	index?: number,
+): { result: EditResult } | { error: string } {
+	const document = parseResourceDocument(text);
+	const owner = target === undefined ? document : document.subResources.find((entry) => entry.id === target);
+	if (!owner) return { error: `Sub-resource "${target}" no longer exists.` };
+	const property = owner.properties.find((entry) => entry.name === name);
+	if (!property || property.value.kind !== "Array" || parseVariant(property.valueText).error) {
+		return { error: `Property "${name}" is not a valid existing array.` };
+	}
+	const items = (property.value.items ?? []).map((item) => item.raw);
+	if (index !== undefined && (!Number.isInteger(index) || index < 0 || index >= items.length || resources.length !== 1)) {
+		return { error: `Array index for "${name}" is no longer valid.` };
+	}
+	const createdIds: string[] = [];
+	const references: string[] = [];
+	let currentText = text;
+	for (const resource of resources) {
+		const existing = resource.path === undefined ? undefined : parseResourceDocument(currentText).extResources.find((entry) => entry.path === resource.path);
+		const added = existing ? undefined : applyResourceEdits(currentText, [resource.path === undefined
+			? { kind: "addSubResource", type: resource.type }
+			: { kind: "addExtResource", type: resource.type, path: resource.path }]);
+		const id = existing?.id ?? added?.createdIds[0];
+		if (id === undefined) return { error: "Resource creation did not produce an ID." };
+		if (added) {
+			currentText = added.text;
+			createdIds.push(id);
+		}
+		references.push(resourceReference(resource.path === undefined ? "Sub" : "Ext", id, document.format));
+	}
+	const updated = index === undefined ? [...items, ...references] : items.map((item, position) => position === index ? references[0] : item);
+	const contents = `[${updated.join(", ")}]`;
+	const value = property.value.arrayType === undefined ? contents : `Array[${property.value.arrayType}](${contents})`;
+	return { result: { text: applyResourceEdits(currentText, [{ kind: "setProperty", name, target, value }]).text, createdIds } };
+}
+
+/** Human-readable names shared by the fast and enriched inspector models. */
+export function subResourceLabel(resource: SubResourceEntry): string {
+	const name = resource.properties.find((property) => property.name === "resource_name")?.value.text;
+	return `${name || resource.type} · ${resource.id}`;
+}
+
 /** Generates the next free `Type_N` sub-resource id. */
-export function uniqueSubResourceId(type: string, existing: readonly string[]): string {
+export function uniqueSubResourceId(type: string, existing: readonly string[], format?: string): string {
+	if (format === "2") return uniqueExtResourceId(existing, format);
 	const base = `${type || "Resource"}`;
 	let index = 1;
 	while (existing.includes(`${base}_${index}`)) index++;
@@ -304,13 +352,13 @@ function insertLine(lines: string[], index: number, text: string): void {
 }
 
 /** Inserts a `[sub_resource]` block before the `[resource]` section (or at the end). */
-function insertSubResource(lines: string[], type: string, id: string, properties: Record<string, string>): void {
-	let target = lines.findIndex((line) => /^\s*\[resource\]/.test(line));
-	if (target === -1) target = lines.length;
+function insertSubResource(lines: string[], type: string, id: string, properties: Record<string, string>, format?: string): void {
+	const anchor = lines.findIndex((line) => /^\s*\[resource\]/.test(line));
+	const target = anchor === -1 ? lines.length : anchor;
 	const block: string[] = [];
 	if (target > 0 && lines[target - 1].trim() !== "") block.push("");
-	block.push(`[sub_resource type="${type}" id="${id}"]`);
-	for (const [name, value] of Object.entries(properties)) block.push(`${name} = ${value}`);
+	block.push(`[sub_resource type=${JSON.stringify(type)} id=${format === "2" ? id : JSON.stringify(id)}]`);
+	block.push(...Object.entries(properties).map(([name, value]) => `${name} = ${value}`));
 	if (lines[target] !== undefined && lines[target].trim() !== "") block.push("");
 	for (const [offset, text] of block.entries()) insertLine(lines, target + offset, text);
 }
@@ -395,8 +443,9 @@ export function applyResourceEdits(text: string, edits: readonly ResourceEdit[])
 			const id = uniqueSubResourceId(
 				edit.type,
 				document.subResources.map((entry) => entry.id),
+				document.format,
 			);
-			insertSubResource(lines, edit.type, id, edit.properties ?? {});
+			insertSubResource(lines, edit.type, id, edit.properties ?? {}, document.format);
 			createdIds.push(id);
 		} else if (edit.kind === "addExtResource") {
 			const id = uniqueExtResourceId(

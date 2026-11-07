@@ -415,6 +415,64 @@ shader_param/strength = 0.8
 		}
 	});
 
+	it("batches resource array picks and infers custom TRES types", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-array-edits-"));
+		const oldOpen = vscode.workspace.openTextDocument;
+		const oldApply = vscode.workspace.applyEdit;
+		const oldDialog = vscode.window.showOpenDialog;
+		const context = {
+			subscriptions: [],
+			extensionUri: vscode.Uri.file(os.homedir()),
+		} as unknown as vscode.ExtensionContext;
+		const provider = new ResourceInspectorProvider(context);
+		const protocol = provider as unknown as {
+			onMessage(uri: vscode.Uri, message: Record<string, unknown>): Promise<void>;
+		};
+		try {
+			fs.writeFileSync(path.join(root, "project.godot"), "[application]\n");
+			const uri = vscode.Uri.file(path.join(root, "thing.tres"));
+			let text = '[gd_resource type="Resource" load_steps=2 format=3]\n[ext_resource type="Texture2D" path="res://a.png" id="4_a"]\n[resource]\nitems = Array[Texture2D]([ExtResource("4_a")])\n';
+			(vscode.workspace as { openTextDocument: unknown }).openTextDocument = async () => makeDocument(uri, text);
+			const edits: string[] = [];
+			const dialogOptions: Array<{ canSelectMany?: boolean }> = [];
+			(vscode.workspace as { applyEdit: unknown }).applyEdit = async (edit: {
+				edits: Array<{ newText: string }>;
+			}) => {
+				edits.push(edit.edits[0].newText);
+				return true;
+			};
+			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = async (options: {
+				canSelectMany?: boolean;
+			}) => {
+				dialogOptions.push(options);
+				return [
+					vscode.Uri.file(path.join(root, "a.png")),
+					vscode.Uri.file(path.join(root, "b.png")),
+				];
+			};
+			await protocol.onMessage(uri, { command: "pickArrayResources", name: "items" });
+			assert.equal(dialogOptions[0].canSelectMany, true);
+			assert.equal(edits.length, 1);
+			assert.match(edits[0], /items = Array\[Texture2D\]\(\[ExtResource\("4_a"\), ExtResource\("4_a"\), ExtResource\("5_res"\)\]\)/);
+			assert.equal(edits[0].match(/path="res:\/\/a\.png"/g)?.length, 1);
+
+			fs.writeFileSync(path.join(root, "custom.tres"), '[gd_resource type="AudioStream" format=3]\n\n[resource]\n');
+			text = '[gd_resource type="Resource" format=3]\n[resource]\n';
+			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = async () => [
+				vscode.Uri.file(path.join(root, "custom.tres")),
+			];
+			await protocol.onMessage(uri, { command: "addExternalResource" });
+			assert.equal(edits.length, 2);
+			assert.match(edits[1], /\[ext_resource type="AudioStream" path="res:\/\/custom\.tres"/);
+		} finally {
+			(vscode.workspace as { openTextDocument: unknown }).openTextDocument = oldOpen;
+			(vscode.workspace as { applyEdit: unknown }).applyEdit = oldApply;
+			(vscode.window as { showOpenDialog: unknown }).showOpenDialog = oldDialog;
+			provider.dispose();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps resource diagnostics off unless they are enabled", async () => {
 		// The inspector edits resources; flagging them is opt-in because partial
 		// metadata cannot tell a mistake from a property it does not know.

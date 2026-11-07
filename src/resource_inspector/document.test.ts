@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	applyResourceEdits,
 	createDocumentParseCache,
+	editResourceArray,
 	parseResourceDocument,
 	resourceReference,
 	rewriteReferences,
@@ -24,6 +25,27 @@ name = &"Hero"
 speed = 3.0
 gradient = SubResource("Gradient_1")
 `;
+
+describe("resource array editing", () => {
+	it("reuses paths, creates sequential IDs, and retains typed arrays and line endings", () => {
+		const source = '[gd_resource type="Resource" load_steps=2 format=3]\r\n[ext_resource type="Texture2D" path="res://a.png" id="4_a"]\r\n[resource]\r\nitems = Array[Texture2D]([ExtResource("4_a")])\r\n';
+		const edited = editResourceArray(source, "items", [{ type: "Texture2D", path: "res://a.png" }, { type: "Texture2D", path: "res://b.png" }, { type: "Texture2D", path: "res://b.png" }]);
+		assert.ok("result" in edited);
+		assert.deepEqual(edited.result.createdIds, ["5_res"]);
+		assert.match(edited.result.text, /items = Array\[Texture2D\]\(\[ExtResource\("4_a"\), ExtResource\("4_a"\), ExtResource\("5_res"\), ExtResource\("5_res"\)\]\)/);
+		assert.equal(edited.result.text.replace(/\r\n/g, "").includes("\n"), false);
+	});
+
+	it("replaces subresource array items using legacy numeric IDs and rejects stale indexes", () => {
+		const source = '[gd_resource type="Resource" format=2]\n[sub_resource type="Resource" id=8]\nitems = [null]\n[resource]\n';
+		const edited = editResourceArray(source, "items", [{ type: "Gradient" }], "8", 0);
+		assert.ok("result" in edited);
+		assert.match(edited.result.text, /\[sub_resource type="Gradient" id=9\]/);
+		assert.match(edited.result.text, /items = \[SubResource\( 9 \)\]/);
+		assert.ok("error" in editResourceArray(source, "items", [{ type: "Gradient" }], "8", 1));
+		assert.ok("error" in editResourceArray(source, "items", [{ type: "Gradient" }], "missing", 0));
+	});
+});
 
 describe("resource document parsing", () => {
 	it("reads the header and every section", () => {

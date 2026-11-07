@@ -203,7 +203,7 @@ function sceneResourceChoices(model) {
 		choices.push({ value: sceneResourceReference("Ext", resource.id, model.format), label: (resource.path || resource.id) + " · " + resource.type });
 	}
 	for (const resource of (model && (model.subResourceTypes || model.subResources)) || []) {
-		choices.push({ value: sceneResourceReference("Sub", resource.id, model.format), label: resource.type + " · " + resource.id });
+		choices.push({ value: sceneResourceReference("Sub", resource.id, model.format), label: resource.label || resource.type + " · " + resource.id });
 	}
 	return choices;
 }
@@ -211,7 +211,8 @@ function sceneResourceChoices(model) {
 function resourceArrayElementType(property) {
 	const declared = property.metadata && property.metadata.type;
 	const typed = typeof declared === "string" && declared.match(/^Array\[([^\]]+)\]$/);
-	return typed ? typed[1].trim() : property.widget && property.widget.elementType;
+	const serialized = property.raw.match(/^Array\[([^\]]+)\]/);
+	return typed ? typed[1].trim() : serialized ? serialized[1].trim() : property.widget && property.widget.elementType;
 }
 
 function isResourceElementType(type) {
@@ -330,7 +331,7 @@ function propertyRow(property, model, commit, revert) {
 		// Script and Shader slots must not offer unrelated resource classes.
 		const accepts = (actual) => (type !== "Script" && type !== "Shader") || actual === type;
 		for (const resource of (model && model.extResources) || []) if (accepts(resource.type)) references.push({ value: referenceValue("Ext", resource.id), id: resource.id, kind: "Ext", label: (resource.path || resource.id) + " · " + resource.type });
-		for (const sub of (model && (model.subResourceTypes || model.subResources)) || []) if (accepts(sub.type)) references.push({ value: referenceValue("Sub", sub.id), id: sub.id, kind: "Sub", label: sub.type + " · " + sub.id });
+		for (const sub of (model && (model.subResourceTypes || model.subResources)) || []) if (accepts(sub.type)) references.push({ value: referenceValue("Sub", sub.id), id: sub.id, kind: "Sub", label: sub.label || sub.type + " · " + sub.id });
 		const picker = element("select", { class: "res-picker", "aria-label": property.name });
 		picker.appendChild(element("option", { value: "null", text: "None (null)" }));
 		for (const reference of references) picker.appendChild(element("option", { value: reference.value, text: reference.label }));
@@ -468,7 +469,7 @@ function arrayEditor(property, model, set) {
 		return value.startsWith("ExtResource(") || value.startsWith("ExtResource (") || value.startsWith("SubResource(") || value.startsWith("SubResource (");
 	});
 	const isSceneNode = model && model.editorKind === "sceneNode";
-	const resourceArray = Boolean(isSceneNode) && (isResourceElementType(declaredElementType) || hasResourceReference);
+	const resourceArray = isResourceElementType(declaredElementType) || hasResourceReference;
 	const choices = sceneResourceChoices(model);
 	const container = element("div", {});
 	const render = () => {
@@ -480,18 +481,20 @@ function arrayEditor(property, model, set) {
 				input.appendChild(element("option", { value: "null", text: "None (null)" }));
 				for (const choice of choices) input.appendChild(element("option", { value: choice.value, text: choice.label }));
 				const raw = item.trim();
-				const selected = raw === "nil" ? "null" : raw;
+				const reference = raw.match(/^(Ext|Sub)Resource\s*\(\s*(?:"([^"]*)"|(\d+))\s*\)$/);
+				const selected = reference ? sceneResourceReference(reference[1], reference[2] !== undefined ? reference[2] : reference[3], model.format) : raw === "nil" ? "null" : raw;
 				if (!Array.from(input.children).some((option) => option.value === selected)) {
 					input.appendChild(element("option", { value: selected, text: "Current: " + raw }));
 				}
 				input.value = selected;
+				input.title = (choices.find((choice) => choice.value === selected) || {}).label || raw;
 				input.addEventListener("change", () => { items[index] = input.value; commit(); });
 			} else {
 				input = element("input", { type: "text", value: item });
 				input.addEventListener("change", () => { items[index] = input.value; commit(); });
 			}
 			const actions = [];
-			if (resourceArray && isSceneNode) {
+			if (resourceArray) {
 				actions.push(element("button", {
 					class: "text-button",
 					text: "Browse…",
@@ -515,6 +518,7 @@ function arrayEditor(property, model, set) {
 				element("div", { class: "array-entry-actions" }, actions),
 			]));
 		});
+		if (resourceArray && !isSceneNode) container.appendChild(element("button", { class: "tonal", text: "Add resources…", title: "Select multiple files; resource IDs are assigned automatically", onclick: () => post("pickArrayResources", { name: property.name, target: property.target }) }));
 		container.appendChild(element("button", { class: "text-button", text: "Add entry", onclick: () => { items.push(defaultListEntry(form)); commit(); } }));
 	};
 	function commit() {
@@ -819,33 +823,33 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	:root {
 		color-scheme: light dark;
 		--ri-surface: var(--vscode-sideBar-background, var(--vscode-editor-background));
-		--ri-card: color-mix(in srgb, var(--vscode-foreground) 4%, var(--ri-surface));
+		--ri-card: color-mix(in srgb, #98826b 6%, var(--ri-surface));
 		--ri-border: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
 		--ri-muted: var(--vscode-descriptionForeground, #777);
-		--ri-accent: var(--vscode-button-background, #1a73e8);
-		--ri-radius: 12px;
+		--ri-accent: color-mix(in srgb, #98826b 35%, var(--vscode-button-background, #6f7964));
+		--ri-radius: 5px;
 	}
 	* { box-sizing: border-box; }
 	body {
-		margin: 0; padding: 16px 14px 28px;
+		margin: 0; padding: 22px 18px 36px;
 		background: var(--ri-surface); color: var(--vscode-foreground);
-		font-family: "Google Sans", Roboto, var(--vscode-font-family), sans-serif;
-		font-size: var(--vscode-font-size); line-height: 1.45;
+		font-family: var(--vscode-font-family), sans-serif;
+		font-size: var(--vscode-font-size); line-height: 1.6;
 	}
 	button, input, select, textarea { font: inherit; }
 	button { color: inherit; }
 	button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
 		outline: 2px solid var(--vscode-focusBorder, #1a73e8); outline-offset: 2px;
 	}
-	.resource-header { padding: 4px 2px 8px; }
+	.resource-header { padding: 4px 2px 14px 12px; border-left: 2px solid var(--ri-accent); margin-bottom: 14px; }
 	.eyebrow { color: var(--ri-muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 	.resource-path { color: var(--ri-muted); font: 11px var(--vscode-editor-font-family, monospace); margin-top: 2px; overflow-wrap: anywhere; }
-	h2 { font-size: 20px; line-height: 1.3; font-weight: 600; margin: 4px 0 0; overflow-wrap: anywhere; }
+	h2 { font-size: 21px; line-height: 1.4; font-weight: 500; letter-spacing: -.02em; margin: 6px 0 0; overflow-wrap: anywhere; }
 	h3 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .01em; }
 	.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 20px; }
 	.empty-toolbar { justify-content: center; margin-top: 12px; }
 	.toolbar button, .tonal, .filter-button, .text-button, .add-resource {
-		min-height: 32px; border: 0; border-radius: 999px; padding: 6px 13px;
+		min-height: 32px; border: 0; border-radius: 5px; padding: 6px 13px;
 		cursor: pointer; transition: background-color .14s ease, transform .14s ease;
 	}
 	.toolbar button:hover, .tonal:hover, .filter-button:hover, .text-button:hover { filter: brightness(1.08); }
@@ -857,11 +861,11 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.category-heading { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ri-muted); padding: 8px 4px 2px; border-bottom: 1px solid var(--ri-border); margin-top: 4px; }
 	.count { color: var(--ri-muted); font-size: 11px; }
 	.property-tools { display: flex; gap: 8px; margin: 0 0 10px; }
-	#property-search { flex: 1; min-width: 0; height: 34px; border-radius: 999px; padding: 0 13px; }
+	#property-search { flex: 1; min-width: 0; height: 34px; border-radius: 5px; padding: 0 13px; }
 	input, select, textarea {
 		width: 100%; min-width: 0; color: var(--vscode-input-foreground);
 		background: var(--vscode-input-background); border: 1px solid var(--ri-border);
-		border-radius: 8px; padding: 6px 9px;
+		border-radius: 4px; padding: 6px 9px;
 	}
 	input:hover, select:hover, textarea:hover { border-color: color-mix(in srgb, var(--ri-accent) 45%, var(--ri-border)); }
 	.property-list { display: grid; gap: 5px; }
@@ -903,10 +907,11 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.preview-status { color: var(--ri-muted); font-size: 10px; }
 	.entry { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center; margin: 5px 0; }
 	.entry.array-entry { grid-template-columns: minmax(0, 1fr) auto; }
+	.entry.resource-entry { grid-template-columns: minmax(0, 1fr); padding: 9px; border: 1px solid var(--ri-border); border-radius: var(--ri-radius); background: var(--ri-card); margin: 8px 0; }
 	.array-entry-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 	.entry.kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 	.entry button, .res button, .toolbar button, .text-button { font-size: 11px; }
-	button:not(.revert) { border: 0; border-radius: 8px; cursor: pointer; }
+	button:not(.revert) { border: 0; border-radius: 5px; cursor: pointer; }
 	.resource-section { margin-top: 22px; }
 	.resource-card { background: var(--ri-card); border: 1px solid var(--ri-border); border-radius: var(--ri-radius); margin: 7px 0; padding: 0 12px; }
 	.resource-card > summary { display: flex; align-items: center; gap: 8px; min-height: 42px; cursor: pointer; list-style: none; }
@@ -935,6 +940,8 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.empty-state { text-align: center; padding: 12px 4px; }
 	.empty-state .resource-section { text-align: left; }
 	.empty { color: var(--ri-muted); text-align: center; padding: 12px 12px; margin: 0; }
+	@media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
+	body.vscode-high-contrast, body.vscode-high-contrast-light { --ri-accent: var(--vscode-focusBorder); --ri-border: var(--vscode-contrastBorder); }
 	@media (max-width: 520px) {
 		body { padding: 12px 9px 24px; }
 		.row { grid-template-areas: "heading revert" "control control"; grid-template-columns: minmax(0, 1fr) 27px; gap: 6px; padding: 7px 4px; }
