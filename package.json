@@ -27,6 +27,8 @@
 	],
 	"activationEvents": [
 		"workspaceContains:project.godot",
+		"onCustomEditor:neoGodotTools.scene2dPreview",
+		"onCustomEditor:neoGodotTools.shaderPreview",
 		"onDebugResolve:godot"
 	],
 	"main": "./out/extension.js",
@@ -83,7 +85,7 @@
 						"filenamePattern": "*.tscn"
 					}
 				],
-				"priority": "option"
+				"priority": "default"
 			},
 			{
 				"viewType": "neoGodotTools.shaderPreview",
@@ -94,9 +96,12 @@
 					},
 					{
 						"filenamePattern": "*.shader"
+					},
+					{
+						"filenamePattern": "*.gdshaderinc"
 					}
 				],
-				"priority": "option"
+				"priority": "default"
 			}
 		],
 		"commands": [
