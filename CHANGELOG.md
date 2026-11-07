@@ -2,7 +2,16 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.3.1 — 2026-11-06 (pending)
+### 3.3.2 — 2026-11-07 (pending)
+
+Changes since [v3.3.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.1...v3.3.2).
+
+#### Changed
+
+- \[Issue-225\] perf(previews): optimize Zig, scene, shader, and runtime queues ([#226](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/226))
+- \[Issue-227\] fix(lsp): prevent stopping the client during startup ([#228](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/228))
+
+### 3.3.1 — 2026-11-06
 
 Changes since [v3.3.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.0...v3.3.1).
 
@@ -10,6 +19,10 @@ Changes since [v3.3.0](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.0
 
 - \[Issue-221\] fix(preview): restore TSCN and GDShader previews ([#222](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/222))
 - \[Issue-223\] perf(preview): optimize TSCN and GDShader preview workflow ([#224](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/224))
+
+#### Documentation
+
+- **changelog:** update changelog ([97c919b](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/97c919bca94e195302b31644c13b308b2de3a91e))
 
 ### 3.3.0 — 2026-11-06
 
