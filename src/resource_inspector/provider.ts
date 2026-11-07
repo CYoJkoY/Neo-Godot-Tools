@@ -23,6 +23,7 @@ interface WebviewMessage {
 	target?: string;
 	metaType?: string;
 	subType?: string;
+	index?: number;
 }
 import { createLruCache } from "../utils/lru_cache";
 import { withTimeout } from "../utils/scheduling.js";
@@ -34,7 +35,10 @@ import {
 	SubResourceEntry,
 	applyResourceEdits,
 	createDocumentParseCache,
+	editResourceArray,
+	parseResourceDocument,
 	resourceReference,
+	subResourceLabel,
 } from "./document.js";
 import {
 	BUILTIN_RESOURCE_PROPERTIES,
@@ -89,7 +93,7 @@ export interface ResourceModel {
 	format?: string;
 	uid?: string;
 	properties: PropertyModel[];
-	subResourceTypes: Array<{ id: string; type: string }>;
+	subResourceTypes: Array<{ id: string; type: string; label?: string }>;
 	subResources: Array<{ id: string; type: string; properties: PropertyModel[] }>;
 	extResources: Array<{
 		id: string;
@@ -98,6 +102,7 @@ export interface ResourceModel {
 		uid?: string;
 		broken: boolean;
 		imagePreview?: ImagePreview;
+		label?: string;
 	}>;
 	diagnostics: Array<{ message: string; severity: "error" | "warning"; line: number }>;
 }
@@ -520,6 +525,12 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 				await this.pickResource(uri, String(message.name ?? ""), message.target);
 				return;
 			}
+			case "pickArrayResources":
+			case "pickArrayResource":
+			case "createArraySubResource": {
+				await this.editArrayResource(uri, message);
+				return;
+			}
 			case "createSubResource": {
 				await this.createSubResource(
 					uri,
@@ -532,6 +543,31 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			default:
 				return;
 		}
+	}
+
+	private async editArrayResource(uri: vscode.Uri, message: WebviewMessage): Promise<void> {
+		const single = message.command !== "pickArrayResources";
+		if (single && (!Number.isInteger(message.index) || (message.index ?? -1) < 0)) {
+			void vscode.window.showErrorMessage("Invalid resource array index.");
+			return;
+		}
+		const picked = message.command === "createArraySubResource" ? undefined : await vscode.window.showOpenDialog({
+			canSelectMany: !single,
+			filters: { "Godot resources": ["tres", "res", "tscn", "gd", "gdshader", "png", "svg", "jpg", "jpeg", "webp", "gif", "bmp"] },
+		});
+		if (message.command !== "createArraySubResource" && !picked?.length) return;
+		const document = await vscode.workspace.openTextDocument(uri);
+		const text = document.getText();
+		const format = this.parsedDocument(document).format;
+		const resources = message.command === "createArraySubResource"
+			? [{ type: message.subType || "Resource" }]
+			: await Promise.all((picked ?? []).map(async (file) => ({ type: await this.selectedResourceType(file, format), path: toResPath(uri, file) })));
+		const outcome = editResourceArray(text, String(message.name ?? ""), resources, message.target, single ? message.index : undefined);
+		if ("error" in outcome) {
+			void vscode.window.showErrorMessage(outcome.error);
+			return;
+		}
+		if (outcome.result.text !== text) await this.replaceText(document, outcome.result.text);
 	}
 
 	private async openExtResource(uri: vscode.Uri, id: string): Promise<void> {
@@ -567,7 +603,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 	/** Adds an external resource without assigning it to a property yet. */
 	private async addExternalResource(uri: vscode.Uri): Promise<void> {
 		const picked = await vscode.window.showOpenDialog({
-			canSelectMany: false,
+			canSelectMany: true,
 			filters: {
 				"Godot resources": [
 					"tres",
@@ -588,20 +624,33 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 		if (!picked?.length) return;
 		const document = await vscode.workspace.openTextDocument(uri);
 		const text = document.getText();
-		const resourcePath = toResPath(uri, picked[0]);
 		const parsed = this.parsedDocument(document);
-		if (parsed.extResources.some((resource) => resource.path === resourcePath)) {
-			void vscode.window.showInformationMessage("This external resource is already included.");
+		const additions = await Promise.all(picked.map(async (file) => ({ resourcePath: toResPath(uri, file), type: await this.selectedResourceType(file, parsed.format) })));
+		const result = additions.reduce((state, addition) => {
+			const resourcePath = addition.resourcePath;
+			const exists = parseResourceDocument(state.text).extResources
+				.some((resource) => resource.path === resourcePath);
+			return exists ? state : {
+				text: applyResourceEdits(state.text, [{
+					kind: "addExtResource",
+					type: addition.type,
+					path: resourcePath,
+				}]).text,
+				added: true,
+			};
+		}, { text, added: false });
+		if (!result.added) {
+			void vscode.window.showInformationMessage("The selected external resources are already included.");
 			return;
 		}
-		const result = applyResourceEdits(text, [
-			{
-				kind: "addExtResource",
-				type: extResourceType(picked[0], parsed.format),
-				path: resourcePath,
-			},
-		]);
 		await this.replaceText(document, result.text);
+	}
+
+	private async selectedResourceType(file: vscode.Uri, format?: string): Promise<string> {
+		const fallback = extResourceType(file, format);
+		if (path.extname(file.fsPath).toLowerCase() !== ".tres") return fallback;
+		const text = await this.readTextFile(file);
+		return text === undefined ? fallback : parseResourceDocument(text).resourceType;
 	}
 
 	/** Opens a `.tres` as an `ExtResource` for the selected property. */
@@ -741,6 +790,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			return {
 				id: resource.id,
 				type: resource.type,
+				label: `${resource.path || resource.id} · ${resource.type}`,
 				path: resource.path,
 				uid: resource.uid,
 				broken: !uri || !fs.existsSync(uri.fsPath),
@@ -766,7 +816,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			uid: parsed.uid,
 			properties,
 			subResources,
-			subResourceTypes: parsed.subResources.map((subResource) => ({ id: subResource.id, type: subResource.type })),
+			subResourceTypes: parsed.subResources.map((subResource) => ({ id: subResource.id, type: subResource.type, label: subResourceLabel(subResource) })),
 			extResources,
 			diagnostics: validateResourceDocument(parsed, metadata, { complete: false }),
 		};
@@ -816,6 +866,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			return {
 				id: resource.id,
 				type: resource.type,
+				label: `${resource.path || resource.id} · ${resource.type}`,
 				path: resource.path,
 				uid: resource.uid,
 				broken,
@@ -848,6 +899,7 @@ export class ResourceInspectorProvider implements vscode.CustomTextEditorProvide
 			subResourceTypes: parsed.subResources.map((subResource) => ({
 				id: subResource.id,
 				type: subResource.type,
+				label: subResourceLabel(subResource),
 			})),
 			extResources,
 			diagnostics,

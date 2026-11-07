@@ -584,6 +584,50 @@ describe("resource inspector webview", () => {
 		assert.equal(webview.messages.at(-1)?.subType, "Material");
 	});
 
+	it("offers batch resource selection in empty typed TRES arrays without metadata", () => {
+		const webview = loadWebview();
+		const editor = webview.arrayEditor(
+			{ name: "items", raw: "Array[Resource]([])", target: "Inventory_1", widget: { kind: "array" } },
+			{ format: "3", extResources: [], subResources: [] },
+			() => assert.fail("Browsing must not write stale webview state"),
+		);
+		const add = editor.children.find((child) => child.textContent === "Add resources…");
+		assert.ok(add);
+		fire(add, "click");
+		assert.equal(webview.messages.at(-1)?.command, "pickArrayResources");
+		assert.equal(webview.messages.at(-1)?.name, "items");
+		assert.equal(webview.messages.at(-1)?.target, "Inventory_1");
+	});
+
+	it("resolves numeric TRES references to readable paths and preserves removal", () => {
+		const webview = loadWebview();
+		const commits: string[] = [];
+		const editor = webview.arrayEditor(
+			{ name: "items", raw: "[ExtResource(1), null]", widget: { kind: "array" } },
+			{ format: "2", extResources: [{ id: "1", type: "Resource", path: "res://items/sword.tres" }] },
+			(value) => commits.push(value),
+		);
+		const select = descendants(editor, (el) => el.tagName === "select")[0];
+		assert.equal(select.value, "ExtResource( 1 )");
+		assert.equal(select.title, "res://items/sword.tres · Resource");
+		assert.ok(select.children.some((child) => child.textContent === select.title));
+		const remove = editor.children[0].children[1].children.find((child) => child.title === "Remove entry");
+		assert.ok(remove);
+		fire(remove, "click");
+		assert.equal(commits[0], "[null]");
+	});
+
+	it("does not offer resource browsing for primitive arrays", () => {
+		const webview = loadWebview();
+		const editor = webview.arrayEditor(
+			{ name: "counts", raw: "Array[int]([1, 2])", widget: { kind: "array" } },
+			{ format: "3" },
+			() => {},
+		);
+		assert.equal(descendants(editor, (el) => el.tagName === "select").length, 0);
+		assert.ok(!descendants(editor, (el) => el.tagName === "button").some((el) => el.textContent === "Add resources…"));
+	});
+
 	it("routes embedded scene-resource edits with an unambiguous target", () => {
 		const webview = loadWebview();
 		webview.render({
