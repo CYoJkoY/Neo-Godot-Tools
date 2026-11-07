@@ -114,11 +114,11 @@ export function backendStatusHtml(): string {
 	:root {
 		color-scheme: light dark;
 		--st-surface: var(--vscode-editor-background);
-		--st-card: color-mix(in srgb, var(--vscode-foreground) 4%, var(--st-surface));
+		--st-card: color-mix(in srgb, #98826b 5%, var(--st-surface));
 		--st-border: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
 		--st-muted: var(--vscode-descriptionForeground, #777);
-		--st-accent: var(--vscode-button-background, #1a73e8);
-		--st-radius: 12px;
+		--st-accent: color-mix(in srgb, #98826b 45%, var(--vscode-button-background, #6f7964));
+		--st-radius: 6px;
 	}
 	* { box-sizing: border-box; }
 	body {
@@ -127,21 +127,21 @@ export function backendStatusHtml(): string {
 		font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); line-height: 1.45;
 	}
 	main { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
-	.eyebrow { margin: 0; color: var(--st-muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-	h1 { margin: 3px 0 0; font-size: 22px; font-weight: 600; }
+	.eyebrow { margin: 0; color: color-mix(in srgb, #98826b 62%, var(--st-muted)); font-size: 10px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+	h1 { margin: 3px 0 0; font-size: 22px; font-weight: 500; font-family: Georgia, "Songti SC", "Noto Serif SC", serif; letter-spacing: .01em; }
 	.muted { margin: 4px 0 0; color: var(--st-muted); font-size: 12px; }
 	.meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 	.badge {
-		border: 1px solid var(--st-border); border-radius: 999px; padding: 3px 10px;
+		border: 1px solid var(--st-border); border-radius: 3px; padding: 3px 9px;
 		color: var(--st-muted); font-size: 11px; font-variant-numeric: tabular-nums;
 	}
 	button {
-		min-height: 28px; border: 1px solid var(--st-border); border-radius: 999px; padding: 3px 12px;
+		min-height: 28px; border: 1px solid var(--st-border); border-radius: 3px; padding: 3px 12px;
 		background: transparent; color: var(--vscode-foreground); cursor: pointer; font: inherit; font-size: 12px;
 	}
 	button:hover { background: var(--st-card); }
 	button:focus-visible { outline: 2px solid var(--vscode-focusBorder, #1a73e8); outline-offset: 2px; }
-	.card { border: 1px solid var(--st-border); border-radius: var(--st-radius); background: var(--st-card); padding: 12px 14px; }
+	.card { border: 1px solid var(--st-border); border-left: 2px solid color-mix(in srgb, #98826b 42%, transparent); border-radius: var(--st-radius); background: var(--st-card); padding: 14px 16px; }
 	.card h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .01em; }
 	table { width: 100%; border-collapse: collapse; }
 	th {

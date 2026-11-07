@@ -844,7 +844,7 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.resource-header { padding: 4px 2px 14px 12px; border-left: 2px solid var(--ri-accent); margin-bottom: 14px; }
 	.eyebrow { color: var(--ri-muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 	.resource-path { color: var(--ri-muted); font: 11px var(--vscode-editor-font-family, monospace); margin-top: 2px; overflow-wrap: anywhere; }
-	h2 { font-size: 21px; line-height: 1.4; font-weight: 500; letter-spacing: -.02em; margin: 6px 0 0; overflow-wrap: anywhere; }
+	h2 { font-size: 21px; line-height: 1.4; font-weight: 500; font-family: Georgia, "Songti SC", "Noto Serif SC", serif; letter-spacing: -.01em; margin: 6px 0 0; overflow-wrap: anywhere; }
 	h3 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: .01em; }
 	.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 20px; }
 	.empty-toolbar { justify-content: center; margin-top: 12px; }
@@ -870,7 +870,7 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	input:hover, select:hover, textarea:hover { border-color: color-mix(in srgb, var(--ri-accent) 45%, var(--ri-border)); }
 	.property-list { display: grid; gap: 5px; }
 	.property-row[hidden] { display: none; }
-	.row { display: grid; grid-template-areas: "heading control revert"; grid-template-columns: minmax(110px, 30%) minmax(0, 1fr) 27px; gap: 8px; align-items: center; padding: 8px 7px; border-radius: 10px; border: 1px solid transparent; }
+	.row { display: grid; grid-template-areas: "heading control revert"; grid-template-columns: minmax(110px, 30%) minmax(0, 1fr) 27px; gap: 8px; align-items: center; padding: 8px 7px; border-radius: 5px; border: 1px solid transparent; }
 	.row:hover { background: var(--ri-card); border-color: var(--ri-border); }
 	.row.modified { border-left: 2px solid var(--ri-accent); padding-left: 6px; }
 	.property-heading { grid-area: heading; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -882,7 +882,7 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.row input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--ri-accent); }
 	.row input[type="color"] { padding: 3px; min-height: 34px; }
 	.row textarea { resize: vertical; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
-	.revert { width: 27px; height: 27px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: var(--ri-muted); font-size: 16px; }
+	.revert { width: 27px; height: 27px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; color: var(--ri-muted); font-size: 16px; }
 	.revert:hover { background: var(--ri-card); color: var(--vscode-foreground); }
 	.group { display: grid; grid-template-columns: repeat(auto-fit, minmax(55px, 1fr)); gap: 6px; align-items: center; }
 	.res { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
@@ -900,7 +900,7 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	button:disabled { opacity: .4; cursor: default; }
 	.image-thumbnail { flex: 0 0 32px; width: 32px; height: 32px; padding: 0; overflow: hidden; background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 8px 8px; }
 	.image-thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
-	.image-preview { position: fixed; z-index: 20; pointer-events: none; width: min(280px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: hidden; padding: 10px; border: 1px solid var(--ri-border); border-radius: 10px; background: var(--vscode-editorHoverWidget-background, var(--ri-surface)); box-shadow: 0 4px 18px #0005; }
+	.image-preview { position: fixed; z-index: 20; pointer-events: none; width: min(280px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: hidden; padding: 10px; border: 1px solid var(--ri-border); border-radius: 6px; background: var(--vscode-editorHoverWidget-background, var(--ri-surface)); box-shadow: 0 4px 18px #0005; }
 	.image-preview[hidden], .image-preview img[hidden] { display: none; }
 	.image-preview img { display: block; width: 100%; max-height: min(220px, 50vh); object-fit: contain; background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 12px 12px; }
 	.preview-caption { margin-top: 6px; font-size: 11px; overflow-wrap: anywhere; }
@@ -932,10 +932,10 @@ export function resourceInspectorHtml(webview: vscode.Webview, extensionUri: vsc
 	.resource-id { color: var(--vscode-foreground); }
 	.resource-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; background: transparent; color: var(--vscode-textLink-foreground, var(--ri-accent)); padding: 4px; }
 	.broken { color: var(--vscode-errorForeground); }
-	.diagnostics { padding: 10px 12px 10px 28px; border-radius: 10px; background: var(--ri-card); margin: 8px 0; }
+	.diagnostics { padding: 10px 12px 10px 28px; border-radius: 5px; background: var(--ri-card); margin: 8px 0; }
 	.diagnostics .error { color: var(--vscode-errorForeground); }
 	.diagnostics .warning { color: var(--vscode-editorWarning-foreground); }
-	.banner { position: sticky; z-index: 2; top: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+	.banner { position: sticky; z-index: 2; top: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWarning-foreground); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
 	.banner button { background: var(--ri-accent); color: var(--vscode-button-foreground, white); padding: 6px 10px; }
 	.empty-state { text-align: center; padding: 12px 4px; }
 	.empty-state .resource-section { text-align: left; }
