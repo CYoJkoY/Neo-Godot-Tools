@@ -2,10 +2,11 @@ import { strict as assert } from "node:assert";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Script } from "node:vm";
 import { describe, it } from "node:test";
 import * as vscode from "vscode";
 import { SceneParser } from "../scene_tools/parser.js";
-import { buildScenePreviewModel, buildShaderPreviewModel, isPreviewMessage } from "./static_preview.js";
+import { buildScenePreviewModel, buildShaderPreviewModel, isPreviewMessage, STATIC_PREVIEW_SCRIPT } from "./static_preview.js";
 import { analyzeShaderSource } from "./shader_analysis.js";
 
 function makeDocument(uri: vscode.Uri, source: string): vscode.TextDocument {
@@ -28,6 +29,12 @@ function makeDocument(uri: vscode.Uri, source: string): vscode.TextDocument {
 }
 
 describe("static previews", () => {
+	it("generates syntactically valid Webview JavaScript for both preview renderers", () => {
+		assert.doesNotThrow(() => new Script(STATIC_PREVIEW_SCRIPT));
+		assert.match(STATIC_PREVIEW_SCRIPT, /function renderScene\(/);
+		assert.match(STATIC_PREVIEW_SCRIPT, /function renderShader\(/);
+	});
+
 	it("builds a positioned 2D model with nested controls and a scoped texture URI", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-scene-preview-"));
 		try {
