@@ -56,6 +56,7 @@ export class MessageIO extends EventEmitter {
 			socket.on("close", () => {
 				this.socket = undefined;
 				this.emit("disconnected");
+				this.emit("close");
 			});
 		});
 	}

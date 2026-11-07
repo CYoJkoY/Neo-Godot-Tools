@@ -83,7 +83,6 @@ export class ClientConnectionManager implements vscode.Disposable {
 		if (this.reconnectTimer) clearInterval(this.reconnectTimer);
 		this.reconnectTimer = undefined;
 		this.stop_language_server();
-		this.client?.io?.removeAllListeners();
 		this.client?.events?.removeAllListeners();
 		void this.client?.stop();
 		this.statusChanged.dispose();
@@ -93,7 +92,6 @@ export class ClientConnectionManager implements vscode.Disposable {
 	private create_new_client(previous: GDScriptLanguageClient | undefined): GDScriptLanguageClient {
 		const port = previous?.port ?? -1;
 		if (previous) {
-			previous.io.removeAllListeners();
 			previous.events.removeAllListeners();
 			void previous.stop();
 		}
