@@ -109,6 +109,10 @@ interface MemoryBackendOptions {
 	readonly onIngest?: (uris: readonly string[]) => void;
 	readonly onRemove?: (uri: string) => void;
 	readonly onQuery?: (query: string) => void;
+	/** Returns true once for the next query, which rejects as stale. */
+	readonly staleQuery?: () => boolean;
+	/** Called before the native table is cleared, to hold a rebuild. */
+	readonly onClear?: () => void | Promise<void>;
 }
 
 /** Keeps the native table in memory, so a flush can succeed without the binary. */
@@ -134,6 +138,7 @@ function memoryBackend(options: MemoryBackendOptions = {}): ZigBackend {
 			return next;
 		},
 		clearSymbols: async (next) => {
+			await options.onClear?.();
 			idsByUri.clear();
 			revision = next;
 			return next;
@@ -145,6 +150,7 @@ function memoryBackend(options: MemoryBackendOptions = {}): ZigBackend {
 		}),
 		querySymbols: async (_revision, query) => {
 			options.onQuery?.(query);
+			if (options.staleQuery?.() === true) throw new Error("stale revision");
 			return new Uint32Array([...idsByUri.values()].flatMap((ids) => [...ids]));
 		},
 	});
@@ -398,6 +404,53 @@ describe("ZigSymbolMirror", () => {
 			const [first, second] = await Promise.all([mirror.workspaceSymbols("script"), mirror.workspaceSymbols("script")]);
 			assert.deepEqual(first, second);
 			assert.equal(queryCalls, 1);
+		} finally {
+			mirror.dispose();
+		}
+	});
+
+	it("coalesces a rebuild triggered by a stale query and a flush", async () => {
+		const index = workspace(COLLATION_SOURCES);
+		let stale = false;
+		let clears = 0;
+		let releaseClear: () => void = () => undefined;
+		const clearGate = new Promise<void>((resolve) => {
+			releaseClear = resolve;
+		});
+		let holdClear = false;
+		let clearHeld = false;
+		const mirror = createZigSymbolMirror({
+			snapshot: () => indexedSymbolFiles(index.symbols),
+			backend: memoryBackend({
+				staleQuery: () => {
+					if (!stale) return false;
+					stale = false;
+					return true;
+				},
+				onClear: async () => {
+					clears += 1;
+					if (holdClear && !clearHeld) {
+						clearHeld = true;
+						await clearGate;
+					}
+				},
+			}),
+		});
+		try {
+			for (const file of indexedSymbolFiles(index.symbols)) mirror.upsert(file.uri, file.symbols);
+			await awaitNative(mirror);
+			stale = true;
+			holdClear = true;
+			// The next query hits the stale revision and starts a rebuild.
+			const first = mirror.workspaceSymbols("");
+			await waitFor(() => clears === 1, "the rebuild clear");
+			// A concurrent flush must reuse the rebuild instead of starting another.
+			const second = mirror.workspaceSymbols("");
+			releaseClear();
+			const [firstResult, secondResult] = await Promise.all([first, second]);
+			assert.equal(clears, 1, "the concurrent flush must reuse the rebuild");
+			assert.notEqual(firstResult, undefined);
+			assert.notEqual(secondResult, undefined);
 		} finally {
 			mirror.dispose();
 		}
