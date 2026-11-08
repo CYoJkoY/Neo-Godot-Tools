@@ -134,6 +134,8 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		stamp: 0,
 		timer: undefined as ReturnType<typeof setTimeout> | undefined,
 		inFlight: undefined as Promise<boolean> | undefined,
+		/** A rebuild already covers every caller waiting on a stale revision. */
+		resyncInFlight: undefined as Promise<boolean> | undefined,
 		/** The native store holds every symbol of the authoritative index. */
 		synced: false,
 		/** The sidecar is missing, incompatible or the host collation differs. */
@@ -316,7 +318,8 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 	 * result with a digest, so a restarted sidecar can never serve a partial
 	 * table.
 	 */
-	const resync = async (): Promise<boolean> => {
+	const performResync = async (): Promise<boolean> => {
+		if (state.disposed) return false;
 		const stamp = state.stamp;
 		const snapshot = options.snapshot();
 		if (!snapshot.every(isAsciiFile)) return suspend("a symbol name or uri is outside printable ASCII");
@@ -365,6 +368,28 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 			() => undefined,
 		);
 		return true;
+	};
+
+	/**
+	 * A stale query and a background flush can both discover the same stale
+	 * revision. Sharing one rebuild keeps their clear and ingest requests
+	 * from interleaving on a table they both intend to replace.
+	 */
+	const resync = (): Promise<boolean> => {
+		const current = state.resyncInFlight;
+		if (current !== undefined) return current;
+		const work = performResync().then(
+			(applied) => {
+				state.resyncInFlight = undefined;
+				return applied;
+			},
+			() => {
+				state.resyncInFlight = undefined;
+				return false;
+			},
+		);
+		state.resyncInFlight = work;
+		return work;
 	};
 
 	const applyPending = async (): Promise<boolean> => {
@@ -571,6 +596,7 @@ export function createZigSymbolMirror(options: ZigSymbolMirrorOptions): ZigSymbo
 		state.disposed = true;
 		if (state.timer !== undefined) clearTimeout(state.timer);
 		state.timer = undefined;
+		state.resyncInFlight = undefined;
 		upserts.clear();
 		removals.clear();
 		symbolsById.clear();
