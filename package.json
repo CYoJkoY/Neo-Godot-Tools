@@ -2,7 +2,7 @@
 	"name": "neo-godot-tools",
 	"displayName": "Neo Godot Tools",
 	"icon": "icon.png",
-	"version": "3.3.2",
+	"version": "3.3.3",
 	"description": "Godot development tools for VS Code with local-first GDScript intelligence, documentation, debugging, and Godot LSP integration.",
 	"repository": {
 		"type": "git",
@@ -27,8 +27,6 @@
 	],
 	"activationEvents": [
 		"workspaceContains:project.godot",
-		"onCustomEditor:neoGodotTools.scene2dPreview",
-		"onCustomEditor:neoGodotTools.shaderPreview",
 		"onDebugResolve:godot"
 	],
 	"main": "./out/extension.js",
