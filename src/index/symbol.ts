@@ -33,7 +33,7 @@ export interface IndexedSymbol {
 	type?: string;
 	parameters?: IndexedParameter[];
 	static?: boolean;
-	/** Contents of the `##` documentation comments attached to the declaration. */
+	/** Contents of the `#`/`##` documentation comments attached to the declaration. */
 	documentation?: string;
 }
 
@@ -49,7 +49,7 @@ export interface IndexedFile {
 }
 
 /**
- * Returns the `##` documentation comment block written above `line`.
+ * Returns the `#`/`##` documentation comment block written above `line`.
  *
  * Annotation lines (`@export`, `@onready`, ...) may sit between the comments and
  * the declaration, so they are skipped while walking upwards.
@@ -65,7 +65,9 @@ function extractDocumentationFromLines(lines: readonly string[], line: number): 
 		const text = lines[candidate];
 		if (text === undefined) continue;
 		if (/^\s*@/.test(text)) continue;
-		const match = text.match(/^\s*##(.*)$/);
+		// One or two hashes start a documentation line; `###` and longer are
+		// separators or commented-out code and must not leak into the hover.
+		const match = text.match(/^\s*#{1,2}(?!#)(.*)$/);
 		if (!match) break;
 		parts.unshift(match[1].replace(/^ /, "").trimEnd());
 	}

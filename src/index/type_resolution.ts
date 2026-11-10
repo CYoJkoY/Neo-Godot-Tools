@@ -430,8 +430,8 @@ export function createTypeResolutionIndex(
 		if (dot === undefined) return undefined;
 		const receiver = resolveExpressionAt(uri, dot);
 		if (receiver) return receiver;
-		// A statement starting with `.member` is GDScript shorthand for `self`.
-		return startsStatement(tokens, dot) ? resolveReceiver(uri, offset, "self") : undefined;
+		// A statement starting with `.member` is GDScript shorthand for `super`.
+		return startsStatement(tokens, dot) ? resolveReceiver(uri, offset, "super") : undefined;
 	};
 
 	/** Receiver type of the `.` directly in front of `offset` (`Worker.`). */
@@ -441,7 +441,7 @@ export function createTypeResolutionIndex(
 		if (!dot) return undefined;
 		const receiver = resolveExpressionAt(uri, dot.start);
 		if (receiver) return receiver;
-		return startsStatement(tokens, dot.start) ? resolveReceiver(uri, offset, "self") : undefined;
+		return startsStatement(tokens, dot.start) ? resolveReceiver(uri, offset, "super") : undefined;
 	};
 
 	/**

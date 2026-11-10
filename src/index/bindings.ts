@@ -1,6 +1,6 @@
 import { GDScriptDeclaration, GDScriptFunction, GDScriptToken, SourceRange } from "../analyzer/index.js";
 import { addToGroup, dropFromGroup } from "./collections.js";
-import { ChainLink, parseChainEndingAt } from "./expression.js";
+import { ChainLink, parseChainEndingAt, startsStatement } from "./expression.js";
 import { FileIndex } from "./file_index.js";
 import { IndexedFile, IndexedSymbol } from "./symbol.js";
 import { tokensFor } from "./token_cache.js";
@@ -425,6 +425,12 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 		token: GDScriptToken,
 		index: number,
 	): Binding | undefined => {
+		const dot = tokens[index - 1];
+		if (dot?.kind === "punctuation" && dot.value === "." && startsStatement(tokens, dot.start)) {
+			// A statement starting with `.member` is GDScript shorthand for
+			// `super.member`, so references and rename bind to the parent method.
+			return resolveSuperMember(uri, token.start, token.value);
+		}
 		const previousPrevious = tokens[index - 2]?.value;
 		if (previousPrevious === "self") {
 			// `self.member` always addresses a class member, never a local variable
@@ -619,16 +625,56 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	const resolveSuperMember = (uri: string, offset: number, name: string): Binding | undefined => {
 		const file = files.get(uri);
 		if (!file) return undefined;
-		// Inside an inner class `super` is that class's own base, not the script's.
 		const containing = containingClass(file, offset);
-		if (containing?.extendsName) {
-			const base = classFromReference(file, offset, containing.extendsName);
-			const member = base ? findClassMember(base.uri, base, name, new Set<string>()) : undefined;
-			if (base && member) return bindingFromSymbol(member, base.range);
+		// Inside an inner class `super` is that class's own base, not the script's.
+		const declaration = file.ast.declarations.find((item) => item.kind === "extends");
+		const reference = containing
+			? containing.extendsName
+			: declaration?.kind === "extends"
+				? declaration.name
+				: undefined;
+		if (!reference) return undefined;
+		const base = classFromReference(file, offset, reference);
+		if (base?.kind === "class") {
+			const member = findClassMember(base.uri, base, name, new Set<string>());
+			return member ? bindingFromSymbol(member, base.range) : undefined;
 		}
-		const scriptBase = scriptBaseClass(file);
-		const member = scriptBase ? findClassMember(scriptBase.uri, scriptBase, name, new Set<string>()) : undefined;
-		return scriptBase && member ? bindingFromSymbol(member, scriptBase.range) : undefined;
+		// The base may be a script without a `class_name`, which only its path
+		// identifies.
+		const baseUri = base?.uri ?? baseScriptUri(reference);
+		const baseFile = baseUri ? files.get(baseUri) : undefined;
+		const member = baseUri ? resolveScriptMember(baseUri, name, new Set<string>()) : undefined;
+		return member && baseFile ? bindingFromSymbol(member, baseFile.ast.range) : undefined;
+	};
+
+	/** Top-level member of the script at `uri`, following its `extends` chain. */
+
+	const resolveScriptMember = (uri: string, name: string, visited: Set<string>): IndexedSymbol | undefined => {
+		if (visited.has(uri)) return undefined;
+		visited.add(uri);
+		const file = files.get(uri);
+		if (!file) return undefined;
+		const own = file.symbols.find(
+			(symbol) =>
+				symbol.name === name &&
+				symbol.kind !== "class_name" &&
+				!symbol.containerName &&
+				!symbol.containerRange,
+		);
+		if (own) return own;
+		const declaration = file.ast.declarations.find((item) => item.kind === "extends");
+		if (!declaration || declaration.kind !== "extends") return undefined;
+		const baseUri = baseScriptUri(declaration.name);
+		return baseUri ? resolveScriptMember(baseUri, name, visited) : undefined;
+	};
+
+	/** Indexed script behind an `extends` reference, including one without `class_name`. */
+
+	const baseScriptUri = (reference: string): string | undefined => {
+		const normalized = reference.replace(/^["']|["']$/g, "");
+		if (normalized.startsWith("res://") || normalized.endsWith(".gd"))
+			return files.findByPathSuffix(normalized);
+		return globalClassCandidate(normalized)?.uri;
 	};
 
 	/** Class behind an `extends` reference: an inner class, a script or a `class_name`. */
@@ -641,14 +687,6 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 			return baseFile?.symbols.find((symbol) => symbol.kind === "class_name");
 		}
 		return classCandidate(file, offset, normalized) ?? globalClassCandidate(normalized);
-	};
-
-	/** The `class_name` script this file extends, when it extends one. */
-
-	const scriptBaseClass = (file: IndexedFile): IndexedSymbol | undefined => {
-		const declaration = file.ast.declarations.find((item) => item.kind === "extends");
-		if (!declaration || declaration.kind !== "extends") return undefined;
-		return classFromReference(file, file.ast.range.start.offset, declaration.name);
 	};
 
 	const bindingFromSymbol = (symbol: IndexedSymbol, scopeRange: SourceRange): Binding | undefined => {

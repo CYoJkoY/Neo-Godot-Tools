@@ -102,6 +102,71 @@ func heal(amount: int = 5) -> void:
 		service.dispose();
 	});
 
+	it("renders single-hash comments above a function", () => {
+		const service = createService();
+		const source = `extends Node
+# Heals the player over time.
+# Second documentation line.
+func heal() -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("heal()"));
+		assert.ok(markdown);
+		assert.match(markdown, /heal\(\) -> void/);
+		assert.match(markdown, /Heals the player over time\./);
+		assert.match(markdown, /Second documentation line\./);
+		service.dispose();
+	});
+
+	it("mixes single and double hash comments in one documentation block", () => {
+		const service = createService();
+		const source = `extends Node
+# Heals the player.
+## Restores health over time.
+@export var speed: int = 1
+func heal() -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("heal()"));
+		assert.ok(markdown);
+		assert.match(markdown, /Heals the player\./);
+		assert.match(markdown, /Restores health over time\./);
+		service.dispose();
+	});
+
+	it("does not extend documentation across a blank line", () => {
+		const service = createService();
+		const source = `extends Node
+# Unrelated file header.
+
+# Heals the player.
+func heal() -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("heal()")) ?? "";
+		assert.match(markdown, /Heals the player\./);
+		assert.doesNotMatch(markdown, /Unrelated file header\./);
+		service.dispose();
+	});
+
+	it("ignores triple-hash separators", () => {
+		const service = createService();
+		const source = `extends Node
+###
+# Heals the player.
+func heal() -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("heal()"));
+		assert.ok(markdown);
+		assert.match(markdown, /Heals the player\./);
+		service.dispose();
+	});
+
 	it("renders the docstring of a method resolved through a typed receiver", () => {
 		const service = createService();
 		index(service, playerUri, playerSource);

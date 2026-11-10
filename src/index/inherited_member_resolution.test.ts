@@ -10,6 +10,7 @@ import { createTypeResolutionIndex } from "./type_resolution.js";
 const BASE_URI = "file:///workspace/base.gd";
 const MIDDLE_URI = "file:///workspace/middle.gd";
 const CHILD_URI = "file:///workspace/child.gd";
+const PLAIN_BASE_URI = "file:///workspace/plain_base.gd";
 
 function createResolver(sources: Record<string, string>): InheritedMemberResolver {
 	const files = createFileIndex();
@@ -111,6 +112,65 @@ describe("SemanticQueryEngine inherited definitions", () => {
 		const source = overrideSources[CHILD_URI];
 		const offset = source.indexOf(".testAA()") + 2;
 		assert.equal(semantic.getDefinition(CHILD_URI, { offset }).value?.uri, MIDDLE_URI);
+	});
+
+	it("skips the current override of a shorthand .foo() call", () => {
+		const overrideSources = {
+			[BASE_URI]: "class_name Base\nfunc testAA():\n\tpass\n",
+			[MIDDLE_URI]: "class_name Middle\nextends Base\nfunc testAA():\n\tpass\n",
+			[CHILD_URI]:
+				"class_name Child\nextends Middle\nfunc testAA():\n\t.testAA()\n\tpass\n",
+		};
+		const semantic = createSemantic(overrideSources);
+		const source = overrideSources[CHILD_URI];
+		const offset = source.indexOf(".testAA()") + 2;
+		const definition = semantic.getDefinition(CHILD_URI, { offset });
+		assert.equal(definition.confidence, "exact");
+		assert.equal(definition.value?.uri, MIDDLE_URI);
+		assert.equal(definition.value?.range.start.line, 2);
+	});
+
+	it("keeps walking up when the parent does not override the current method", () => {
+		const overrideSources = {
+			[BASE_URI]: "class_name Base\nfunc testAA():\n\tpass\n",
+			[MIDDLE_URI]: "class_name Middle\nextends Base\n",
+			[CHILD_URI]:
+				"class_name Child\nextends Middle\nfunc testAA():\n\t.testAA()\n\tpass\n",
+		};
+		const semantic = createSemantic(overrideSources);
+		const source = overrideSources[CHILD_URI];
+		const offset = source.indexOf(".testAA()") + 2;
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset }).value?.uri, BASE_URI);
+	});
+
+	it("distinguishes super.foo() from self.foo() inside an override", () => {
+		const overrideSources = {
+			[BASE_URI]: "class_name Base\nfunc testAA():\n\tpass\n",
+			[MIDDLE_URI]: "class_name Middle\nextends Base\nfunc testAA():\n\tpass\n",
+			[CHILD_URI]:
+				"class_name Child\nextends Middle\nfunc testAA():\n\tsuper.testAA()\n\tself.testAA()\n\tpass\n",
+		};
+		const semantic = createSemantic(overrideSources);
+		const source = overrideSources[CHILD_URI];
+		const parentOffset = source.indexOf("super.testAA") + "super.".length + 1;
+		const selfOffset = source.indexOf("self.testAA") + "self.".length + 1;
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset: parentOffset }).value?.uri, MIDDLE_URI);
+		assert.equal(semantic.getDefinition(CHILD_URI, { offset: selfOffset }).value?.uri, CHILD_URI);
+	});
+
+	it("resolves a parent script that has no class_name", () => {
+		const pathSources = {
+			[PLAIN_BASE_URI]: "extends Node\nfunc testAA():\n\tpass\n",
+			[CHILD_URI]:
+				'extends "res://plain_base.gd"\nfunc testAA():\n\t.testAA()\n\tpass\n',
+		};
+		const semantic = createSemantic(pathSources);
+		const source = pathSources[CHILD_URI];
+		const offset = source.indexOf(".testAA()") + 2;
+		const definition = semantic.getDefinition(CHILD_URI, { offset });
+		assert.equal(definition.confidence, "exact");
+		assert.equal(definition.value?.uri, PLAIN_BASE_URI);
+		assert.equal(definition.value?.name, "testAA");
 	});
 
 	it("resolves Ctrl+Click on a method of a GDScript inner class", () => {
