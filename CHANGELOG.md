@@ -2,7 +2,21 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.3.2 — 2026-11-07 (pending)
+### 3.3.3 — 2026-11-10 (pending)
+
+Changes since [v3.3.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.2...v3.3.3).
+
+#### Fixed
+
+- **gdscript:** resolve parent method navigation and hash comments ([1a16fff](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/1a16fff95dde2147d4fde68ce1d58bf2cceab75e))
+
+#### Changed
+
+- \[Issue-229\] fix(previews): restore scene and shader preview initialization ([#230](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/230))
+- \[Issue-231\] feat(previews): render scenes and shaders with Godot and refresh panel surfaces ([#232](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/232))
+- \[Issue-233\] fix(symbols): serialize resync after a stale native revision ([#234](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/234))
+
+### 3.3.2 — 2026-11-07
 
 Changes since [v3.3.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.1...v3.3.2).
 
@@ -10,6 +24,10 @@ Changes since [v3.3.1](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.1
 
 - \[Issue-225\] perf(previews): optimize Zig, scene, shader, and runtime queues ([#226](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/226))
 - \[Issue-227\] fix(lsp): prevent stopping the client during startup ([#228](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/228))
+
+#### Documentation
+
+- **changelog:** update changelog ([339614d](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/339614dda2430ad35760f8f33b80950ccd8348ce))
 
 ### 3.3.1 — 2026-11-06
 
