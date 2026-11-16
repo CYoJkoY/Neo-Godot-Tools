@@ -16,7 +16,7 @@ import {
 	verify_godot_version,
 } from "../../utils";
 import { prompt_for_godot_executable } from "../../utils/prompts";
-import { killSubProcesses, subProcess } from "../../utils/subspawn";
+import { godot_child_process_options, killSubProcesses, subProcess } from "../../utils/subspawn";
 import { GodotStackFrame, GodotStackVars, type GodotValue, type GodotVariable } from "../debug_runtime";
 import { AttachRequestArguments, LaunchRequestArguments, pinnedScene } from "../debugger";
 import { GodotDebugSession } from "./debug_session";
@@ -259,7 +259,7 @@ export class ServerController {
 		}
 
 		log.info(`Launching game process using command: '${command}'`);
-		const debugProcess = subProcess("debug", command, { shell: true, detached: true });
+		const debugProcess = subProcess("debug", command, godot_child_process_options(process.platform, { shell: true }));
 
 		// The listeners keep the child process from blocking on a full pipe.
 		debugProcess.stdout.on("data", () => {});

@@ -13,7 +13,7 @@ import {
 	verify_godot_version,
 } from "../utils";
 import { prompt_for_godot_executable, prompt_for_reload, select_godot_executable } from "../utils/prompts";
-import { killSubProcesses, subProcess } from "../utils/subspawn";
+import { godot_child_process_options, killSubProcesses, subProcess } from "../utils/subspawn";
 import GDScriptLanguageClient, { ClientStatus, TargetLSP } from "./GDScriptLanguageClient";
 
 const log = createLogger("lsp.manager", { output: "Godot LSP" });
@@ -208,10 +208,7 @@ export class ClientConnectionManager implements vscode.Disposable {
 		const lspProcess = subProcess(
 			"LSP",
 			godotPath,
-			{
-				detached: true,
-				windowsHide: true,
-			},
+			godot_child_process_options(process.platform),
 			args,
 		);
 

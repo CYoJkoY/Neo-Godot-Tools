@@ -75,6 +75,16 @@ export function subProcess(
 	return childProcess;
 }
 
+export function godot_child_process_options(
+	platform: NodeJS.Platform,
+	options: SpawnOptionsWithoutStdio = {},
+): SpawnOptionsWithoutStdio {
+	if (platform === "win32") {
+		return { ...options, detached: false, windowsHide: true };
+	}
+	return { ...options, detached: true };
+}
+
 function spawn_via_powershell(
 	command: string,
 	args: readonly string[],
