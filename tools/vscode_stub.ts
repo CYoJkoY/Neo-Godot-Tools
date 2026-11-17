@@ -400,6 +400,22 @@ function DocumentDropEdit(this: DocumentDropEditLike, insertText: string | Snipp
 }
 
 /**
+ * A link returned by a document link provider. The extension only constructs
+ * links and sets a tooltip, so the two members it touches are enough.
+ */
+interface DocumentLinkLike {
+	[key: string]: unknown;
+	range: Range;
+	target?: Uri;
+	tooltip?: string;
+}
+
+function DocumentLink(this: DocumentLinkLike, range: Range, target?: Uri): void {
+	this.range = range;
+	this.target = target;
+}
+
+/**
  * The dropped item and its transfer container. The extension sets these itself
  * while dragging a scene node and reads `value` back in the drop provider.
  */
@@ -793,6 +809,7 @@ export {
 	ThemeColor,
 	SnippetString,
 	DocumentDropEdit,
+	DocumentLink,
 	DataTransferItem,
 	DataTransfer,
 	workspace,
