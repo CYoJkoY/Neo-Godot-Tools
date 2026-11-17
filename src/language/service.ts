@@ -77,6 +77,67 @@ function parameterLabel(parameter: IndexedParameter): string {
 	return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 }
 
+/**
+ * Number of argument separators before the cursor. Commas inside containers
+ * and string literals belong to the argument, not to the call.
+ */
+interface ArgumentScan {
+	depth: number;
+	separators: number;
+	/** The opening delimiter: `"`, `'`, `"""`, or `'''`. */
+	quote: string | undefined;
+	escaped: boolean;
+	comment: boolean;
+	/** Remaining characters of a multi-character quote delimiter. */
+	skip: number;
+}
+
+function activeParameterIndex(argumentText: string): number {
+	const characters = Array.from(argumentText);
+	const scan = characters.reduce<ArgumentScan>(
+		(previous, _char, index) => nextArgumentScan(characters, index, previous),
+		{ depth: 0, separators: 0, quote: undefined, escaped: false, comment: false, skip: 0 },
+	);
+	return scan.separators;
+}
+
+/** A quote character opens a triple-quoted string when repeated three times. */
+function quoteDelimiter(characters: readonly string[], index: number): string | undefined {
+	const char = characters[index];
+	if (char !== '"' && char !== "'") return undefined;
+	const triple = characters[index + 1] === char && characters[index + 2] === char;
+	return triple ? char.repeat(3) : char;
+}
+
+function matchesDelimiter(characters: readonly string[], index: number, delimiter: string): boolean {
+	const char = characters[index];
+	if (char !== delimiter[0]) return false;
+	return delimiter.length === 1 || (characters[index + 1] === char && characters[index + 2] === char);
+}
+
+function nextArgumentScan(characters: readonly string[], index: number, scan: ArgumentScan): ArgumentScan {
+	if (scan.skip > 0) return { ...scan, skip: scan.skip - 1 };
+	const char = characters[index] ?? "";
+	if (scan.comment) {
+		if (char === "\n") return { ...scan, comment: false };
+		return scan;
+	}
+	if (scan.quote) {
+		if (scan.escaped) return { ...scan, escaped: false };
+		if (char === "\\") return { ...scan, escaped: true };
+		if (matchesDelimiter(characters, index, scan.quote))
+			return { ...scan, quote: undefined, skip: scan.quote.length - 1 };
+		return scan;
+	}
+	if (char === "#") return { ...scan, comment: true };
+	const delimiter = quoteDelimiter(characters, index);
+	if (delimiter) return { ...scan, quote: delimiter, skip: delimiter.length - 1 };
+	if (char === "(" || char === "[" || char === "{") return { ...scan, depth: scan.depth + 1 };
+	if (char === ")" || char === "]" || char === "}") return { ...scan, depth: Math.max(0, scan.depth - 1) };
+	if (char === "," && scan.depth === 0) return { ...scan, separators: scan.separators + 1 };
+	return scan;
+}
+
 export class LanguageService implements vscode.Disposable {
 	readonly files = createFileIndex();
 	readonly symbols = createSymbolIndex(this.files);
@@ -345,7 +406,7 @@ export class LanguageService implements vscode.Disposable {
 			if (!match) return undefined;
 			const name = match[1];
 			const argumentText = match[2];
-			const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
+			const activeParameter = argumentText.trim() ? activeParameterIndex(argumentText) : 0;
 			const builtin = resolveBuiltinSymbol(name);
 			if (builtin)
 				return this.signatureHelpForParameters(
