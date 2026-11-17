@@ -36,6 +36,11 @@ const KBD = /\[kbd\]([\s\S]*?)\[\/kbd\]/g;
  * not of the fence length, which the backreference counts on its own.
  */
 const MARKDOWN_FENCE = /^(?: {0,3}>[ \t]?)* {0,3}((`|~)\2{2,})[^\n]*\n[\s\S]*?^(?: {0,3}>[ \t]?)* {0,3}\1\2*[ \t]*$/gm;
+/**
+ * A code span may hold a line ending, which Markdown renders as a space, but a
+ * blank line ends the paragraph and with it the span, so a run that reaches one
+ * is left for the BBCode rules.
+ */
 const MARKDOWN_CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n\n)[\s\S])*?(?<!`)\1(?!`)/g;
 
 /** A Markdown link definition, whose label a shortcut reference may reuse. */
@@ -70,8 +75,9 @@ const REFERENCE =
  * `[Node](url)`, its reference-style form `[Node][api]`, and a link definition
  * such as `[Node]: url` intact. A label that a definition elsewhere in the
  * docstring declares is kept by `bbcodeToMarkdown`, which alone can see it.
+ * The name may hold underscores and dots, which GDScript allows in identifiers.
  */
-const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?![([:])/g;
+const CLASS_REFERENCE = /(?<![\w])\[([A-Z][\w.]*)\](?![([:])/g;
 
 /** A formatting tag and the Markdown markers it becomes. */
 interface FormattingTag {
@@ -131,7 +137,7 @@ const formatTags = (text: string): string =>
  * itself carries nothing a hover can show.
  */
 const LAYOUT_TAG =
-	/\[\/?(?:left|center|right|fill|color|bgcolor|fgcolor|font|font_size|outline_size|outline_color|cell|indent|img|u|codeblocks)(?:[=\s][^\]]*)?\]/g;
+	/\[\/?(?:left|center|right|fill|color|bgcolor|fgcolor|font|font_size|outline_size|outline_color|cell|indent|img|u|codeblocks|wave|tornado|shake|fade|pulse|rainbow|dropcap)(?:[=\s][^\]]*)?\]/g;
 
 /** A run of `[br]` and the whitespace around it. */
 const LINE_BREAK_RUN = /\s*(?:\[br\]\s*)+/g;

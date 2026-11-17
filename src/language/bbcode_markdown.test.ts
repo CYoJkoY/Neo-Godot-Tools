@@ -208,4 +208,16 @@ describe("docstring BBCode to Markdown", () => {
 			"Write \\[b\\]text\\[/b\\] to show bold",
 		);
 	});
+
+	it("keeps a code span that runs over a line ending literal", () => {
+		assert.equal(bbcodeToMarkdown("Use `a\n[param x]` end"), "Use `a\n[param x]` end");
+	});
+
+	it("renders a class reference with an underscore", () => {
+		assert.equal(bbcodeToMarkdown("See [My_Class]."), "See `My_Class`.");
+	});
+
+	it("drops text-effect wrappers", () => {
+		assert.equal(bbcodeToMarkdown("[wave]Wavy[/wave] and [pulse]Pulsing[/pulse]"), "Wavy and Pulsing");
+	});
 });
