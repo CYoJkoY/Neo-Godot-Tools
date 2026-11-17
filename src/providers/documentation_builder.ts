@@ -231,7 +231,9 @@ function make_symbol_elements(
 		case SymbolKind.Property:
 		case SymbolKind.Variable: {
 			// var Control.anchor_left: float
-			const parts = /\.([A-z_0-9]+)\:\s(.*)$/.exec(s.detail ?? "");
+			// ProjectSettings members embed a slash path in their name:
+			// var ProjectSettings.application/boot_splash/bg_color: Color
+			const parts = /\.([^\s:]+)\s*:\s*(.*)$/.exec(s.detail ?? "");
 			if (!parts) return { body: "" };
 			const type = make_link(parts[2], undefined);
 			const name = element("a", s.name, { href: `#${symbol_element_id(s)}` });
