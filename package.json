@@ -586,6 +586,9 @@
 				"scopes": {
 					"nodePath": [
 						"constant.character.escape"
+					],
+					"parameter": [
+						"variable.parameter.gdscript"
 					]
 				}
 			}

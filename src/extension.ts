@@ -44,6 +44,7 @@ import {
 	createInlayHintsProvider,
 	createReferenceProvider,
 	createRenameProvider,
+	createSemanticTokensProvider,
 	createSignatureHelpProvider,
 	createWorkspaceSymbolProvider,
 } from "./providers";
@@ -172,7 +173,9 @@ export function activate(context: vscode.ExtensionContext) {
 		languageService: globals.languageService,
 		fallback: new SignatureHelpFallback(),
 	});
-	// globals.semanticTokensProvider = createSemanticTokensProvider(context);
+	globals.semanticTokensProvider = createSemanticTokensProvider(context, {
+		languageService: globals.languageService,
+	});
 	// globals.tasksProvider = createTaskProvider(context);
 
 	if (is_debug_mode()) {

@@ -200,6 +200,20 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	/**
+	 * Brings the index up to date with the document a provider is answering for.
+	 *
+	 * Editor events arrive after the request that already reflects the latest
+	 * keystroke, so a provider must not render ranges from an older source.
+	 */
+	ensureDocumentIndexed(document: vscode.TextDocument): void {
+		if (document.languageId !== "gdscript" || document.uri.scheme !== "file") return;
+		const uri = document.uri.toString();
+		const source = document.getText();
+		if (this.files.get(uri)?.source === source) return;
+		this.updateText(uri, source, document.version);
+	}
+
+	/**
 	 * Attaches the native mirror once the extension host owns the indexes. The
 	 * mirror rebuilds itself from `files` on its first flush, so an attach that
 	 * happens after the workspace scan started still mirrors every file.
