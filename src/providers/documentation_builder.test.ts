@@ -149,6 +149,22 @@ describe("documentation anchors", () => {
 		);
 	});
 
+	it("renders properties whose names contain slashes", () => {
+		const html = make_symbol_document(
+			classSymbol([
+				{
+					name: "application/boot_splash/bg_color",
+					kind: SymbolKind.Property,
+					detail: "var ProjectSettings.application/boot_splash/bg_color: Color",
+					documentation: "Background color of the boot splash.",
+				},
+			]),
+		);
+		assert.ok(html.includes("application/boot_splash/bg_color"), "the property name is rendered");
+		assert.ok(html.includes("Background color of the boot splash."), "its documentation is rendered");
+		assert.ok(html.includes('id="property-application/boot_splash/bg_color"'), "its anchor is addressable");
+	});
+
 	it("does not request focus without a target", () => {
 		const html = make_html_content(webview, classSymbol([]));
 		assert.ok(!html.includes('ngdtFocus("'));
