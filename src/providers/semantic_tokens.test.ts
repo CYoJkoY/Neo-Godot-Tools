@@ -199,6 +199,82 @@ describe("semantic tokens", () => {
 		}
 	});
 
+	it("treats keywords as non-values before node shorthand", () => {
+		const source = [
+			"func move(player: Node) -> void:",
+			"\treturn %player",
+			'\tprint("%s" % player)',
+		].join("\n");
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const starts = tokens.filter((token) => token.type === "parameter").map((token) => token.start);
+			assert.deepEqual(parameterTexts(source, tokens), ["player", "player"]);
+			assert.ok(!starts.includes(source.indexOf("%player") + 1));
+			assert.ok(starts.includes(source.lastIndexOf("player")));
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("marks inline lambda parameters", () => {
+		const source = "func outer() -> void:\n\tvar cb = func(value: int) -> int: return value\n";
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			assert.deepEqual(parameterTexts(source, tokens), ["value", "value"]);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("marks block lambda parameters without capturing lambda locals", () => {
+		const source = [
+			"func outer(outer_value: int) -> void:",
+			"\tvar cb = func(value: int) -> int:",
+			"\t\tvar local := value",
+			"\t\treturn local + outer_value",
+		].join("\n");
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			assert.deepEqual(parameterTexts(source, tokens), ["outer_value", "value", "value", "outer_value"]);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("marks nested lambda parameters and their outer bindings", () => {
+		const source = [
+			"func outer(a: int) -> void:",
+			"\tvar cb = func(b: int) -> void:",
+			"\t\tvar inner = func(c: int) -> int:",
+			"\t\t\treturn a + b + c",
+		].join("\n");
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			assert.deepEqual(parameterTexts(source, tokens), ["a", "b", "c", "a", "b", "c"]);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("does not color a function name that matches its parameter", () => {
+		const source = "func process(process: int) -> void:\n\tprint(process)\n";
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const starts = tokens.filter((token) => token.type === "parameter").map((token) => token.start);
+			const declaration = source.indexOf("process", source.indexOf("("));
+			const use = source.lastIndexOf("process");
+			assert.deepEqual(parameterTexts(source, tokens), ["process", "process"]);
+			assert.deepEqual(starts, [declaration, use]);
+		} finally {
+			service.dispose();
+		}
+	});
+
 	it("rebuilds bindings after a dependency-only edit", () => {
 		const service = createService();
 		try {

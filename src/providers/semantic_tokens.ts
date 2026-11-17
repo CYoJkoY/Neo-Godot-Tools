@@ -21,9 +21,49 @@ const LEGEND = ["nodePath", "parameter"];
 const NODE_PATH_PATTERN =
 	/(?<=(?:get_node|has_node|find_node|get_node_or_null|has_node_and_resource)\(\s?)(("|')((?!\2).)*\2)(?=\s?\))/g;
 
+/**
+ * Keywords that start a statement or join operands. The lexer emits them as
+ * identifiers, so without this set `return %Player` would read as the `%`
+ * operator applied to a value.
+ */
+const NON_VALUE_KEYWORDS = new Set([
+	"and",
+	"as",
+	"await",
+	"break",
+	"breakpoint",
+	"class",
+	"class_name",
+	"const",
+	"continue",
+	"elif",
+	"else",
+	"enum",
+	"extends",
+	"for",
+	"func",
+	"if",
+	"in",
+	"is",
+	"match",
+	"not",
+	"or",
+	"pass",
+	"preload",
+	"return",
+	"signal",
+	"static",
+	"super",
+	"var",
+	"void",
+	"when",
+	"while",
+]);
+
+/** `true`, `false`, `null` and `self` are values even though they are keywords. */
 function endsExpression(token: GDScriptToken): boolean {
+	if (token.kind === "identifier") return !NON_VALUE_KEYWORDS.has(token.value);
 	return (
-		token.kind === "identifier" ||
 		token.kind === "number" ||
 		token.kind === "string" ||
 		token.value === ")" ||
@@ -65,6 +105,7 @@ function parameterSemanticTokens(file: IndexedFile, bindings: LanguageService["b
 	const tokens = tokensFor(file.uri, file.source, file.sourceFingerprint);
 	return tokens.flatMap((token, index) => {
 		if (token.kind !== "identifier") return [];
+		if (tokens[index - 1]?.value === "func") return [];
 		if (tokens[index - 1]?.value === "." || followsNodeShorthand(tokens, file.source, index)) return [];
 		const binding = bindings.getScopedBinding(file.uri, token.start, token.value);
 		return binding?.kind === "parameter" ? [{ start: token.start, end: token.end, type: "parameter" }] : [];
