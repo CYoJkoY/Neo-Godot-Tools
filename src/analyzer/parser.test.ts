@@ -58,3 +58,46 @@ test("parses nested classes and enums", () => {
 		);
 	}
 });
+
+test("keeps a function body open across blank and comment-only lines", () => {
+	const source = `extends Node\n\nfunc with_gaps() -> void:\n\tvar before := 1\n\n\t# detached note\n\n\tvar after := before + 1\n\tprint(after)\n\nfunc next_one() -> void:\n\tpass\n`;
+	const result = parseGDScript(source);
+	assert.deepEqual(result.diagnostics, []);
+	assert.deepEqual(
+		result.ast.declarations.map((declaration) => `${declaration.kind}:${declaration.name}`),
+		["extends:Node", "function:with_gaps", "function:next_one"],
+	);
+
+	const withGaps = result.ast.declarations[1];
+	assert.equal(withGaps.kind, "function");
+	if (withGaps.kind !== "function") return;
+	const body = withGaps.bodyRange;
+	assert.ok(body);
+	if (!body) return;
+	const bodySource = source.slice(body.start.offset, body.end.offset);
+	assert.equal(body.start.line, 3);
+	assert.match(bodySource, /var before := 1/);
+	assert.match(bodySource, /var after := before \+ 1/);
+	assert.match(bodySource, /print\(after\)\n?$/);
+	assert.doesNotMatch(bodySource, /func next_one/);
+});
+
+test("does not promote statements after a blank line to inner class members", () => {
+	const source = `class Inner:\n\tfunc helper() -> void:\n\t\tvar before := 1\n\n\t\tvar after := before + 1\n\t\tprint(after)\n`;
+	const result = parseGDScript(source);
+	assert.deepEqual(result.diagnostics, []);
+	const inner = result.ast.declarations[0];
+	assert.equal(inner.kind, "class");
+	if (inner.kind !== "class") return;
+	assert.deepEqual(
+		inner.declarations.map((declaration) => `${declaration.kind}:${declaration.name}`),
+		["function:helper"],
+	);
+	const helper = inner.declarations[0];
+	assert.equal(helper.kind, "function");
+	if (helper.kind !== "function" || !helper.bodyRange) return;
+	const bodySource = source.slice(helper.bodyRange.start.offset, helper.bodyRange.end.offset);
+	assert.match(bodySource, /var after := before \+ 1/);
+	assert.match(bodySource, /print\(after\)\n?$/);
+	assert.equal(inner.range.end.offset, helper.range.end.offset);
+});
