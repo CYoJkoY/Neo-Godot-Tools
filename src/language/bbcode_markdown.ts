@@ -56,10 +56,64 @@ const REFERENCE =
 
 /**
  * A bare class reference. A preceding identifier keeps `Array[Node]` intact,
- * and a trailing `(` or `[` keeps a Markdown link label such as `[Node](url)`
- * and its reference-style form `[Node][api]` intact.
+ * and a trailing `(`, `[` or `:` keeps a Markdown link label such as
+ * `[Node](url)`, its reference-style form `[Node][api]`, and a link definition
+ * such as `[Node]: url` intact.
  */
-const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?![([])/g;
+const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?![([:])/g;
+
+/** A formatting tag and the Markdown markers it becomes. */
+interface FormattingTag {
+	readonly tag: string;
+	readonly marker: string;
+}
+
+const FORMATTING_TAGS: readonly FormattingTag[] = [
+	{ tag: "b", marker: "**" },
+	{ tag: "i", marker: "*" },
+	{ tag: "s", marker: "~~" },
+];
+
+/** Progress of one formatting tag conversion: built text, depth and read cursor. */
+interface TagScan {
+	readonly text: string;
+	readonly depth: number;
+	readonly cursor: number;
+}
+
+/**
+ * Markdown for one formatting tag, keeping a tag nested inside itself valid.
+ *
+ * A pair-matched replacement would close at the inner tag and leave the outer
+ * closing tag behind. Nesting a style inside the same style also changes
+ * nothing, so only the outermost pair emits markers: `[b]a [b]b[/b] c[/b]`
+ * becomes `**a b c**` instead of an unbalanced run of asterisks. An unbalanced
+ * tag is left as written rather than turned into a stray marker.
+ */
+const convertFormattingTag = (text: string, formatting: FormattingTag): string => {
+	const pattern = new RegExp(`\\[${formatting.tag}\\]|\\[/${formatting.tag}\\]`, "g");
+	const matches = Array.from(text.matchAll(pattern), (match) => ({
+		at: match.index ?? 0,
+		length: match[0].length,
+		opening: match[0] === `[${formatting.tag}]`,
+	}));
+	const openings = matches.filter((match) => match.opening).length;
+	if (openings * 2 !== matches.length) return text;
+	const scan = matches.reduce<TagScan>(
+		(state, match) => {
+			const before = text.slice(state.cursor, match.at);
+			const depth = match.opening ? state.depth + 1 : state.depth - 1;
+			const marker = Math.min(state.depth, depth) === 0 ? formatting.marker : "";
+			return { text: state.text + before + marker, depth, cursor: match.at + match.length };
+		},
+		{ text: "", depth: 0, cursor: 0 },
+	);
+	return scan.text + text.slice(scan.cursor);
+};
+
+/** Markdown for every formatting tag, one tag at a time. */
+const formatTags = (text: string): string =>
+	FORMATTING_TAGS.reduce((result, formatting) => convertFormattingTag(result, formatting), text);
 
 /**
  * Tags that only affect the Godot editor layout. Their content stays; the tag
@@ -206,9 +260,6 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		.replace(LINE_BREAK_RUN, line_break)
 		.replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/g, "[$2]($1)")
 		.replace(/\[url\]([\s\S]*?)\[\/url\]/g, "<$1>")
-		.replace(/\[b\]([\s\S]*?)\[\/b\]/g, "**$1**")
-		.replace(/\[i\]([\s\S]*?)\[\/i\]/g, "*$1*")
-		.replace(/\[s\]([\s\S]*?)\[\/s\]/g, "~~$1~~")
 		.replace(/\[kbd\]([\s\S]*?)\[\/kbd\]/g, (_match, content: string) => codeSpan(content))
 		.replaceAll("[lb]", "\\[")
 		.replaceAll("[rb]", "\\]")
@@ -216,7 +267,7 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		.replace(CLASS_REFERENCE, (_match, name: string) => codeSpan(name))
 		.replace(LAYOUT_TAG, "");
 
-	return restore(converted, blocks)
+	return restore(formatTags(converted), blocks)
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
 }

@@ -109,6 +109,18 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("[b]Bold[/b] and [i]italic[/i]"), "**Bold** and *italic*");
 	});
 
+	it("renders a nested formatting tag without leaving a closing tag behind", () => {
+		assert.equal(bbcodeToMarkdown("[b]outer [b]inner[/b] tail[/b]"), "**outer inner tail**");
+	});
+
+	it("leaves an unbalanced formatting tag as written", () => {
+		assert.equal(bbcodeToMarkdown("[b]open only"), "[b]open only");
+	});
+
+	it("keeps a Markdown link definition label intact", () => {
+		assert.equal(bbcodeToMarkdown("[Node]: https://example.com"), "[Node]: https://example.com");
+	});
+
 	it("renders [kbd] as inline code", () => {
 		assert.equal(bbcodeToMarkdown("Press [kbd]Ctrl + A[/kbd]"), "Press `Ctrl + A`");
 	});
