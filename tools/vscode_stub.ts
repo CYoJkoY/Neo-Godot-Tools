@@ -381,6 +381,7 @@ const configurationListeners: ConfigurationListener[] = [];
 /** Fires `onDidChangeConfiguration` as VS Code does after a setting is written. */
 function fireConfigurationChange(section: string): void {
 	const change = { affectsConfiguration: (name: string) => name === section };
+	// biome-ignore lint/complexity/noForEach: the snapshot keeps the fan-out stable when a listener unsubscribes.
 	[...configurationListeners].forEach((listener) => listener(change));
 }
 
