@@ -11,7 +11,7 @@ import type {
 } from "vscode";
 import { SceneParser } from "../scene_tools/parser";
 import type { SceneNode } from "../scene_tools/types";
-import { get_project_version, node_name_to_snake, project_resource_path } from "../utils";
+import { get_project_version, node_name_to_snake, project_resource_path, project_version_for } from "../utils";
 import { SCRIPT_SELECTOR } from "./selectors";
 
 /**
@@ -56,7 +56,8 @@ async function gdscriptDrop(
 
 	const snippet = new vscode.SnippetString();
 	// `@onready` is Godot 4 syntax only.
-	if (((await get_project_version()) ?? "").startsWith("4")) snippet.appendText("@");
+	const version = (await project_version_for(document.uri.fsPath)) ?? (await get_project_version()) ?? "";
+	if (version.startsWith("4")) snippet.appendText("@");
 	snippet.appendText("onready var ");
 	snippet.appendPlaceholder(node_name_to_snake(label));
 	snippet.appendText(`: ${className} = ${expression}`);

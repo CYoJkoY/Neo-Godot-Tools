@@ -85,10 +85,21 @@ const detect_project_version = (text: string): string => {
 export async function get_project_version(): Promise<string | undefined> {
 	const file = await get_project_file();
 	if (file === undefined) return undefined;
+	return await read_project_version(file);
+}
+
+/** Reads (and caches) the version of the project that owns `filePath`. */
+export async function project_version_for(filePath: string): Promise<string | undefined> {
+	const file = find_project_file(filePath);
+	if (file === null) return undefined;
+	return await read_project_version(file);
+}
+
+async function read_project_version(file: string): Promise<string> {
 	const cached = projectVersionCache.get(file);
 	if (cached) return cached;
 
-	const text = (await vscode.workspace.openTextDocument(file)).getText();
+	const text = (await vscode.workspace.openTextDocument(vscode.Uri.file(file))).getText();
 	const version = detect_project_version(text);
 	projectVersionCache.set(file, version);
 	return version;
@@ -140,12 +151,21 @@ export function project_dir_for(filePath: string): string | undefined {
 	return vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath))?.uri.fsPath;
 }
 
-/** Maps a `res://` path onto a file inside the project that owns `filePath`. */
+/**
+ * Maps a `res://` path onto a file inside the project that owns `filePath`.
+ *
+ * Godot treats `res://` as the project root, so `res://../outside.gd` is not a
+ * resource of this project: it resolves to `undefined` instead of escaping.
+ */
 export function resolve_resource_file(filePath: string, resourcePath: string): string | undefined {
 	if (!resourcePath.startsWith("res://")) return undefined;
 	const directory = project_dir_for(filePath);
 	if (directory === undefined) return undefined;
-	return path.resolve(directory, resourcePath.slice("res://".length));
+	const resolved = path.resolve(directory, resourcePath.slice("res://".length));
+	const relative = path.relative(directory, resolved);
+	if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`)) return undefined;
+	if (path.isAbsolute(relative)) return undefined;
+	return resolved;
 }
 
 /** Converts `target` into its `res://` form, or `undefined` when it is outside the owning project. */

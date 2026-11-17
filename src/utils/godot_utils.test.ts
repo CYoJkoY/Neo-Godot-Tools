@@ -141,6 +141,22 @@ describe("resolve_resource_file", () => {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("never escapes the project root with res://..", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-resource-escape-"));
+		try {
+			const project = path.join(root, "game");
+			fs.mkdirSync(project, { recursive: true });
+			fs.writeFileSync(path.join(project, "project.godot"), "config_version=4\n");
+			fs.writeFileSync(path.join(root, "outside.gd"), "extends Node2D\n");
+			const scene = path.join(project, "main.tscn");
+			assert.equal(resolve_resource_file(scene, "res://../outside.gd"), undefined);
+			assert.equal(resolve_resource_file(scene, "res://scenes/../player.gd"), path.join(project, "player.gd"));
+			assert.equal(resolve_resource_file(scene, "res://"), undefined, "the project root is not a resource");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("project_resource_path", () => {
