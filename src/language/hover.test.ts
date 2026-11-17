@@ -167,6 +167,23 @@ func heal() -> void:
 		service.dispose();
 	});
 
+	it("renders the BBCode of a docstring as Markdown", () => {
+		const service = createService();
+		const source = `extends Node
+## Restores [param amount] health.[br][br]
+## Line two uses [code]Array[int][/code].
+func heal(amount: int) -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("heal(amount")) ?? "";
+		assert.match(markdown, /Restores `amount` health\./);
+		assert.ok(!markdown.includes("[br]"), "the break tag is not shown verbatim");
+		assert.ok(!markdown.includes("[param"), "the reference tag is not shown verbatim");
+		assert.ok(markdown.includes("`Array[int]`"), "inline code keeps its content");
+		service.dispose();
+	});
+
 	it("renders the docstring of a method resolved through a typed receiver", () => {
 		const service = createService();
 		index(service, playerUri, playerSource);

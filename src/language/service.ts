@@ -17,6 +17,7 @@ import {
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
 import type { ZigSymbolMirror } from "../index/zig_symbol_mirror";
+import { bbcodeToMarkdown } from "./bbcode_markdown";
 import { isBuiltinSymbol, resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
 import { getGDScriptBuiltin } from "./semantic/gdscript_builtins";
 import { SemanticQueryEngine } from "./semantic/query_engine";
@@ -57,11 +58,13 @@ function isGlobalCompletionContext(document: vscode.TextDocument, position: vsco
 
 /**
  * Appends the `##` documentation of a symbol, matching the layout produced by the
- * Godot language server that the LSP fallback delegates to.
+ * Godot language server that the LSP fallback delegates to. The comments are
+ * written in Godot's BBCode, so they are rendered as Markdown first: the raw
+ * tags (`[br]`, `[code]`, `[param x]`) mean nothing in a hover.
  */
 function appendDocumentation(markdown: vscode.MarkdownString, symbol: IndexedSymbol): void {
 	if (!symbol.documentation) return;
-	markdown.appendMarkdown(`\n\n${symbol.documentation}`);
+	markdown.appendMarkdown(`\n\n${bbcodeToMarkdown(symbol.documentation)}`);
 }
 
 /**
@@ -357,7 +360,8 @@ export class LanguageService implements vscode.Disposable {
 		const result = languageProfiler.measure("semantic.definition", () =>
 			this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }),
 		);
-		if (!result.value || !isSafeLocalConfidence(result.confidence) || isBuiltinSymbol(result.value)) return undefined;
+		if (!result.value || !isSafeLocalConfidence(result.confidence) || isBuiltinSymbol(result.value))
+			return undefined;
 		return this.toLocation(result.value);
 	}
 
