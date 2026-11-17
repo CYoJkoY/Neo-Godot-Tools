@@ -58,6 +58,9 @@ export function extractDocumentation(source: string, line: number): string | und
 	return extractDocumentationFromLines(source.split(/\r?\n/), line);
 }
 
+const DOCUMENTATION_LINE = /^\s*##(?!#)(.*)$/;
+const ANNOTATION_LINE = /^\s*@/;
+
 function extractDocumentationFromLines(lines: readonly string[], line: number): string | undefined {
 	if (line <= 0) return undefined;
 	const parts: string[] = [];
@@ -74,6 +77,52 @@ function extractDocumentationFromLines(lines: readonly string[], line: number): 
 	if (!parts.length) return undefined;
 	const documentation = parts.join("\n").replace(/\s+$/, "");
 	return documentation.length ? documentation : undefined;
+}
+
+/** Text of the `##` run from `start` to `end`, both included. */
+function documentationText(lines: readonly string[], start: number, end: number): string | undefined {
+	const parts = lines.slice(start, end + 1).map((text) => {
+		const match = text.match(DOCUMENTATION_LINE);
+		return (match?.[1] ?? "").replace(/^ /, "").trimEnd();
+	});
+	const documentation = parts.join("\n").replace(/\s+$/, "");
+	return documentation.length ? documentation : undefined;
+}
+
+/**
+ * End of the `##` run that starts at `start`.
+ *
+ * Only the first documentation line of a file can describe the script, and a
+ * documentation block is a run of adjacent lines, so the run is walked forward
+ * instead of collecting every block in the file.
+ */
+function documentationEnd(lines: readonly string[], start: number): number {
+	const following = lines.findIndex((text, index) => index > start && !DOCUMENTATION_LINE.test(text));
+	return following === -1 ? lines.length - 1 : following - 1;
+}
+
+/**
+ * The `##` block that documents the script itself.
+ *
+ * Godot's parser treats the first documentation block of a file as the script
+ * description, unless that block is the documentation of a member, in which case
+ * the script has no description of its own. `class_name`, `extends` and the
+ * annotations of the script are not members, so a block written around them
+ * still describes the script.
+ */
+function extractScriptDocumentation(
+	lines: readonly string[],
+	firstMemberLine: number | undefined,
+): string | undefined {
+	const limit = firstMemberLine ?? lines.length;
+	const start = lines.findIndex((text, index) => index < limit && DOCUMENTATION_LINE.test(text));
+	if (start === -1) return undefined;
+	const end = documentationEnd(lines, start);
+	// Annotations of the member sit between its documentation and its declaration,
+	// which is the only way a block above the first member still documents a member.
+	const linesToMember = lines.slice(end + 1, limit);
+	if (firstMemberLine !== undefined && linesToMember.every((text) => ANNOTATION_LINE.test(text))) return undefined;
+	return documentationText(lines, start, end);
 }
 
 export function declarationToSymbol(
@@ -161,5 +210,29 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 		}
 	};
 	visit(ast.declarations);
+	applyScriptDocumentation(symbols, ast, sourceLines);
 	return symbols;
+}
+
+/**
+ * Gives the `class_name` symbol the script description.
+ *
+ * The block may sit above `class_name`, between `class_name` and `extends`, or
+ * after `extends`, which is the layout the Godot documentation shows; walking up
+ * from the declaration only reaches the first two. The symbol keeps the
+ * documentation it already has, so member-level hovers are unaffected.
+ */
+function applyScriptDocumentation(
+	symbols: IndexedSymbol[],
+	ast: GDScriptScript,
+	sourceLines: readonly string[] | undefined,
+): void {
+	if (!sourceLines) return;
+	const className = symbols.find((symbol) => symbol.kind === "class_name");
+	if (!className || className.documentation) return;
+	const firstMember = ast.declarations.find(
+		(declaration) => declaration.kind !== "class_name" && declaration.kind !== "extends",
+	);
+	const documentation = extractScriptDocumentation(sourceLines, firstMember?.range.start.line);
+	if (documentation) className.documentation = documentation;
 }

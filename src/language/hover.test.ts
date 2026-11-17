@@ -229,6 +229,101 @@ func heal(amount: int) -> void:
 		service.dispose();
 	});
 
+	it("renders the script description written after extends on the class_name", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## A brief description of the class's role and functionality.
+##
+## The description of the script, what it can do,
+## and any further detail.
+
+## The description of a signal.
+signal my_signal
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.match(markdown, /class_name SampleClass/);
+		assert.match(markdown, /A brief description of the class's role and functionality\./);
+		assert.match(markdown, /and any further detail\./);
+		assert.doesNotMatch(markdown, /The description of a signal\./);
+		service.dispose();
+	});
+
+	it("keeps the script description off the members that follow it", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## A brief description of the class's role and functionality.
+
+## The description of a signal.
+signal my_signal
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("my_signal")) ?? "";
+		assert.match(markdown, /The description of a signal\./);
+		assert.doesNotMatch(markdown, /A brief description of the class's role and functionality\./);
+		service.dispose();
+	});
+
+	it("does not promote the docstring of the first member to the script", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## Restores health over time.
+func heal() -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.doesNotMatch(markdown, /Restores health over time\./);
+		service.dispose();
+	});
+
+	it("keeps the docstring written above class_name as the script description", () => {
+		const service = createService();
+		const source = `## Describes the script from the top of the file.
+class_name SampleClass
+extends Node
+
+var health: int = 1
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.match(markdown, /Describes the script from the top of the file\./);
+		service.dispose();
+	});
+
+	it("adds no documentation paragraph to a script without a docstring", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+var health: int = 1
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3);
+		assert.equal(markdown, "```gdscript\nclass_name SampleClass\n```\n");
+		service.dispose();
+	});
+
+	it("renders the script description when hovering the class name of a typed variable", () => {
+		const service = createService();
+		const documented = `class_name Documented
+extends Node
+## Describes the script from the documentation block.
+
+var health: int = 1
+`;
+		const consumer = `extends Node
+var instance: Documented
+`;
+		index(service, "file:///project/documented.gd", documented);
+		index(service, mainUri, consumer);
+		const markdown = hoverMarkdown(service, mainUri, consumer, consumer.indexOf("Documented") + 3) ?? "";
+		assert.match(markdown, /Describes the script from the documentation block\./);
+		service.dispose();
+	});
+
 	it("keeps builtin hover descriptions intact", () => {
 		const service = createService();
 		const source = `extends Node
