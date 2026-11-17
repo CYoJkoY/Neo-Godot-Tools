@@ -617,6 +617,20 @@ const documentSymbolProviders: Array<{ selector: unknown; provider: unknown }> =
 /** Document drop edit providers currently registered through `languages`, in order. */
 const documentDropEditProviders: Array<{ selector: unknown; provider: unknown }> = [];
 
+/**
+ * `dispose` of a list registration.
+ *
+ * A provider disposal must not depend on the entry still being present: an
+ * activation that is disposed twice, or a `dispose` after another registration
+ * took the same slot, otherwise removes an unrelated provider.
+ */
+function disposeEntry<T>(entries: T[], entry: T): () => void {
+	return () => {
+		const index = entries.indexOf(entry);
+		if (index !== -1) entries.splice(index, 1);
+	};
+}
+
 const languages = {
 	createDiagnosticCollection: (name?: string) => {
 		const entries = new Map<string, unknown>();
@@ -637,7 +651,7 @@ const languages = {
 	registerDocumentSymbolProvider: (selector: unknown, provider: unknown) => {
 		const entry = { selector, provider };
 		documentSymbolProviders.push(entry);
-		return { dispose: () => documentSymbolProviders.splice(documentSymbolProviders.indexOf(entry), 1) };
+		return { dispose: disposeEntry(documentSymbolProviders, entry) };
 	},
 	registerWorkspaceSymbolProvider: () => ({ dispose: () => {} }),
 	registerReferenceProvider: () => ({ dispose: () => {} }),
@@ -647,12 +661,12 @@ const languages = {
 	registerDocumentDropEditProvider: (selector: unknown, provider: unknown) => {
 		const entry = { selector, provider };
 		documentDropEditProviders.push(entry);
-		return { dispose: () => documentDropEditProviders.splice(documentDropEditProviders.indexOf(entry), 1) };
+		return { dispose: disposeEntry(documentDropEditProviders, entry) };
 	},
 	registerDocumentFormattingEditProvider: (selector: unknown, provider: unknown) => {
 		const entry = { selector, provider };
 		formattingProviders.push(entry);
-		return { dispose: () => formattingProviders.splice(formattingProviders.indexOf(entry), 1) };
+		return { dispose: disposeEntry(formattingProviders, entry) };
 	},
 	registerDocumentRangeFormattingEditProvider: () => ({ dispose: () => {} }),
 	registerDocumentSemanticTokensProvider: () => ({ dispose: () => {} }),
