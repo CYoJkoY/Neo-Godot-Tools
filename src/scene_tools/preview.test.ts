@@ -325,4 +325,21 @@ describe("scene preview project resources", () => {
 		assert.ok(merged);
 		assert.equal(merged.instanceScene?.path, path.join(root, "game/subrepo/deep.tscn"));
 	});
+	it("opens the script of a node merged from an instanced scene, not the instance resource", async () => {
+		writeFiles({
+			"game/child.gd": "extends Node2D\nclass_name ChildScript\n",
+			"game/other.gd": "extends Node2D\nclass_name OtherScript\n",
+			"game/child.tscn": "[gd_scene load_steps=2 format=3]\n\n[ext_resource type=\"Script\" path=\"res://child.gd\" id=\"1\"]\n\n[node name=\"Child\" type=\"Node2D\"]\n\n[node name=\"Body\" type=\"Node2D\" parent=\".\"]\nscript = ExtResource(\"1\")\n",
+		});
+		parseScene("[gd_scene load_steps=3 format=3]\n\n[ext_resource type=\"PackedScene\" path=\"res://child.tscn\" id=\"1\"]\n[ext_resource type=\"Script\" path=\"res://other.gd\" id=\"2\"]\n\n[node name=\"Main\" type=\"Node2D\"]\n\n[node name=\"Instance\" parent=\".\" instance=ExtResource(\"1\")]\n");
+		const merged = provider.scene?.nodes.get("Main/Instance/Body");
+		assert.ok(merged, "the instanced scene contributes its Body node");
+		assert.equal(merged.inheritedFromScene, true);
+		assert.equal(merged.scriptId, "1");
+		assert.equal(merged.declaringScene?.path, path.join(root, "game/child.tscn"));
+		const openScript = handlers.get("neoGodotTools.scenePreview.openScript");
+		assert.ok(openScript);
+		await openScript(merged);
+		assert.deepEqual(opened, [path.normalize(path.join(root, "game/child.gd"))]);
+	});
 });

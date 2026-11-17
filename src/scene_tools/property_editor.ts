@@ -108,20 +108,27 @@ export class NodePropertyMetadata {
 	}
 
 	private async scriptUri(scene: Scene, node: SceneNode): Promise<vscode.Uri | undefined> {
-		for (const id of [node.scriptId, node.customTypeScriptId].filter(Boolean)) {
-			const resource = scene.externalResources.get(id);
-			if (!resource?.path?.endsWith(".gd")) continue;
+		// A node merged from an instanced scene keeps the ids its declaring scene
+		// wrote, so the lookup must use that scene's resources and project before
+		// falling back to the previewed scene.
+		const owner = node.inheritedFromScene && node.declaringScene ? node.declaringScene : scene;
+		const resolveFrom = (current: Scene): vscode.Uri | undefined => {
+			const resource = [node.scriptId, node.customTypeScriptId]
+				.filter(Boolean)
+				.map((id) => current.externalResources.get(id))
+				.find((entry) => entry?.path?.endsWith(".gd"));
+			if (!resource?.path) return undefined;
 			if (resource.path.startsWith("res://")) {
-				const resolved = resolve_resource_file(scene.path, resource.path);
+				const resolved = resolve_resource_file(current.path, resource.path);
 				if (resolved === undefined) {
-					log.debug(`Unable to resolve '${resource.path}' for '${scene.path}'`);
+					log.debug(`Unable to resolve '${resource.path}' for '${current.path}'`);
 					return undefined;
 				}
 				return vscode.Uri.file(resolved);
 			}
 			return vscode.Uri.file(resource.path);
-		}
-		return undefined;
+		};
+		return resolveFrom(owner) ?? (owner === scene ? undefined : resolveFrom(scene));
 	}
 
 	private async nativeProperties(className: string): Promise<PropertyMetadata[]> {

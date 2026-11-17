@@ -283,6 +283,7 @@ export class SceneParser {
 			node.instanceScene = instanceScene;
 			node.resourceUri = Uri.from({ scheme: "godot", path: nodePath });
 			scene.nodes.set(nodePath, node);
+			node.declaringScene = scene;
 
 			if (instanceResource) {
 				node.tooltip = instanceResource.path;
@@ -416,6 +417,7 @@ export class SceneParser {
 		imported.inheritedFromScene = true;
 		imported.resourcePath = source.resourcePath;
 		imported.declaringScenePath = source.declaringScenePath;
+		imported.declaringScene = source.declaringScene;
 		imported.instanceScene = source.instanceScene;
 		// Instanced children have no section of their own in this scene, so they
 		// cannot be edited here. A distinct context value keeps the inline edit
@@ -439,6 +441,8 @@ export class SceneParser {
 		if (!target.resourcePath && source.resourcePath) target.resourcePath = source.resourcePath;
 		if (!target.declaringScenePath && source.declaringScenePath)
 			target.declaringScenePath = source.declaringScenePath;
+		if (!target.declaringScene && source.declaringScene)
+			target.declaringScene = source.declaringScene;
 		if (!target.instanceScene && source.instanceScene) target.instanceScene = source.instanceScene;
 		if (source.unique) target.unique = true;
 		if (source.hasScript && !target.contextValue?.includes("hasScript"))

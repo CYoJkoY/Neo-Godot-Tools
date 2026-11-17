@@ -329,31 +329,58 @@ export class ScenePreviewProvider
 	): { path: string; scenePath: string } | undefined {
 		if (!scene) return undefined;
 
-		const findDirect = (source: Scene, node: SceneNode): { path: string; scenePath: string } | undefined => {
-			if (node.scriptId) {
-				const resource = source.externalResources.get(node.scriptId);
-				if (resource?.path) return { path: resource.path, scenePath: source.path };
+		const findIn = (
+			owner: Scene,
+			id: string,
+			byUid: string | undefined,
+			subResourceId: string | undefined,
+		): { path: string; scenePath: string } | undefined => {
+			if (id) {
+				const resource = owner.externalResources.get(id);
+				if (resource?.path) return { path: resource.path, scenePath: owner.path };
 			}
-
-			if (node.customTypeScriptId) {
-				const resource = source.externalResources.get(node.customTypeScriptId);
-				if (resource?.path) return { path: resource.path, scenePath: source.path };
+			if (byUid) {
+				const resource = owner.externalResourcesByUid.get(byUid);
+				if (resource?.path) return { path: resource.path, scenePath: owner.path };
 			}
-
-			if (node.customTypeScriptUid) {
-				const resource = source.externalResourcesByUid.get(node.customTypeScriptUid);
-				if (resource?.path) return { path: resource.path, scenePath: source.path };
-			}
-
-			if (node.customTypeScriptSubResourceId) {
-				const subResource = source.subResources.get(node.customTypeScriptSubResourceId);
+			if (subResourceId) {
+				const subResource = owner.subResources.get(subResourceId);
 				const scriptId = subResource?.body.match(
 					/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/,
 				)?.[1];
 				if (scriptId) {
-					const resource = source.externalResources.get(scriptId);
-					if (resource?.path) return { path: resource.path, scenePath: source.path };
+					const resource = owner.externalResources.get(scriptId);
+					if (resource?.path) return { path: resource.path, scenePath: owner.path };
 				}
+			}
+			return undefined;
+		};
+
+		const findDirect = (source: Scene, node: SceneNode): { path: string; scenePath: string } | undefined => {
+			// A node merged from an instanced scene keeps the ids its declaring scene
+			// wrote. The same id may map to a different resource in the previewed
+			// scene, so the declaring scene is consulted first and `source` is only a
+			// fallback for ids the node wrote itself.
+			const owner = node.inheritedFromScene && node.declaringScene ? node.declaringScene : source;
+			const direct = findIn(
+				owner,
+				node.scriptId,
+				node.customTypeScriptUid,
+				node.customTypeScriptSubResourceId,
+			);
+			if (direct) return direct;
+			if (owner !== source) {
+				const fallback = findIn(
+					source,
+					node.scriptId,
+					node.customTypeScriptUid,
+					node.customTypeScriptSubResourceId,
+				);
+				if (fallback) return fallback;
+			}
+			if (node.customTypeScriptId) {
+				const resource = owner.externalResources.get(node.customTypeScriptId);
+				if (resource?.path) return { path: resource.path, scenePath: owner.path };
 			}
 			return undefined;
 		};
