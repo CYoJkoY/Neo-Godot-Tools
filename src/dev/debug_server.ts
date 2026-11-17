@@ -193,7 +193,7 @@ export class DebugServer {
 				hasLsp: !!globals.lsp,
 				hasDebug: !!globals.debug,
 				hasScenePreview: !!globals.scenePreviewProvider,
-				hasFormatter: !!globals.formattingProvider,
+				hasFormatter: globals.formattingProvider?.registered ?? false,
 			},
 			debugger: this.debugger_state(),
 		}));

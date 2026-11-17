@@ -407,6 +407,11 @@
 					"default": true,
 					"description": "Whether to reveal the terminal when launching the Godot Editor"
 				},
+				"neoGodotTools.formatter.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Whether Neo Godot Tools formats GDScript. Turn it off to use VS Code's built-in formatter or another extension"
+				},
 				"neoGodotTools.formatter.maxEmptyLines": {
 					"type": "number",
 					"default": 2,

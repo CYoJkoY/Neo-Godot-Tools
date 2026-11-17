@@ -152,6 +152,12 @@ Extension settings use the `neoGodotTools.*` namespace:
 
 When the selected Godot version supports headless LSP operation, Neo Godot Tools can launch a windowless Godot process for the language server.
 
+### Choosing a formatter
+
+`neoGodotTools.formatter.enabled` (default `on`) controls whether the built-in GDScript formatter claims GDScript documents. Set it to `off` to format with VS Code's built-in formatter or a third-party one; the change applies immediately, without reloading the window.
+
+The setting exists because `editor.defaultFormatter` cannot express "nobody". VS Code asks every registered formatting provider for a language, so an extension that only returns no edits still keeps the format action tied to itself. Unregistering the provider is the only way to hand the language over.
+
 ### Resource Inspector
 
 `.tres` files open in the text editor by default. `Neo Godot Tools: Open Resource Inspector` (or **Open With... -> Resource Inspector**) opens a dedicated Godot-like property editor: every property of the `[resource]` section and of each `[sub_resource]` gets a widget that fits its value, and edits are written back into the text file, so the file stays the source of truth.
