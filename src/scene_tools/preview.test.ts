@@ -245,4 +245,66 @@ describe("scene preview project resources", () => {
 		assert.equal(sceneRoot.className, "InnerPlayer");
 		await checkScriptCommands(path.join(root, "game/subrepo/child_player.gd"));
 	});
+
+	it("opens a scene declared by a merged node from its own project", async () => {
+		writeFiles({
+			"game/deep.tscn": '[node name="WrongDeep" type="Node2D"]\n',
+			"game/subrepo/project.godot": "config_version=4\n",
+			"game/subrepo/deep.tscn": '[node name="Deep" type="Node2D"]\n',
+			"game/subrepo/mid.tscn": `[gd_scene load_steps=2 format=2]
+
+[ext_resource type="PackedScene" path="res://deep.tscn" id=1]
+
+[node name="Mid" type="Node2D"]
+
+[node name="Child" parent="." instance=ExtResource( 1 )]
+`,
+		});
+		parseScene(`[gd_scene load_steps=2 format=2]
+
+[ext_resource type="PackedScene" path="res://subrepo/mid.tscn" id=1]
+
+[node name="Instance" instance=ExtResource( 1 )]
+`);
+		const merged = provider.scene?.nodes.get("Instance/Child");
+		assert.ok(merged);
+		const openScene = handlers.get("neoGodotTools.scenePreview.openScene");
+		assert.ok(openScene);
+		await openScene(merged);
+		assert.deepEqual(opened, [path.join(root, "game/subrepo/deep.tscn")]);
+	});
+
+	it("keeps merged instance scenes on their own project when a cached scene is prepared again", async () => {
+		writeFiles({
+			"game/deep.tscn": '[node name="WrongDeep" type="Node2D"]\n',
+			"game/subrepo/project.godot": "config_version=4\n",
+			"game/subrepo/deep.tscn": '[node name="Deep" type="Node2D"]\n',
+			"game/subrepo/mid.tscn": `[gd_scene load_steps=2 format=2]
+
+[ext_resource type="PackedScene" path="res://deep.tscn" id=1]
+
+[node name="Mid" type="Node2D"]
+
+[node name="Child" parent="." instance=ExtResource( 1 )]
+`,
+		});
+		const scene = `[gd_scene load_steps=2 format=2]
+
+[ext_resource type="PackedScene" path="res://subrepo/mid.tscn" id=1]
+
+[node name="Instance" instance=ExtResource( 1 )]
+`;
+		writeFiles({ "game/scenes/main.tscn": scene });
+		const document = {
+			uri: vscode.Uri.file(path.join(root, "game/scenes/main.tscn")),
+			getText: () => scene,
+		} as vscode.TextDocument;
+		provider.scene = provider.parser.parse_scene(document);
+		// An unchanged document reuses the cached scene, so the second prepare
+		// walks nodes that already carry the merged instance.
+		provider.scene = provider.parser.parse_scene(document);
+		const merged = provider.scene?.nodes.get("Instance/Child");
+		assert.ok(merged);
+		assert.equal(merged.instanceScene?.path, path.join(root, "game/subrepo/deep.tscn"));
+	});
 });

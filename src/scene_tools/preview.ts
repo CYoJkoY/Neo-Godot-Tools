@@ -290,7 +290,10 @@ export class ScenePreviewProvider
 
 	private async open_scene(item: SceneNode) {
 		if (!item.resourcePath) return;
-		const uri = this.resolve_resource_uri(this.scene?.path, item.resourcePath);
+		const uri = this.resolve_resource_uri(
+			item.declaringScenePath ?? this.scene?.path,
+			item.resourcePath,
+		);
 		if (uri === undefined) {
 			log.debug(`Unable to resolve scene resource path '${item.resourcePath}' for '${item.path}'.`);
 			return;
