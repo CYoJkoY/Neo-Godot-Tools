@@ -146,9 +146,19 @@ const referenceSpan = (match: string, name: string): string => {
 	return trimmed.length > 0 ? codeSpan(trimmed) : match;
 };
 
-/** A fenced block; the language is only known for the two language tags. */
-const fenced = (tag: string, code: string): string =>
-	`\`\`\`${tag === "gdscript" || tag === "csharp" ? tag : ""}\n${stripWrapperNewlines(code)}\n\`\`\``;
+/**
+ * A fenced block; the language is only known for the two language tags.
+ *
+ * The fence is longer than any backtick run in the body, so a Markdown example
+ * that already ends a line with three backticks stays inside the block instead
+ * of closing it early.
+ */
+const fenced = (tag: string, code: string): string => {
+	const body = stripWrapperNewlines(code);
+	const longestRun = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+	const fence = "`".repeat(Math.max(3, longestRun + 1));
+	return `${fence}${tag === "gdscript" || tag === "csharp" ? tag : ""}\n${body}\n${fence}`;
+};
 
 /**
  * Removes the newlines that separate the body from its tags. Only those are
@@ -247,7 +257,11 @@ export function bbcodeToMarkdown(bbcode: string): string {
 	const stashed = bbcode
 		.replaceAll(MARKDOWN_FENCE, (match) => stash(blocks, match))
 		.replaceAll(MARKDOWN_CODE_SPAN, (match) => stash(blocks, match))
-		.replaceAll(FENCED_BLOCK, (_match, tag: string, code: string) => stash(blocks, fenced(tag, code)))
+		// The body is resolved first: a Markdown fence inside it is already
+		// stashed, and only its restored backticks tell the real fence length.
+		.replaceAll(FENCED_BLOCK, (_match, tag: string, code: string) =>
+			stash(blocks, fenced(tag, restore(code, blocks))),
+		)
 		.replaceAll(INLINE_CODE, (_match, content: string) => stash(blocks, codeSpan(content)));
 
 	const converted = stashed

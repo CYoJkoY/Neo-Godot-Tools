@@ -37,6 +37,11 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(markdown, "```gdscript\n\tvar speed := 1\n\tif speed > 0:\n\t\tpass\n```");
 	});
 
+	it("fences a code block with more backticks than the body contains", () => {
+		const markdown = bbcodeToMarkdown("[codeblock]\n```\nexample\n```\n[/codeblock]");
+		assert.equal(markdown, "````\n```\nexample\n```\n````");
+	});
+
 	it("renders [ul] items as a Markdown list", () => {
 		assert.equal(bbcodeToMarkdown("Options:[ul]\nFirst\nSecond\n[/ul]"), "Options:\n\n- First\n- Second");
 	});
