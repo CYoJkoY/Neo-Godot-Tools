@@ -419,6 +419,11 @@ class Parser {
 		for (; cursor < this.tokens.length; cursor++) {
 			const token = this.tokens[cursor];
 			if (token.kind === "eof") break;
+			// A blank or comment-only line between statements lexes as a lone
+			// `newline` token whose `indent` is 0. Measuring the body against that
+			// token ended `bodyRange` at the first blank line, so every statement
+			// below it fell outside the function and its locals lost their scope.
+			if (token.kind === "newline" && token.line !== previousLine) continue;
 			if (token.line !== previousLine && token.indent <= parentIndent) break;
 			bodyEnd = token.end;
 			previousLine = token.line;

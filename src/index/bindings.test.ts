@@ -56,6 +56,22 @@ describe("binding index", () => {
 		assert.equal(bindings.findReferences(second!.id).length, 2);
 	});
 
+	it("keeps locals declared after a blank line inside the enclosing function", () => {
+		const source = `func blank_line() -> void:\n\tvar before := 1\n\n\tvar after := before + 1\n\tafter += 1\n\nfunc other() -> void:\n\tvar after := 2\n\tafter += 1\n`;
+		const bindings = createIndex(source);
+		const nested = bindings.getScopedBinding("file:///player.gd", source.indexOf("after += 1"), "after");
+		const sibling = bindings.getScopedBinding(
+			"file:///player.gd",
+			source.lastIndexOf("after += 1"),
+			"after",
+		);
+		assert.equal(nested?.kind, "local");
+		assert.equal(sibling?.kind, "local");
+		assert.notEqual(nested?.id, sibling?.id);
+		assert.equal(bindings.findReferences(nested!.id).length, 2);
+		assert.equal(bindings.findReferences(sibling!.id).length, 2);
+	});
+
 	it("binds a shorthand .foo() call to the parent declaration", () => {
 		const sources = {
 			[BASE_URI]: "class_name Base\nfunc heal():\n\tpass\n",
