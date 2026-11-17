@@ -19,9 +19,13 @@ const FENCED_BLOCK = /\[(codeblock|gdscript|csharp)(?:\s[^\]]*)?\]\n?([\s\S]*?)\
 /** Inline `[code]` and `[code skip-lint]` spans. */
 const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
 
-/** Markdown a docstring may already contain; its content is literal for Markdown. */
-const MARKDOWN_FENCE = /```[\s\S]*?```/g;
-const MARKDOWN_CODE_SPAN = /`[^`\n]+`/g;
+/**
+ * Markdown a docstring may already contain; its content is literal for
+ * Markdown. Both forms allow fences longer than three characters and the
+ * `~~~` alternative, and a span closes on a run of exactly its own length.
+ */
+const MARKDOWN_FENCE = /^( {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?^( {0,3})\2[ \t]*$/gm;
+const MARKDOWN_CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n\n)[\s\S])*?(?<!`)\1(?!`)/g;
 
 /** Table rows; each `[cell]` of a row is a column. */
 const TABLE = /\[table(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/table\]/g;

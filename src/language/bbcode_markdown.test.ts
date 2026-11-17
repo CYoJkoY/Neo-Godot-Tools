@@ -53,6 +53,14 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("```\n[br] stays\n```"), "```\n[br] stays\n```");
 	});
 
+	it("keeps a Markdown fence written with tildes literal", () => {
+		assert.equal(bbcodeToMarkdown("~~~\n[param amount]\n~~~"), "~~~\n[param amount]\n~~~");
+	});
+
+	it("keeps a Markdown code span fenced with two backticks literal", () => {
+		assert.equal(bbcodeToMarkdown("Use ``a ` [param x]`` here"), "Use ``a ` [param x]`` here");
+	});
+
 	it("renders [param] as inline code", () => {
 		assert.equal(bbcodeToMarkdown("Returns [param amount] unchanged."), "Returns `amount` unchanged.");
 	});
