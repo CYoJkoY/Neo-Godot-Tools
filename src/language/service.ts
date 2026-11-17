@@ -92,32 +92,60 @@ interface ArgumentScan {
 	skip: number;
 }
 
+interface CallFrame {
+	name: string;
+	/** Offset of the identifier, not the opening parenthesis. */
+	nameOffset: number;
+	openOffset: number;
+}
+
+interface IdentifierScan {
+	start: number;
+	end: number;
+}
+
+interface FrameLink {
+	frame: CallFrame | undefined;
+	parent: FrameLink | undefined;
+}
+
+interface CallScan {
+	lexical: ArgumentScan;
+	identifier: IdentifierScan | undefined;
+	frames: FrameLink | undefined;
+}
+
 function activeParameterIndex(argumentText: string): number {
-	const characters = Array.from(argumentText);
-	const scan = characters.reduce<ArgumentScan>(
-		(previous, _char, index) => nextArgumentScan(characters, index, previous),
-		{ depth: 0, separators: 0, quote: undefined, escaped: false, comment: false, skip: 0 },
-	);
+	const scan = argumentText
+		.split("")
+		.reduce<ArgumentScan>((previous, _char, index) => nextArgumentScan(argumentText, index, previous), {
+			depth: 0,
+			separators: 0,
+			quote: undefined,
+			escaped: false,
+			comment: false,
+			skip: 0,
+		});
 	return scan.separators;
 }
 
 /** A quote character opens a triple-quoted string when repeated three times. */
-function quoteDelimiter(characters: readonly string[], index: number): string | undefined {
-	const char = characters[index];
+function quoteDelimiter(source: string, index: number): string | undefined {
+	const char = source[index];
 	if (char !== '"' && char !== "'") return undefined;
-	const triple = characters[index + 1] === char && characters[index + 2] === char;
+	const triple = source[index + 1] === char && source[index + 2] === char;
 	return triple ? char.repeat(3) : char;
 }
 
-function matchesDelimiter(characters: readonly string[], index: number, delimiter: string): boolean {
-	const char = characters[index];
+function matchesDelimiter(source: string, index: number, delimiter: string): boolean {
+	const char = source[index];
 	if (char !== delimiter[0]) return false;
-	return delimiter.length === 1 || (characters[index + 1] === char && characters[index + 2] === char);
+	return delimiter.length === 1 || (source[index + 1] === char && source[index + 2] === char);
 }
 
-function nextArgumentScan(characters: readonly string[], index: number, scan: ArgumentScan): ArgumentScan {
+function nextArgumentScan(source: string, index: number, scan: ArgumentScan): ArgumentScan {
 	if (scan.skip > 0) return { ...scan, skip: scan.skip - 1 };
-	const char = characters[index] ?? "";
+	const char = source[index] ?? "";
 	if (scan.comment) {
 		if (char === "\n") return { ...scan, comment: false };
 		return scan;
@@ -125,17 +153,80 @@ function nextArgumentScan(characters: readonly string[], index: number, scan: Ar
 	if (scan.quote) {
 		if (scan.escaped) return { ...scan, escaped: false };
 		if (char === "\\") return { ...scan, escaped: true };
-		if (matchesDelimiter(characters, index, scan.quote))
+		if (matchesDelimiter(source, index, scan.quote))
 			return { ...scan, quote: undefined, skip: scan.quote.length - 1 };
 		return scan;
 	}
 	if (char === "#") return { ...scan, comment: true };
-	const delimiter = quoteDelimiter(characters, index);
+	const delimiter = quoteDelimiter(source, index);
 	if (delimiter) return { ...scan, quote: delimiter, skip: delimiter.length - 1 };
 	if (char === "(" || char === "[" || char === "{") return { ...scan, depth: scan.depth + 1 };
 	if (char === ")" || char === "]" || char === "}") return { ...scan, depth: Math.max(0, scan.depth - 1) };
 	if (char === "," && scan.depth === 0) return { ...scan, separators: scan.separators + 1 };
 	return scan;
+}
+
+function nextIdentifier(
+	index: number,
+	character: string,
+	scan: IdentifierScan | undefined,
+): IdentifierScan | undefined {
+	if (/[A-Za-z0-9_]/.test(character))
+		return scan?.end === index ? { ...scan, end: index + 1 } : { start: index, end: index + 1 };
+	if (/\s/.test(character)) return scan;
+	return undefined;
+}
+
+function callFrame(source: string, identifier: IdentifierScan | undefined, openOffset: number): CallFrame | undefined {
+	const name = identifier ? source.slice(identifier.start, identifier.end) : "";
+	if (!identifier || !/^[A-Za-z_]\w*$/.test(name)) return undefined;
+	return { name, nameOffset: identifier.start, openOffset };
+}
+
+function nextCallScan(source: string, index: number, scan: CallScan): CallScan {
+	const character = source[index] ?? "";
+	const opaque =
+		scan.lexical.skip > 0 ||
+		scan.lexical.comment ||
+		scan.lexical.quote !== undefined ||
+		character === "#" ||
+		quoteDelimiter(source, index) !== undefined;
+	const lexical = nextArgumentScan(source, index, scan.lexical);
+	if (opaque) return { ...scan, lexical, identifier: undefined };
+	if (character === "(")
+		return {
+			lexical,
+			identifier: undefined,
+			frames: { frame: callFrame(source, scan.identifier, index), parent: scan.frames },
+		};
+	const identifier = nextIdentifier(index, character, scan.identifier);
+	if (character === ")") return { lexical, identifier, frames: scan.frames?.parent };
+	return { lexical, identifier, frames: scan.frames };
+}
+
+function callInFrames(frames: FrameLink | undefined): CallFrame | undefined {
+	if (!frames) return undefined;
+	if (frames.frame) return frames.frame;
+	return callInFrames(frames.parent);
+}
+
+/**
+ * Innermost call whose argument list is open at the end of `source`.
+ *
+ * Parentheses inside strings and comments are opaque. Keeping a frame for
+ * every parenthesis (including grouping ones) lets a closing `)` unwind the
+ * correct call instead of the nearest one with a name.
+ */
+function openCall(source: string): CallFrame | undefined {
+	return callInFrames(scanCalls(source).frames);
+}
+
+function scanCalls(source: string): CallScan {
+	return source.split("").reduce<CallScan>((previous, _char, index) => nextCallScan(source, index, previous), {
+		lexical: { depth: 0, separators: 0, quote: undefined, escaped: false, comment: false, skip: 0 },
+		identifier: undefined,
+		frames: undefined,
+	});
 }
 
 export class LanguageService implements vscode.Disposable {
@@ -422,10 +513,10 @@ export class LanguageService implements vscode.Disposable {
 		if (token?.isCancellationRequested) return undefined;
 		return languageProfiler.measure("semantic.signatureHelp", () => {
 			const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
-			const match = before.match(/(?:^|[^A-Za-z0-9_])([A-Za-z_]\w*)\s*\(([^()]*)$/);
-			if (!match) return undefined;
-			const name = match[1];
-			const argumentText = match[2];
+			const call = openCall(before);
+			if (!call) return undefined;
+			const { name, nameOffset, openOffset } = call;
+			const argumentText = before.slice(openOffset + 1);
 			const activeParameter = argumentText.trim() ? activeParameterIndex(argumentText) : 0;
 			const builtin = resolveBuiltinSymbol(name);
 			if (builtin)
@@ -435,8 +526,7 @@ export class LanguageService implements vscode.Disposable {
 					builtin.builtin.returnType,
 					activeParameter,
 				);
-			const callOffset = Math.max(0, document.offsetAt(position) - match[1].length - 1);
-			const binding = this.bindings.getBinding(document.uri.toString(), callOffset, name);
+			const binding = this.bindings.getBinding(document.uri.toString(), nameOffset, name);
 			const symbols =
 				binding?.kind === "function"
 					? [this.symbolForBinding(binding)].filter((symbol): symbol is IndexedSymbol => symbol !== undefined)

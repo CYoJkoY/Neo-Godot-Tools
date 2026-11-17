@@ -22,6 +22,23 @@ func method4(first: int, second: int, third: int) -> void:
 func method5(text: String, flag: bool, count: int) -> void:
 	pass
 
+func outer(values: Array, flag: bool) -> void:
+	pass
+
+func inner(first: int, second: int) -> void:
+	pass
+
+class SignatureOwner:
+	func pick(alpha: int, beta: int) -> void:
+		pass
+
+	func invoke() -> void:
+		pick(inner(1, 2), )
+
+class OtherOwner:
+	func pick(gamma: String) -> void:
+		pass
+
 func run() -> void:
 	method1([1, 2, 3], true, 0)
 	method2({"first": 1, "second": 2}, true, 0)
@@ -29,6 +46,21 @@ func run() -> void:
 	method4(1, # user's value
 		2, 3)
 	method5("""text " here""", true, 0)
+	outer(inner(1, ), true)
+	outer(inner(1, 2), )
+	outer (inner(1, 2), true)
+	method4(method4(1, 2, 3), 4, )
+	method3("close ) here", )
+	method4(1, # close ) here
+		2, )
+	method3("""first
+second)""", true, )
+	method3("open (", true, )
+	method4(1, # open ( here
+		2, )
+	method3("""open (
+text""", true, )
+	return outer(inner(1, 2), )
 `;
 
 function createService(): LanguageService {
@@ -124,6 +156,138 @@ describe("local signature help", () => {
 		const service = createService();
 		try {
 			assert.equal(signatureHelpAt(service, '"""text " here""", ')?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("selects the innermost open nested call", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "outer(inner(1, ");
+			assert.equal(help?.signatures[0]?.label, "inner(first: int, second: int) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("keeps the call binding when whitespace precedes the parenthesis", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "outer (inner(1, 2), ");
+			assert.equal(help?.signatures[0]?.label, "outer(values: Array, flag: bool) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("starts a new call name after a keyword", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "return outer(inner(1, 2), ");
+			assert.equal(help?.signatures[0]?.label, "outer(values: Array, flag: bool) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("returns to the enclosing call after a nested call closes", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "outer(inner(1, 2), ");
+			assert.equal(help?.signatures[0]?.label, "outer(values: Array, flag: bool) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("counts arguments after a nested call", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "method4(method4(1, 2, 3), 4, ");
+			assert.equal(help?.signatures[0]?.label, "method4(first: int, second: int, third: int) -> void");
+			assert.equal(help?.activeParameter, 2);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("resolves the enclosing call through its exact name offset", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "pick(inner(1, 2), ");
+			assert.equal(help?.signatures[0]?.label, "pick(alpha: int, beta: int) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("ignores parentheses inside string arguments", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, '"close ) here", ');
+			assert.equal(help?.signatures[0]?.label, "method3(text: String, flag: bool, count: int) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("ignores parentheses inside line comments", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "# close ) here\n\t\t2, ");
+			assert.equal(help?.signatures[0]?.label, "method4(first: int, second: int, third: int) -> void");
+			assert.equal(help?.activeParameter, 2);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("ignores parentheses inside multiline string arguments", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, 'second)""", true, ');
+			assert.equal(help?.signatures[0]?.label, "method3(text: String, flag: bool, count: int) -> void");
+			assert.equal(help?.activeParameter, 2);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("ignores an unmatched opening parenthesis inside a string", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, '"open (", ');
+			assert.equal(help?.signatures[0]?.label, "method3(text: String, flag: bool, count: int) -> void");
+			assert.equal(help?.activeParameter, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("ignores an unmatched opening parenthesis inside a comment", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, "# open ( here\n\t\t2, ");
+			assert.equal(help?.signatures[0]?.label, "method4(first: int, second: int, third: int) -> void");
+			assert.equal(help?.activeParameter, 2);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("ignores an unmatched opening parenthesis inside a multiline string", () => {
+		const service = createService();
+		try {
+			const help = signatureHelpAt(service, 'text""", true, ');
+			assert.equal(help?.signatures[0]?.label, "method3(text: String, flag: bool, count: int) -> void");
+			assert.equal(help?.activeParameter, 2);
 		} finally {
 			service.dispose();
 		}
