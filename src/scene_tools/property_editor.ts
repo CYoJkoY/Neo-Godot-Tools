@@ -20,7 +20,7 @@ import {
 } from "../resource_inspector/metadata.js";
 import type { ResourceDocument } from "../resource_inspector/document.js";
 import { parseVariant, type VariantValue } from "../resource_inspector/values.js";
-import { convert_resource_path_to_uri, createLogger } from "../utils/index.js";
+import { createLogger, resolve_resource_file } from "../utils/index.js";
 import { createLruCache } from "../utils/lru_cache.js";
 import { withTimeout } from "../utils/scheduling.js";
 import { findProperty, planPropertyWrite } from "./properties.js";
@@ -108,20 +108,27 @@ export class NodePropertyMetadata {
 	}
 
 	private async scriptUri(scene: Scene, node: SceneNode): Promise<vscode.Uri | undefined> {
-		for (const id of [node.scriptId, node.customTypeScriptId].filter(Boolean)) {
-			const resource = scene.externalResources.get(id);
-			if (!resource?.path?.endsWith(".gd")) continue;
+		// A node merged from an instanced scene keeps the ids its declaring scene
+		// wrote, so the lookup must use that scene's resources and project before
+		// falling back to the previewed scene.
+		const owner = node.inheritedFromScene && node.declaringScene ? node.declaringScene : scene;
+		const resolveFrom = (current: Scene): vscode.Uri | undefined => {
+			const resource = [node.scriptId, node.customTypeScriptId]
+				.filter(Boolean)
+				.map((id) => current.externalResources.get(id))
+				.find((entry) => entry?.path?.endsWith(".gd"));
+			if (!resource?.path) return undefined;
 			if (resource.path.startsWith("res://")) {
-				try {
-					return await convert_resource_path_to_uri(resource.path);
-				} catch (error) {
-					log.debug(`Unable to resolve '${resource.path}': ${String(error)}`);
+				const resolved = resolve_resource_file(current.path, resource.path);
+				if (resolved === undefined) {
+					log.debug(`Unable to resolve '${resource.path}' for '${current.path}'`);
 					return undefined;
 				}
+				return vscode.Uri.file(resolved);
 			}
 			return vscode.Uri.file(resource.path);
-		}
-		return undefined;
+		};
+		return resolveFrom(owner) ?? (owner === scene ? undefined : resolveFrom(scene));
 	}
 
 	private async nativeProperties(className: string): Promise<PropertyMetadata[]> {

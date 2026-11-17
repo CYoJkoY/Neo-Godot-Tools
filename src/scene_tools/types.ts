@@ -45,6 +45,23 @@ export class SceneNode extends TreeItem {
 	public instanceScene?: Scene;
 	/** Set for nodes that instance another scene. */
 	public resourcePath?: string;
+	/**
+	 * Scene file that declares `resourcePath`.
+	 *
+	 * A node merged from an instanced scene keeps the instance its own scene
+	 * wrote, so `res://` must resolve against that scene's project rather than
+	 * the project of the scene currently shown in the preview.
+	 */
+	public declaringScenePath?: string;
+	/**
+	 * Scene that owns the script/resource ids stored on this node.
+	 *
+	 * A node merged from an instanced scene keeps the ids its declaring scene
+	 * wrote, so a scriptId must be looked up in that declaring scene
+	 * externalResources rather than in the previewed scene, where the same id
+	 * may point at a different resource.
+	 */
+	public declaringScene?: Scene;
 	public iconClass = "";
 
 	constructor(init: SceneNodeInit) {

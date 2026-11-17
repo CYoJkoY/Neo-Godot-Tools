@@ -9,7 +9,7 @@ import type {
 	Uri,
 } from "vscode";
 import { SceneParser } from "../scene_tools";
-import { convert_resource_path_to_uri, convert_uids_to_uris } from "../utils";
+import { convert_uids_to_uris, project_resource_path, resolve_resource_file } from "../utils";
 import { RESOURCE_SELECTOR } from "./selectors";
 
 const POSITION_ZERO = new vscode.Position(0, 0);
@@ -47,19 +47,20 @@ function sceneLinks(document: TextDocument, text: string, parser: SceneParser): 
 
 /** Links to the `res://` paths and `uid://` ids anywhere in the document. */
 async function resourceLinks(document: TextDocument, text: string): Promise<DocumentLink[]> {
-	const paths = await Promise.all(
-		Array.from(text.matchAll(RES_PATH_PATTERN), async (match) => {
-			const uri = await convert_resource_path_to_uri(match[0]);
-			return uri instanceof vscode.Uri
-				? new vscode.DocumentLink(makeMatchRange(document, match), uri)
-				: undefined;
-		}),
-	);
+	// `res://` is project-relative: the owning project of this document decides
+	// the target, so a same-named file at the workspace root never wins.
+	const paths = Array.from(text.matchAll(RES_PATH_PATTERN), (match) => {
+		const target = resolve_resource_file(document.uri.fsPath, match[0]);
+		return target === undefined
+			? undefined
+			: new vscode.DocumentLink(makeMatchRange(document, match), vscode.Uri.file(target));
+	});
 	const uidMatches = Array.from(text.matchAll(UID_PATTERN));
 	const uidMap = await convert_uids_to_uris([...new Set(uidMatches.map((match) => match[0]))]);
 	const uids = uidMatches.map((match) => {
 		const uri = uidMap.get(match[0]);
-		return uri instanceof vscode.Uri ? new vscode.DocumentLink(makeMatchRange(document, match), uri) : undefined;
+		if (uri === undefined || project_resource_path(document.uri.fsPath, uri.fsPath) === undefined) return undefined;
+		return new vscode.DocumentLink(makeMatchRange(document, match), uri);
 	});
 	return [...paths, ...uids].filter((link): link is DocumentLink => link !== undefined);
 }

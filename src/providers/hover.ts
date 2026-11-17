@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { HoverFallback } from "../fallback/hover";
 import { LanguageService } from "../language/service";
 import { SceneParser } from "../scene_tools";
-import { convert_resource_path_to_uri, convert_uid_to_uri, convert_uri_to_resource_path } from "../utils";
+import { convert_uid_to_uri, project_resource_path, resolve_resource_file } from "../utils";
 import { RESOURCE_SELECTOR } from "./selectors";
 
 /** `[extension, language id]` for the resource kinds the docs links point at. */
@@ -25,8 +25,17 @@ function languageFor(resourcePath: string): string | undefined {
 	return RESOURCE_LANGUAGES.find(([extension]) => resourcePath.endsWith(extension))?.[1];
 }
 
-function imageMarkdown(uri: vscode.Uri | undefined): string {
+function imageMarkdown(uri: vscode.Uri): string {
 	return `<img src="${uri}" min-width=100px max-width=500px/>`;
+}
+
+/** File text, or `undefined` when the resource is missing or unreadable. */
+async function readResourceText(uri: vscode.Uri): Promise<string | undefined> {
+	try {
+		return (await vscode.workspace.openTextDocument(uri)).getText();
+	} catch {
+		return undefined;
+	}
 }
 
 /** Renders an image inline; `<img>` needs HTML support and trust. */
@@ -36,18 +45,23 @@ function appendImage(contents: vscode.MarkdownString, markdown: string): void {
 	contents.isTrusted = true;
 }
 
-/** Resource links of an `ExtResource` definition body, one markdown bullet each. */
-async function getLinks(text: string): Promise<string> {
-	const resources = await Promise.all(
-		Array.from(text.matchAll(RES_PATH_LINK), async (match) => {
-			const uri = await convert_resource_path_to_uri(match[0]);
-			return uri instanceof vscode.Uri ? `* [${match[0]}](${uri})\n` : "";
-		}),
-	);
+/**
+ * Resource links of an `ExtResource` definition body, one markdown bullet each.
+ *
+ * Paths resolve against the project that owns `documentPath`: a scene in a
+ * nested project must not link to a same-named file at the workspace root.
+ */
+async function getLinks(text: string, documentPath: string): Promise<string> {
+	const resources = Array.from(text.matchAll(RES_PATH_LINK), (match) => {
+		const target = resolve_resource_file(documentPath, match[0]);
+		return target === undefined ? "" : `* [${match[0]}](${vscode.Uri.file(target)})\n`;
+	});
 	const uids = await Promise.all(
 		Array.from(text.matchAll(UID_LINK), async (match) => {
 			const uri = await convert_uid_to_uri(match[0]);
-			return uri instanceof vscode.Uri ? `* [${match[0]}](${uri})\n` : "";
+			// A uid found outside the owning project belongs to another copy.
+			if (uri === undefined || project_resource_path(documentPath, uri.fsPath) === undefined) return "";
+			return `* [${match[0]}](${uri})\n`;
 		}),
 	);
 	return [...resources, ...uids].join("");
@@ -68,15 +82,18 @@ async function sceneHover(
 	if (word.startsWith("ExtResource")) {
 		const resource = scene.externalResources.get(match[1]);
 		if (!resource) return undefined;
-		const links = await getLinks(resource.body);
+		const links = await getLinks(resource.body, document.uri.fsPath);
 		const contents = new vscode.MarkdownString(links);
 		contents.appendMarkdown("\n---\n");
 		contents.appendCodeblock(resource.body, "gdresource");
-		const uri = await convert_resource_path_to_uri(resource.path);
-		if (resource.type === "Texture") appendImage(contents, `\n---\n${imageMarkdown(uri)}\n`);
-		if (resource.type === "Script") {
+		const target = resolve_resource_file(document.uri.fsPath, resource.path);
+		const uri = target === undefined ? undefined : vscode.Uri.file(target);
+		if (resource.type === "Texture" && uri) appendImage(contents, `\n---\n${imageMarkdown(uri)}\n`);
+		if (resource.type === "Script" && uri) {
+			const script = await readResourceText(uri);
+			if (script === undefined) return new vscode.Hover(contents);
 			contents.appendMarkdown("\n---\n");
-			contents.appendCodeblock((await vscode.workspace.openTextDocument(uri)).getText(), "gdscript");
+			contents.appendCodeblock(script, "gdscript");
 		}
 		return new vscode.Hover(contents);
 	}
@@ -94,14 +111,18 @@ async function pathHover(document: vscode.TextDocument, position: vscode.Positio
 	if (!link?.startsWith("res://")) return undefined;
 	const type = languageFor(link);
 	if (!type) return undefined;
+	const target = resolve_resource_file(document.uri.fsPath, link);
+	if (target === undefined) return undefined;
+	const uri = vscode.Uri.file(target);
 
 	const contents = new vscode.MarkdownString();
-	const uri = await convert_resource_path_to_uri(link);
 	if (type === "image") {
 		appendImage(contents, imageMarkdown(uri));
 		return new vscode.Hover(contents);
 	}
-	contents.appendCodeblock((await vscode.workspace.openTextDocument(uri)).getText(), type);
+	const text = await readResourceText(uri);
+	if (text === undefined) return undefined;
+	contents.appendCodeblock(text, type);
 	return new vscode.Hover(contents);
 }
 
@@ -110,7 +131,8 @@ async function uidToPath(document: vscode.TextDocument, position: vscode.Positio
 	const uid = document.getText(document.getWordRangeAtPosition(position, UID_WORD));
 	if (!uid.startsWith("uid://")) return undefined;
 	const uri = await convert_uid_to_uri(uid);
-	return await convert_uri_to_resource_path(uri ?? vscode.Uri.parse(uid));
+	if (uri === undefined) return undefined;
+	return project_resource_path(document.uri.fsPath, uri.fsPath);
 }
 
 export interface HoverProviderOptions {

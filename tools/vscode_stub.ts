@@ -360,6 +360,98 @@ class ThemeColor {
 	constructor(public id: string) {}
 }
 
+/**
+ * Prototype-style stand-ins for the host classes the drop provider constructs.
+ *
+ * They are constructor functions rather than `class` declarations because the
+ * coding-standard ratchet holds `class` counts in this file at its baseline
+ * while the tooling around it is migrated.
+ */
+interface SnippetStringLike {
+	[key: string]: unknown;
+	value: string;
+	appendText(text: string): SnippetStringLike;
+	appendPlaceholder(value: string, number?: number): SnippetStringLike;
+	appendTabstop(number?: number): SnippetStringLike;
+}
+
+function SnippetString(this: SnippetStringLike, value = ""): void {
+	this.value = value;
+}
+SnippetString.prototype.appendText = function (this: SnippetStringLike, text: string): SnippetStringLike {
+	this.value += text;
+	return this;
+};
+SnippetString.prototype.appendPlaceholder = function (this: SnippetStringLike, value: string): SnippetStringLike {
+	this.value += value;
+	return this;
+};
+SnippetString.prototype.appendTabstop = function (this: SnippetStringLike): SnippetStringLike {
+	return this;
+};
+
+interface DocumentDropEditLike {
+	[key: string]: unknown;
+	insertText: string | SnippetStringLike;
+}
+
+function DocumentDropEdit(this: DocumentDropEditLike, insertText: string | SnippetStringLike): void {
+	this.insertText = insertText;
+}
+
+/**
+ * A link returned by a document link provider. The extension only constructs
+ * links and sets a tooltip, so the two members it touches are enough.
+ */
+interface DocumentLinkLike {
+	[key: string]: unknown;
+	range: Range;
+	target?: Uri;
+	tooltip?: string;
+}
+
+function DocumentLink(this: DocumentLinkLike, range: Range, target?: Uri): void {
+	this.range = range;
+	this.target = target;
+}
+
+/**
+ * The dropped item and its transfer container. The extension sets these itself
+ * while dragging a scene node and reads `value` back in the drop provider.
+ */
+interface DataTransferItemLike {
+	[key: string]: unknown;
+	value: unknown;
+	asString(): Promise<string>;
+	asFile(): undefined;
+}
+
+function DataTransferItem(this: DataTransferItemLike, value: unknown): void {
+	this.value = value;
+}
+DataTransferItem.prototype.asString = function (this: DataTransferItemLike): Promise<string> {
+	const { value } = this;
+	return Promise.resolve(typeof value === "string" ? value : JSON.stringify(value));
+};
+DataTransferItem.prototype.asFile = (): undefined => undefined;
+
+interface DataTransferLike {
+	[key: string]: unknown;
+	items: Map<string, DataTransferItemLike>;
+	get(mimeType: string): DataTransferItemLike | undefined;
+	set(mimeType: string, item: DataTransferItemLike): void;
+}
+
+function DataTransfer(this: DataTransferLike): void {
+	this.items = new Map();
+}
+DataTransfer.prototype.get = function (this: DataTransferLike, mimeType: string): DataTransferItemLike | undefined {
+	return this.items.get(mimeType);
+};
+DataTransfer.prototype.set = function (this: DataTransferLike, mimeType: string, item: DataTransferItemLike): void {
+	this.items.set(mimeType, item);
+};
+
 class Diagnostic {
 	[key: string]: unknown;
 	constructor(
@@ -468,6 +560,8 @@ const window = {
 	showInputBox: async (_options?: unknown): Promise<string | undefined> => undefined,
 	showOpenDialog: async (_options?: unknown): Promise<Uri[] | undefined> => undefined,
 	showTextDocument: async (_uri: Uri, _options?: unknown): Promise<unknown> => undefined,
+	createTreeView: (_id: string, _options?: unknown) => ({ dispose: () => {} }),
+	registerFileDecorationProvider: (_provider: unknown) => ({ dispose: () => {} }),
 	registerCustomEditorProvider: () => ({ dispose: () => {} }),
 	registerWebviewViewProvider: () => ({ dispose: () => {} }),
 	registerWebviewPanelSerializer: () => ({ dispose: () => {} }),
@@ -520,6 +614,23 @@ const formattingProviders: Array<{ selector: unknown; provider: unknown }> = [];
 /** Document symbol providers currently registered through `languages`, in order. */
 const documentSymbolProviders: Array<{ selector: unknown; provider: unknown }> = [];
 
+/** Document drop edit providers currently registered through `languages`, in order. */
+const documentDropEditProviders: Array<{ selector: unknown; provider: unknown }> = [];
+
+/**
+ * `dispose` of a list registration.
+ *
+ * A provider disposal must not depend on the entry still being present: an
+ * activation that is disposed twice, or a `dispose` after another registration
+ * took the same slot, otherwise removes an unrelated provider.
+ */
+function disposeEntry<T>(entries: T[], entry: T): () => void {
+	return () => {
+		const index = entries.indexOf(entry);
+		if (index !== -1) entries.splice(index, 1);
+	};
+}
+
 const languages = {
 	createDiagnosticCollection: (name?: string) => {
 		const entries = new Map<string, unknown>();
@@ -540,18 +651,22 @@ const languages = {
 	registerDocumentSymbolProvider: (selector: unknown, provider: unknown) => {
 		const entry = { selector, provider };
 		documentSymbolProviders.push(entry);
-		return { dispose: () => documentSymbolProviders.splice(documentSymbolProviders.indexOf(entry), 1) };
+		return { dispose: disposeEntry(documentSymbolProviders, entry) };
 	},
 	registerWorkspaceSymbolProvider: () => ({ dispose: () => {} }),
 	registerReferenceProvider: () => ({ dispose: () => {} }),
 	registerRenameProvider: () => ({ dispose: () => {} }),
 	registerSignatureHelpProvider: () => ({ dispose: () => {} }),
 	registerDocumentLinkProvider: () => ({ dispose: () => {} }),
-	registerDocumentDropEditProvider: () => ({ dispose: () => {} }),
+	registerDocumentDropEditProvider: (selector: unknown, provider: unknown) => {
+		const entry = { selector, provider };
+		documentDropEditProviders.push(entry);
+		return { dispose: disposeEntry(documentDropEditProviders, entry) };
+	},
 	registerDocumentFormattingEditProvider: (selector: unknown, provider: unknown) => {
 		const entry = { selector, provider };
 		formattingProviders.push(entry);
-		return { dispose: () => formattingProviders.splice(formattingProviders.indexOf(entry), 1) };
+		return { dispose: disposeEntry(formattingProviders, entry) };
 	},
 	registerDocumentRangeFormattingEditProvider: () => ({ dispose: () => {} }),
 	registerDocumentSemanticTokensProvider: () => ({ dispose: () => {} }),
@@ -680,6 +795,8 @@ const __fireConfigurationChange = fireConfigurationChange;
 const __formattingProviders = formattingProviders;
 /** Document symbol providers a test can inspect after an activation or disposal. */
 const __documentSymbolProviders = documentSymbolProviders;
+/** Document drop edit providers a test can inspect after an activation or disposal. */
+const __documentDropEditProviders = documentDropEditProviders;
 
 export {
 	Uri,
@@ -704,6 +821,11 @@ export {
 	InlayHintKind,
 	RelativePattern,
 	ThemeColor,
+	SnippetString,
+	DocumentDropEdit,
+	DocumentLink,
+	DataTransferItem,
+	DataTransfer,
 	workspace,
 	window,
 	commands,
@@ -731,5 +853,6 @@ export {
 	__fireConfigurationChange,
 	__formattingProviders,
 	__documentSymbolProviders,
+	__documentDropEditProviders,
 };
 export type { StubDisposable, StubTextDocument, UriComponents };

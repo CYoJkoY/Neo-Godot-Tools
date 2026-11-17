@@ -85,10 +85,21 @@ const detect_project_version = (text: string): string => {
 export async function get_project_version(): Promise<string | undefined> {
 	const file = await get_project_file();
 	if (file === undefined) return undefined;
+	return await read_project_version(file);
+}
+
+/** Reads (and caches) the version of the project that owns `filePath`. */
+export async function project_version_for(filePath: string): Promise<string | undefined> {
+	const file = find_project_file(filePath);
+	if (file === null) return undefined;
+	return await read_project_version(file);
+}
+
+async function read_project_version(file: string): Promise<string> {
 	const cached = projectVersionCache.get(file);
 	if (cached) return cached;
 
-	const text = (await vscode.workspace.openTextDocument(file)).getText();
+	const text = (await vscode.workspace.openTextDocument(vscode.Uri.file(file))).getText();
 	const version = detect_project_version(text);
 	projectVersionCache.set(file, version);
 	return version;
@@ -101,14 +112,70 @@ const parent_directories = (start: string, depth: number): readonly string[] => 
 	return [parent, ...parent_directories(parent, depth - 1)];
 };
 
+/**
+ * `depth + directory -> owning project.godot`. Parsing a scene resolves one
+ * `res://` path per scripted node from the same scene directory, and every walk
+ * costs a `stat` per parent, so the repeated lookups are memoized. The short TTL
+ * still picks up a project that appears or disappears while the editor runs.
+ */
+const projectFileCache = createLruCache<string, string | null>({ capacity: 256, ttlMs: 5_000 });
+
+const projectCacheKey = (directory: string, depth: number): string => `${depth}\u0000${directory}`;
+
 export function find_project_file(start: string, depth = 20): string | null {
 	if (start === ".") {
 		return is_file("project.godot") ? "project.godot" : null;
 	}
-	const found = parent_directories(start, depth + 1).find((directory) =>
-		is_file(path.join(directory, "project.godot")),
+	const directory = path.dirname(start);
+	const key = projectCacheKey(directory, depth);
+	const cached = projectFileCache.get(key);
+	if (cached !== undefined) return cached;
+	const found = parent_directories(start, depth + 1).find((parent) =>
+		is_file(path.join(parent, "project.godot")),
 	);
-	return found ? path.join(found, "project.godot") : null;
+	const file = found ? path.join(found, "project.godot") : null;
+	projectFileCache.set(key, file);
+	return file;
+}
+
+/**
+ * Directory of the project that owns `filePath`: the nearest `project.godot`
+ * above it, else the VS Code workspace folder it belongs to.
+ *
+ * A scene inside a nested Godot project must not resolve `res://` against the
+ * workspace root, which is an ancestor directory in a multi-project workspace.
+ */
+export function project_dir_for(filePath: string): string | undefined {
+	const projectFile = find_project_file(filePath);
+	if (projectFile) return path.dirname(projectFile);
+	return vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath))?.uri.fsPath;
+}
+
+/**
+ * Maps a `res://` path onto a file inside the project that owns `filePath`.
+ *
+ * Godot treats `res://` as the project root, so `res://../outside.gd` is not a
+ * resource of this project: it resolves to `undefined` instead of escaping.
+ */
+export function resolve_resource_file(filePath: string, resourcePath: string): string | undefined {
+	if (!resourcePath.startsWith("res://")) return undefined;
+	const directory = project_dir_for(filePath);
+	if (directory === undefined) return undefined;
+	const resolved = path.resolve(directory, resourcePath.slice("res://".length));
+	const relative = path.relative(directory, resolved);
+	if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`)) return undefined;
+	if (path.isAbsolute(relative)) return undefined;
+	return resolved;
+}
+
+/** Converts `target` into its `res://` form, or `undefined` when it is outside the owning project. */
+export function project_resource_path(filePath: string, target: string): string | undefined {
+	const directory = project_dir_for(filePath);
+	if (directory === undefined) return undefined;
+	const relative = path.relative(directory, target);
+	if (relative.length === 0 || relative === ".." || relative.startsWith(`..${path.sep}`)) return undefined;
+	if (path.isAbsolute(relative)) return undefined;
+	return `res://${relative.split(path.sep).join("/")}`;
 }
 
 export async function convert_resource_path_to_uri(resPath: string): Promise<vscode.Uri> {

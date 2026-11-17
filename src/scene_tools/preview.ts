@@ -17,12 +17,12 @@ import {
 } from "vscode";
 import type { LspClientLike } from "../lsp/types";
 import {
-	convert_resource_path_to_uri,
 	createLogger,
 	find_file,
 	get_configuration,
 	make_docs_uri,
 	register_command,
+	resolve_resource_file,
 	set_context,
 } from "../utils";
 import { apply_custom_class_icons, invalidateNodeIconCaches } from "./node_icons";
@@ -290,7 +290,14 @@ export class ScenePreviewProvider
 
 	private async open_scene(item: SceneNode) {
 		if (!item.resourcePath) return;
-		const uri = await convert_resource_path_to_uri(item.resourcePath);
+		const uri = this.resolve_resource_uri(
+			item.declaringScenePath ?? this.scene?.path,
+			item.resourcePath,
+		);
+		if (uri === undefined) {
+			log.debug(`Unable to resolve scene resource path '${item.resourcePath}' for '${item.path}'.`);
+			return;
+		}
 		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
@@ -301,7 +308,7 @@ export class ScenePreviewProvider
 			return;
 		}
 
-		const uri = this.resolve_resource_uri(this.scene?.path, resource.path);
+		const uri = this.resolve_resource_uri(resource.scenePath, resource.path);
 		if (!uri) {
 			log.debug(`Unable to resolve script resource path '${resource.path}' for '${item.path}'.`);
 			return;
@@ -309,40 +316,80 @@ export class ScenePreviewProvider
 		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
-	private resolve_script_resource(scene: Scene | undefined, item: SceneNode): { path: string } | undefined {
+	/**
+	 * Script resource of `item`, together with the scene that declares it.
+	 *
+	 * An instanced node contributes its script from the instance's own scene, so
+	 * a `res://` path must resolve against that scene's project, not the project
+	 * of the previewed scene.
+	 */
+	private resolve_script_resource(
+		scene: Scene | undefined,
+		item: SceneNode,
+	): { path: string; scenePath: string } | undefined {
 		if (!scene) return undefined;
 
-		const findDirect = (source: Scene, node: SceneNode): { path: string } | undefined => {
-			if (node.scriptId) {
-				const resource = source.externalResources.get(node.scriptId);
-				if (resource?.path) return resource;
+		const findIn = (
+			owner: Scene,
+			id: string,
+			byUid: string | undefined,
+			subResourceId: string | undefined,
+		): { path: string; scenePath: string } | undefined => {
+			if (id) {
+				const resource = owner.externalResources.get(id);
+				if (resource?.path) return { path: resource.path, scenePath: owner.path };
 			}
-
-			if (node.customTypeScriptId) {
-				const resource = source.externalResources.get(node.customTypeScriptId);
-				if (resource?.path) return resource;
+			if (byUid) {
+				const resource = owner.externalResourcesByUid.get(byUid);
+				if (resource?.path) return { path: resource.path, scenePath: owner.path };
 			}
-
-			if (node.customTypeScriptUid) {
-				const resource = source.externalResourcesByUid.get(node.customTypeScriptUid);
-				if (resource?.path) return resource;
-			}
-
-			if (node.customTypeScriptSubResourceId) {
-				const subResource = source.subResources.get(node.customTypeScriptSubResourceId);
+			if (subResourceId) {
+				const subResource = owner.subResources.get(subResourceId);
 				const scriptId = subResource?.body.match(
 					/(?:^|\n)script\s*=\s*ExtResource\(\s*"?([^\)"\s]+)"?\s*\)/,
 				)?.[1];
 				if (scriptId) {
-					const resource = source.externalResources.get(scriptId);
-					if (resource?.path) return resource;
+					const resource = owner.externalResources.get(scriptId);
+					if (resource?.path) return { path: resource.path, scenePath: owner.path };
 				}
 			}
 			return undefined;
 		};
 
+		const findDirect = (source: Scene, node: SceneNode): { path: string; scenePath: string } | undefined => {
+			// A node merged from an instanced scene keeps the ids its declaring scene
+			// wrote. The same id may map to a different resource in the previewed
+			// scene, so the declaring scene is consulted first and `source` is only a
+			// fallback for ids the node wrote itself.
+			const owner = node.inheritedFromScene && node.declaringScene ? node.declaringScene : source;
+			const direct = findIn(
+				owner,
+				node.scriptId,
+				node.customTypeScriptUid,
+				node.customTypeScriptSubResourceId,
+			);
+			if (direct) return direct;
+			if (owner !== source) {
+				const fallback = findIn(
+					source,
+					node.scriptId,
+					node.customTypeScriptUid,
+					node.customTypeScriptSubResourceId,
+				);
+				if (fallback) return fallback;
+			}
+			if (node.customTypeScriptId) {
+				const resource = owner.externalResources.get(node.customTypeScriptId);
+				if (resource?.path) return { path: resource.path, scenePath: owner.path };
+			}
+			return undefined;
+		};
+
 		const visited = new Set<string>();
-		const visit = (currentScene: Scene, currentNode: SceneNode): { path: string } | undefined => {
+		const visit = (
+			currentScene: Scene,
+			currentNode: SceneNode,
+		): { path: string; scenePath: string } | undefined => {
 			const key = `${currentScene.path}:${currentNode.path}`;
 			if (visited.has(key)) return undefined;
 			visited.add(key);
@@ -364,9 +411,8 @@ export class ScenePreviewProvider
 		if (!scenePath || !resourcePath) return undefined;
 
 		if (resourcePath.startsWith("res://")) {
-			const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(scenePath));
-			if (!folder) return undefined;
-			const filePath = resolve(folder.uri.fsPath, resourcePath.slice("res://".length));
+			const filePath = resolve_resource_file(scenePath, resourcePath);
+			if (filePath === undefined) return undefined;
 			return fs.existsSync(filePath) ? vscode.Uri.file(filePath) : undefined;
 		}
 
@@ -395,7 +441,7 @@ export class ScenePreviewProvider
 			return;
 		}
 
-		const uri = this.resolve_resource_uri(this.scene.path, resource.path);
+		const uri = this.resolve_resource_uri(resource.scenePath, resource.path);
 		if (!uri) {
 			log.debug(`Unable to resolve main script resource path '${resource.path}' for scene '${this.scene.path}'.`);
 			return;

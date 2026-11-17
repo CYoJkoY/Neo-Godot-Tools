@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
-import { TextDocument, Uri, workspace } from "vscode";
-import { createLogger } from "../utils";
+import { TextDocument, Uri } from "vscode";
+import { createLogger, resolve_resource_file } from "../utils";
 import { createLruCache } from "../utils/lru_cache";
 import { parseNodeProperties } from "./properties";
 import { Scene, SceneNode, SceneResource } from "./types";
@@ -124,7 +124,10 @@ export class SceneParser {
 		try {
 			for (const node of scene.nodes.values()) {
 				if (!node.resourcePath || extname(node.resourcePath) !== ".tscn") continue;
-				const resolved = this.resolve_resource_path(scene.path, node.resourcePath);
+				const resolved = this.resolve_resource_path(
+					node.declaringScenePath ?? scene.path,
+					node.resourcePath,
+				);
 				if (!resolved) continue;
 
 				const referenced = this.parse_file(resolved);
@@ -280,10 +283,12 @@ export class SceneParser {
 			node.instanceScene = instanceScene;
 			node.resourceUri = Uri.from({ scheme: "godot", path: nodePath });
 			scene.nodes.set(nodePath, node);
+			node.declaringScene = scene;
 
 			if (instanceResource) {
 				node.tooltip = instanceResource.path;
 				node.resourcePath = instanceResource.path;
+				node.declaringScenePath = filePath;
 				if (extname(node.resourcePath) === ".tscn") node.contextValue += "openable";
 				node.contextValue += "hasResourcePath";
 			}
@@ -333,9 +338,7 @@ export class SceneParser {
 	private resolve_resource_path(filePath: string, resourcePath: string): string | undefined {
 		if (!resourcePath) return undefined;
 		if (resourcePath.startsWith("res://")) {
-			const folder = workspace.getWorkspaceFolder(Uri.file(filePath));
-			if (!folder) return undefined;
-			return resolve(folder.uri.fsPath, resourcePath.slice("res://".length));
+			return resolve_resource_file(filePath, resourcePath);
 		}
 		if (resourcePath.startsWith("user://")) return undefined;
 		if (isAbsolute(resourcePath)) return resourcePath;
@@ -413,6 +416,8 @@ export class SceneParser {
 		imported.explicitType = source.explicitType;
 		imported.inheritedFromScene = true;
 		imported.resourcePath = source.resourcePath;
+		imported.declaringScenePath = source.declaringScenePath;
+		imported.declaringScene = source.declaringScene;
 		imported.instanceScene = source.instanceScene;
 		// Instanced children have no section of their own in this scene, so they
 		// cannot be edited here. A distinct context value keeps the inline edit
@@ -434,6 +439,10 @@ export class SceneParser {
 		if (!target.customTypeScriptSubResourceId && source.customTypeScriptSubResourceId)
 			target.customTypeScriptSubResourceId = source.customTypeScriptSubResourceId;
 		if (!target.resourcePath && source.resourcePath) target.resourcePath = source.resourcePath;
+		if (!target.declaringScenePath && source.declaringScenePath)
+			target.declaringScenePath = source.declaringScenePath;
+		if (!target.declaringScene && source.declaringScene)
+			target.declaringScene = source.declaringScene;
 		if (!target.instanceScene && source.instanceScene) target.instanceScene = source.instanceScene;
 		if (source.unique) target.unique = true;
 		if (source.hasScript && !target.contextValue?.includes("hasScript"))
