@@ -9,6 +9,14 @@ import type { GodotNativeSymbol } from "./documentation_types";
 import yabbcode = require("ya-bbcode");
 
 const parser = new yabbcode();
+// Godot's own tags that ya-bbcode does not know. Without them, `[br]` and
+// `[kbd]` survive parsing and the reference pattern below turns them into
+// symbol links. `lb`/`rb` write escaped brackets as entities so the reference
+// pattern does not read `[lb]b[rb]` as `[b]`.
+parser.registerTag("br", { type: "replace", open: "<br/>", close: null });
+parser.registerTag("kbd", { type: "replace", open: "<kbd>", close: "</kbd>" });
+parser.registerTag("lb", { type: "replace", open: "&#91;", close: null });
+parser.registerTag("rb", { type: "replace", open: "&#93;", close: null });
 
 // The C# grammar is only registered with Prism once its module has been touched.
 void csharp;
@@ -421,6 +429,23 @@ function highlight_blocks(html: string, tag: string, language: string): string {
 	);
 }
 
+/**
+ * Matches rendered code: spaces inside `<code>`/`<pre>` keep their literal
+ * text, so `[code]Array[int][/code]` must not become a link.
+ */
+const RENDERED_CODE = /(<pre[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/;
+
+/** Applies the reference patterns to everything that is not rendered code. */
+function replace_references(html: string, patterns: ReadonlyArray<readonly [RegExp, string]>): string {
+	return html
+		.split(RENDERED_CODE)
+		.map((part) => {
+			if (part.startsWith("<pre") || part.startsWith("<code>")) return part;
+			return patterns.reduce((text, [pattern, replacement]) => text.replaceAll(pattern, replacement), part);
+		})
+		.join("");
+}
+
 function format_documentation(bbcode: string | undefined, classname: string | undefined) {
 	// ya-bbcode doesn't parse [code skip-lint] as a [code] tag
 	const parsed = parser.parse((bbcode ?? "").replaceAll("[code skip-lint]", "[code]").trim());
@@ -440,10 +465,7 @@ function format_documentation(bbcode: string | undefined, classname: string | un
 		// [method <class>.<name>]
 		[/\[\w+\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\.(\w+)\]/g, `<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`],
 	];
-	return reference_patterns.reduce(
-		(html, [pattern, replacement]) => html.replaceAll(pattern, replacement),
-		code.replaceAll("<br/>		", ""),
-	);
+	return replace_references(code.replaceAll("<br/>		", ""), reference_patterns);
 }
 
 const GDScriptGrammar = {

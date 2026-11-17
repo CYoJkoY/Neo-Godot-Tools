@@ -154,3 +154,61 @@ describe("documentation anchors", () => {
 		assert.ok(!html.includes('ngdtFocus("'));
 	});
 });
+
+/** Renders only the documentation paragraph of a single method. */
+function render_documentation(bbcode: string): string {
+	const html = make_symbol_document(
+		classSymbol([
+			{ name: "abs", kind: SymbolKind.Method, detail: "abs(x: float) -> float", documentation: bbcode },
+		]),
+	);
+	const start = html.indexOf("Method Descriptions");
+	const paragraph = /<p >([\s\S]*?)<\/p>/.exec(html.slice(start));
+	assert.ok(paragraph, "the method documentation paragraph is rendered");
+	return paragraph[1];
+}
+
+describe("documentation bbcode", () => {
+	it("renders [br] as a line break", () => {
+		const html = render_documentation("Line one[br]Line two");
+		assert.ok(html.includes("Line one<br/>Line two"), "the break survives as markup");
+		assert.ok(!html.includes("inspect('br')"), "the tag is not rewritten into a symbol link");
+	});
+
+	it("renders consecutive [br] tags as consecutive breaks", () => {
+		const html = render_documentation("A[br][br]B");
+		assert.ok(html.includes("A<br/><br/>B"), "each break is emitted");
+		assert.ok(!html.includes("inspect('br')"), "no break becomes a symbol link");
+	});
+
+	it("renders [kbd] as keyboard markup", () => {
+		const html = render_documentation("Press [kbd]Ctrl + A[/kbd] now");
+		assert.ok(html.includes("Press <kbd>Ctrl + A</kbd> now"), "the key binding is wrapped");
+		assert.ok(!html.includes("[/kbd]"), "the closing tag does not leak as text");
+		assert.ok(!html.includes("inspect('kbd')"), "the opening tag is not rewritten into a link");
+	});
+
+	it("renders [lb] and [rb] as escaped brackets", () => {
+		const html = render_documentation("Write [lb]literal[rb] here");
+		assert.ok(html.includes("Write &#91;literal&#93; here"), "both brackets become entities");
+		assert.ok(!html.includes("inspect('b')"), "the bracket payload is not read as a tag");
+	});
+
+	it("keeps inline code content literal", () => {
+		const html = render_documentation("Value [code]Array[int][/code] stays");
+		assert.ok(html.includes("<code>Array[int]</code>"), "the indexed type is not rewritten");
+		assert.ok(!html.includes("inspect('int')"), "the type argument is not turned into a link");
+	});
+
+	it("does not rewrite negative indices inside inline code", () => {
+		const html = render_documentation("Index [code]array[-1][/code] stays");
+		assert.ok(html.includes("<code>array[-1]</code>"), "the negative index is preserved");
+		assert.ok(!html.includes("inspect('1')"), "the index is not turned into a link");
+	});
+
+	it("still links class references outside inline code", () => {
+		const html = render_documentation("See [Node2D] and [code]Array[int][/code]");
+		assert.ok(html.includes(`inspect('Node2D')`), "plain references keep becoming links");
+		assert.ok(html.includes("<code>Array[int]</code>"), "inline code stays literal next to a link");
+	});
+});
