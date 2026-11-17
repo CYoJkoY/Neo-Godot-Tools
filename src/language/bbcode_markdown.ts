@@ -23,8 +23,12 @@ const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
  * Markdown a docstring may already contain; its content is literal for
  * Markdown. Both forms allow fences longer than three characters and the
  * `~~~` alternative, and a span closes on a run of exactly its own length.
+ *
+ * A fence closes on a run of the same character that is at least as long as
+ * the opener: `\2` repeats the opener and `\3*` allows extra characters, so a
+ * fence opened with three backticks may close with four.
  */
-const MARKDOWN_FENCE = /^( {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?^( {0,3})\2[ \t]*$/gm;
+const MARKDOWN_FENCE = /^( {0,3})((`|~)\3{2,})[^\n]*\n[\s\S]*?^ {0,3}\2\3*[ \t]*$/gm;
 const MARKDOWN_CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n\n)[\s\S])*?(?<!`)\1(?!`)/g;
 
 /** Table rows; each `[cell]` of a row is a column. */
@@ -105,8 +109,10 @@ const tableBlock = (content: string): string => {
 		});
 	if (rows.length === 0) return "";
 	const columns = Math.max(...rows.map((cells) => cells.length));
+	// A literal pipe would read as a column separator and shift the row.
+	const cellText = (cell: string): string => cell.replaceAll("|", "\\|");
 	const row = (cells: readonly string[]): string =>
-		`| ${Array.from({ length: columns }, (_unused, index) => cells[index] ?? "").join(" | ")} |`;
+		`| ${Array.from({ length: columns }, (_unused, index) => cellText(cells[index] ?? "")).join(" | ")} |`;
 	const [header, ...body] = rows;
 	const separator = row(Array.from({ length: columns }, () => "---"));
 	return `\n\n${[row(header), separator, ...body.map(row)].join("\n")}\n\n`;

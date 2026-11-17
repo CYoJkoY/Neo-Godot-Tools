@@ -57,6 +57,10 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("~~~\n[param amount]\n~~~"), "~~~\n[param amount]\n~~~");
 	});
 
+	it("keeps a Markdown fence closed with a longer run literal", () => {
+		assert.equal(bbcodeToMarkdown("```\n[param amount]\n````"), "```\n[param amount]\n````");
+	});
+
 	it("keeps a Markdown code span fenced with two backticks literal", () => {
 		assert.equal(bbcodeToMarkdown("Use ``a ` [param x]`` here"), "Use ``a ` [param x]`` here");
 	});
@@ -115,6 +119,11 @@ describe("docstring BBCode to Markdown", () => {
 
 	it("keeps rows of a table written without cell tags", () => {
 		assert.equal(bbcodeToMarkdown("[table]\nheader\nrow\n[/table]"), "| header |\n| --- |\n| row |");
+	});
+
+	it("escapes a pipe inside a table cell", () => {
+		const markdown = bbcodeToMarkdown("[table][cell]a|b[/cell][cell]c[/cell][/table]");
+		assert.equal(markdown, "| a\\|b | c |\n| --- | --- |");
 	});
 
 	it("drops formatting tags that Markdown cannot express", () => {
