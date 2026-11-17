@@ -132,4 +132,13 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("[right]Right[/right]"), "Right");
 		assert.equal(bbcodeToMarkdown("[fill]Filled[/fill]"), "Filled");
 	});
+
+	it("drops an image tag with its resource path", () => {
+		assert.equal(bbcodeToMarkdown("See [img]res://icon.svg[/img] here"), "See  here");
+	});
+
+	it("groups table cells by the declared column count", () => {
+		const markdown = bbcodeToMarkdown("[table=2][cell]a[/cell][cell]b[/cell][cell]c[/cell][cell]d[/cell][/table]");
+		assert.equal(markdown, "| a | b |\n| --- | --- |\n| c | d |");
+	});
 });

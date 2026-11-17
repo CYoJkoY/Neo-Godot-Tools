@@ -31,9 +31,15 @@ const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
 const MARKDOWN_FENCE = /^( {0,3})((`|~)\3{2,})[^\n]*\n[\s\S]*?^ {0,3}\2\3*[ \t]*$/gm;
 const MARKDOWN_CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n\n)[\s\S])*?(?<!`)\1(?!`)/g;
 
-/** Table rows; each `[cell]` of a row is a column. */
-const TABLE = /\[table(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/table\]/g;
+/** Table rows; each `[cell]` of a row is a column, and `[table=N]` declares them. */
+const TABLE = /\[table(?:=(\d+))?(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/table\]/g;
 const CELL = /\[cell(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/cell\]/g;
+
+/**
+ * An image tag. Its content is a resource path rather than text, and a hover
+ * cannot load `res://`, so the whole tag goes instead of its path.
+ */
+const IMAGE = /\[img(?:[=\s][^\]]*)?\][\s\S]*?\[\/img\]/g;
 
 /** Lists, whose items Godot writes one per line. */
 const UNORDERED_LIST = /\[ul\]([\s\S]*?)\[\/ul\]/g;
@@ -91,22 +97,41 @@ const listBlock = (marker: string, content: string): string =>
 		.map((item) => `${marker} ${item}`)
 		.join("\n")}\n\n`;
 
+/** Consecutive groups of `size` values; the last group may be shorter. */
+const chunk = <T>(values: readonly T[], size: number): readonly (readonly T[])[] =>
+	Array.from({ length: Math.ceil(values.length / size) }, (_unused, index) =>
+		values.slice(index * size, index * size + size),
+	);
+
+/** The cells of one source line: its `[cell]` tags, or the line as one entry. */
+const lineCells = (line: string): readonly string[] => {
+	const cells = Array.from(line.matchAll(CELL), (cell) => cell[1].trim());
+	return cells.length > 0 ? cells : [line.trim()];
+};
+
+/**
+ * Rows of a table body. Godot normally writes one row per line, but a table
+ * that declares its column count (`[table=2]`) fills each row with consecutive
+ * cells however the source breaks them up, so the declared count decides the
+ * grouping instead of the newlines.
+ */
+const tableRows = (declaredColumns: number | undefined, content: string): readonly (readonly string[])[] => {
+	const cells = Array.from(content.matchAll(CELL), (cell) => cell[1].trim());
+	if (declaredColumns !== undefined && declaredColumns > 0 && cells.length > 0) return chunk(cells, declaredColumns);
+	return content
+		.split("\n")
+		.filter((line) => line.trim().length > 0)
+		.map(lineCells);
+};
+
 /**
  * A table block as a Markdown pipe table. The first row becomes the header,
  * because a Markdown table needs one and Godot writes the header the same way.
  * Column boundaries are what matters: dropping the tags alone would glue
  * adjacent cells together.
  */
-const tableBlock = (content: string): string => {
-	const rows = content
-		.split("\n")
-		.filter((line) => line.trim().length > 0)
-		// A table without `[cell]` tags still has one entry per line; keeping the
-		// line whole would otherwise drop it from the hover.
-		.map((line) => {
-			const cells = Array.from(line.matchAll(CELL), (cell) => cell[1].trim());
-			return cells.length > 0 ? cells : [line.trim()];
-		});
+const tableBlock = (declaredColumns: number | undefined, content: string): string => {
+	const rows = tableRows(declaredColumns, content);
 	if (rows.length === 0) return "";
 	const columns = Math.max(...rows.map((cells) => cells.length));
 	// A literal pipe would read as a column separator and shift the row.
@@ -157,7 +182,10 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		.replaceAll(INLINE_CODE, (_match, content: string) => stash(blocks, codeSpan(content)));
 
 	const converted = stashed
-		.replace(TABLE, (_match, content: string) => tableBlock(content))
+		.replaceAll(IMAGE, "")
+		.replace(TABLE, (_match, declaredColumns: string | undefined, content: string) =>
+			tableBlock(declaredColumns === undefined ? undefined : Number(declaredColumns), content),
+		)
 		.replace(UNORDERED_LIST, (_match, content: string) => listBlock("-", content))
 		.replace(ORDERED_LIST, (_match, content: string) => listBlock("1.", content))
 		.replace(LINE_BREAK_RUN, line_break)
