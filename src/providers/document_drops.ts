@@ -11,7 +11,7 @@ import type {
 } from "vscode";
 import { SceneParser } from "../scene_tools/parser";
 import type { SceneNode } from "../scene_tools/types";
-import { convert_uri_to_resource_path, get_project_version, node_name_to_snake } from "../utils";
+import { get_project_version, node_name_to_snake, project_resource_path } from "../utils";
 import { SCRIPT_SELECTOR } from "./selectors";
 
 /**
@@ -89,7 +89,7 @@ export function createDocumentDropEditProvider(context: ExtensionContext): GDDoc
 			const root = scene.root;
 			if (!root) return undefined;
 
-			const targetResPath = await convert_uri_to_resource_path(document.uri);
+			const targetResPath = project_resource_path(scenePath, document.uri.fsPath);
 			const scriptId =
 				Array.from(scene.externalResources.values()).find((resource) => resource.path === targetResPath)?.id ??
 				"";
