@@ -1,4 +1,4 @@
-import { GDScriptDeclaration, GDScriptFunction, GDScriptToken, SourceRange } from "../analyzer/index.js";
+import { GDScriptDeclaration, GDScriptParameter, GDScriptToken, SourceRange } from "../analyzer/index.js";
 import { addToGroup, dropFromGroup } from "./collections.js";
 import { ChainLink, parseChainEndingAt, startsStatement } from "./expression.js";
 import { FileIndex } from "./file_index.js";
@@ -52,6 +52,25 @@ function contains(range: SourceRange, offset: number): boolean {
 	return range.start.offset <= offset && offset <= range.end.offset;
 }
 
+/**
+ * First token index whose start is at or after `offset`.
+ *
+ * Range-scoped passes used `tokens.findIndex` over the whole stream, which is
+ * linear per call and therefore quadratic per file. Token starts are sorted, so
+ * the position is a binary search.
+ */
+function firstTokenAtOrAfter(tokens: readonly GDScriptToken[], offset: number): number {
+	return lowerBound(tokens, 0, tokens.length, offset);
+}
+
+function lowerBound(tokens: readonly GDScriptToken[], low: number, high: number, offset: number): number {
+	if (low >= high) return low;
+	const middle = low + Math.floor((high - low) / 2);
+	return tokens[middle].start < offset
+		? lowerBound(tokens, middle + 1, high, offset)
+		: lowerBound(tokens, low, middle, offset);
+}
+
 function tokenRange(token: GDScriptToken): SourceRange {
 	return {
 		start: { offset: token.start, line: token.line, character: token.character },
@@ -103,8 +122,8 @@ function addBinding(scope: Scope, binding: Binding): void {
 	scope.bindings.set(binding.name, entries);
 }
 
-function addParameters(scope: Scope, fn: GDScriptFunction, uri: string): void {
-	fn.parameters.map((parameter) =>
+function addParameters(scope: Scope, parameters: readonly GDScriptParameter[], uri: string): void {
+	parameters.map((parameter) =>
 		addBinding(scope, {
 			id: `${uri}:${parameter.range.start.offset}`,
 			name: parameter.name,
@@ -118,19 +137,40 @@ function addParameters(scope: Scope, fn: GDScriptFunction, uri: string): void {
 	);
 }
 
-function addLocalDeclarations(tokens: readonly GDScriptToken[], fn: GDScriptFunction, scope: Scope, uri: string): void {
-	if (!fn.bodyRange) return;
-	const body = fn.bodyRange;
+interface ScopeSource {
+	tokens: readonly GDScriptToken[];
+	uri: string;
+}
+
+interface LocalDeclarationRequest {
+	source: ScopeSource;
+	body: SourceRange;
+	scope: Scope;
+	excluded?: readonly SourceRange[];
+}
+
+function addLocalDeclarations({ source, body, scope, excluded = [] }: LocalDeclarationRequest): void {
+	const { tokens, uri } = source;
+	// Only the body is inspected, and the token before it is kept so a declaration
+	// on the first body line still sees its `var`/`const` keyword.
+	const from = Math.max(0, firstTokenAtOrAfter(tokens, body.start.offset) - 1);
+	const to = firstTokenAtOrAfter(tokens, body.end.offset + 1);
 	tokens
-		.map((token, index) => ({ token, index, previous: tokens[index - 1] }))
+		.slice(from, to)
+		.map((token, offset) => ({ token, index: from + offset }))
 		.filter(
-			({ token, previous }) =>
-				previous !== undefined &&
-				token.kind === "identifier" &&
-				(previous.value === "var" || previous.value === "const") &&
-				previous.line === token.line &&
-				token.start >= body.start.offset &&
-				token.end <= body.end.offset,
+			({ token, index }) => {
+				const previous = tokens[index - 1];
+				return (
+					previous !== undefined &&
+					token.kind === "identifier" &&
+					(previous.value === "var" || previous.value === "const") &&
+					previous.line === token.line &&
+					token.start >= body.start.offset &&
+					token.end <= body.end.offset &&
+					!excluded.some((range) => contains(range, token.start))
+				);
+			},
 		)
 		.map(({ token, index }) =>
 			addBinding(scope, {
@@ -144,6 +184,164 @@ function addLocalDeclarations(tokens: readonly GDScriptToken[], fn: GDScriptFunc
 				type: tokens[index + 1]?.value === ":" ? readTypeName(tokens, index + 2) : undefined,
 			}),
 		);
+}
+
+const OPENING_DELIMITERS = new Set(["(", "[", "{"]);
+const CLOSING_DELIMITERS = new Set([")", "]", "}"]);
+
+/** Index of the `)` closing the `(` opened at `openIndex`. */
+function closingParen(tokens: readonly GDScriptToken[], openIndex: number): number | undefined {
+	const nextDepth = (token: GDScriptToken, depth: number): number =>
+		token.value === "(" ? depth + 1 : token.value === ")" ? depth - 1 : depth;
+	const scan = (index: number, depth: number): number | undefined => {
+		const token = tokens[index];
+		if (token.kind === "eof") return undefined;
+		const depthAfter = nextDepth(token, depth);
+		return token.value === ")" && depthAfter === 0 ? index : scan(index + 1, depthAfter);
+	};
+	return scan(openIndex + 1, 1);
+}
+
+/** Colon ending a lambda header, after its optional `-> Type`. */
+function lambdaHeaderColon(tokens: readonly GDScriptToken[], start: number): number | undefined {
+	const nextDepth = (token: GDScriptToken, depth: number): number =>
+		OPENING_DELIMITERS.has(token.value)
+			? depth + 1
+			: CLOSING_DELIMITERS.has(token.value)
+				? depth - 1
+				: depth;
+	const scan = (index: number, depth: number): number | undefined => {
+		const token = tokens[index];
+		if (token.kind === "eof" || token.kind === "newline") return undefined;
+		if (token.value === ":" && depth === 0) return index;
+		return scan(index + 1, nextDepth(token, depth));
+	};
+	return scan(start, 0);
+}
+
+/** Last token of a single-line lambda body starting at `start`. */
+function inlineBodyEnd(tokens: readonly GDScriptToken[], start: number): GDScriptToken {
+	const first = tokens[start];
+	const line = first.line;
+	const scan = (index: number, depth: number, last: GDScriptToken): GDScriptToken => {
+		const token = tokens[index];
+		if (token.kind === "eof" || token.kind === "newline" || token.line !== line) return last;
+		if (CLOSING_DELIMITERS.has(token.value) && depth === 0) return last;
+		if (token.value === "," && depth === 0) return last;
+		const nextDepth = CLOSING_DELIMITERS.has(token.value)
+			? depth - 1
+			: OPENING_DELIMITERS.has(token.value)
+				? depth + 1
+				: depth;
+		return scan(index + 1, nextDepth, token);
+	};
+	return scan(start, 0, first);
+}
+
+/**
+ * Body of the lambda whose header colon is at `colonIndex`: the rest of the
+ * header line for an inline lambda, otherwise the indented block after it.
+ */
+function lambdaBodyRange(
+	tokens: readonly GDScriptToken[],
+	colonIndex: number,
+	parentIndent: number,
+): SourceRange | undefined {
+	const colon = tokens[colonIndex];
+	const cursor = tokens.findIndex((token, index) => index > colonIndex && token.kind !== "newline");
+	if (cursor < 0) return undefined;
+	const first = tokens[cursor];
+	if (!first || first.kind === "eof") return undefined;
+	if (first.line === colon.line) return rangeBetweenTokens(first, inlineBodyEnd(tokens, cursor));
+	if (first.indent <= parentIndent) return undefined;
+	const scan = (index: number, previousLine: number, last: GDScriptToken): GDScriptToken => {
+		const token = tokens[index];
+		if (!token || token.kind === "eof") return last;
+		if (token.kind === "newline") return scan(index + 1, token.line, last);
+		if (token.line !== previousLine && token.indent <= parentIndent) return last;
+		return scan(index + 1, token.line, token);
+	};
+	return rangeBetweenTokens(first, scan(cursor, first.line, first));
+}
+
+function rangeBetweenTokens(first: GDScriptToken, last: GDScriptToken): SourceRange {
+	return { start: tokenRange(first).start, end: tokenRange(last).end };
+}
+
+/**
+ * Parameters between the parentheses of a lambda header. Only the top-level
+ * leading identifier of each comma-separated entry is a parameter name; the
+ * rest of the entry is its type or default value.
+ */
+function lambdaParameters(
+	tokens: readonly GDScriptToken[],
+	openIndex: number,
+	closeIndex: number,
+): GDScriptParameter[] {
+	const scan = (
+		index: number,
+		depth: number,
+		expectsName: boolean,
+		parameters: GDScriptParameter[],
+	): GDScriptParameter[] => {
+		if (index >= closeIndex) return parameters;
+		const token = tokens[index];
+		const depthAfter = OPENING_DELIMITERS.has(token.value)
+			? depth + 1
+			: CLOSING_DELIMITERS.has(token.value)
+				? depth - 1
+				: depth;
+		if (token.value === "," && depthAfter === 0) return scan(index + 1, depthAfter, true, parameters);
+		if (!expectsName || depthAfter !== 0 || token.kind !== "identifier")
+			return scan(index + 1, depthAfter, expectsName, parameters);
+		return scan(
+			index + 1,
+			depthAfter,
+			false,
+			parameters.concat({ name: token.value, range: tokenRange(token) }),
+		);
+	};
+	return scan(openIndex + 1, 0, true, []);
+}
+
+interface LambdaScope {
+	range: SourceRange;
+	body?: SourceRange;
+	parameters: GDScriptParameter[];
+}
+
+/** Lambda scope read from `func(`, or `undefined` when the header is malformed. */
+function readLambdaScope(tokens: readonly GDScriptToken[], funcIndex: number): LambdaScope | undefined {
+	const open = tokens[funcIndex + 1];
+	if (open?.value !== "(") return undefined;
+	const close = closingParen(tokens, funcIndex + 1);
+	if (close === undefined) return undefined;
+	const colon = lambdaHeaderColon(tokens, close + 1);
+	if (colon === undefined) return undefined;
+	const body = lambdaBodyRange(tokens, colon, tokens[funcIndex].indent);
+	const end = body?.end ?? tokenRange(tokens[colon]).end;
+	return {
+		range: { start: tokenRange(tokens[funcIndex]).start, end },
+		body,
+		parameters: lambdaParameters(tokens, funcIndex + 1, close),
+	};
+}
+
+/**
+ * Immediate lambda scopes in `[startOffset, endOffset]`. A lambda's body is
+ * skipped so nested lambdas are returned from that lambda's own scan only.
+ */
+function lambdasIn(tokens: readonly GDScriptToken[], startOffset: number, endOffset: number): LambdaScope[] {
+	const first = firstTokenAtOrAfter(tokens, startOffset);
+	if (first >= tokens.length) return [];
+	const scan = (index: number, found: LambdaScope[]): LambdaScope[] => {
+		const token = tokens[index];
+		if (!token || token.start > endOffset) return found;
+		const lambda = token.kind === "identifier" && token.value === "func" ? readLambdaScope(tokens, index) : undefined;
+		if (!lambda) return scan(index + 1, found);
+		return scan(firstTokenAtOrAfter(tokens, lambda.range.end.offset), [...found, lambda]);
+	};
+	return scan(first, []);
 }
 
 function createScope(range: SourceRange, kind: ScopeKind, parent?: Scope): Scope {
@@ -176,6 +374,7 @@ function symbolBinding(
 
 function buildScopes(file: IndexedFile, uri: string): Scope {
 	const tokens = tokensFor(uri, file.source, file.sourceFingerprint);
+	const source = { tokens, uri };
 	const root = createScope(file.ast.range, "root");
 
 	/** Adds the bindings of every symbol with a binding kind that `matches`. */
@@ -189,6 +388,32 @@ function buildScopes(file: IndexedFile, uri: string): Scope {
 			);
 	};
 
+	/**
+	 * Adds a lambda scope and recurses into the lambdas nested in its body.
+	 *
+	 * The parser only models declared functions, so lambdas are read from the
+	 * token stream. Their scopes are children of the enclosing scope, which
+	 * keeps outer parameters and locals visible inside the lambda.
+	 */
+	const addLambda = (lambda: LambdaScope, parent: Scope): void => {
+		const lambdaScope = createScope(lambda.range, "function", parent);
+		addParameters(lambdaScope, lambda.parameters, uri);
+		if (!lambda.body) return;
+		const nested = lambdasIn(tokens, lambda.body.start.offset, lambda.body.end.offset);
+		addLocalDeclarations({
+			source,
+			body: lambda.body,
+			scope: lambdaScope,
+			excluded: nested.flatMap((child) => (child.body ? [child.body] : [])),
+		});
+		nested.map((child) => addLambda(child, lambdaScope));
+	};
+
+	/** Adds the immediate lambdas in `range` as children of `parent`. */
+	const addLambdas = (range: SourceRange, parent: Scope): void => {
+		lambdasIn(tokens, range.start.offset, range.end.offset).map((lambda) => addLambda(lambda, parent));
+	};
+
 	const visitDeclaration = (declaration: GDScriptDeclaration, parent: Scope): void => {
 		if (declaration.kind === "class") {
 			const classScope = createScope(declaration.range, "class", parent);
@@ -196,10 +421,26 @@ function buildScopes(file: IndexedFile, uri: string): Scope {
 			visit(declaration.declarations, classScope);
 			return;
 		}
-		if (declaration.kind !== "function") return;
+		if (declaration.kind !== "function") {
+			addLambdas(declaration.range, parent);
+			return;
+		}
 		const functionScope = createScope(declaration.range, "function", parent);
-		addParameters(functionScope, declaration, uri);
-		addLocalDeclarations(tokens, declaration, functionScope, uri);
+		addParameters(functionScope, declaration.parameters, uri);
+		if (declaration.bodyRange) {
+			const nested = lambdasIn(
+				tokens,
+				declaration.bodyRange.start.offset,
+				declaration.bodyRange.end.offset,
+			);
+			addLocalDeclarations({
+				source,
+				body: declaration.bodyRange,
+				scope: functionScope,
+				excluded: nested.flatMap((lambda) => (lambda.body ? [lambda.body] : [])),
+			});
+		}
+		addLambdas(declaration.range, functionScope);
 	};
 	const visit = (declarations: GDScriptDeclaration[], parent: Scope): void => {
 		declarations.map((declaration) => visitDeclaration(declaration, parent));
@@ -209,10 +450,31 @@ function buildScopes(file: IndexedFile, uri: string): Scope {
 	visit(file.ast.declarations, root);
 	return root;
 }
-
+/**
+ * Innermost scope containing `offset`.
+ *
+ * Scopes are visited in declaration order, so a scope's `children` are sorted by
+ * start offset. The lookup binary-searches the one child that can contain the
+ * offset instead of scanning siblings at every level.
+ */
 function findInnermostScope(scope: Scope, offset: number): Scope {
-	const child = scope.children.find((candidate) => contains(candidate.range, offset));
+	const child = childContaining(scope.children, offset);
 	return child ? findInnermostScope(child, offset) : scope;
+}
+
+function childContaining(children: readonly Scope[], offset: number): Scope | undefined {
+	const index = lastScopeStartingAtOrBefore(children, offset, 0, children.length);
+	const candidate = index < 0 ? undefined : children[index];
+	return candidate && contains(candidate.range, offset) ? candidate : undefined;
+}
+
+/** Index of the last scope whose start offset is at or before `offset`. */
+function lastScopeStartingAtOrBefore(scopes: readonly Scope[], offset: number, low: number, high: number): number {
+	if (low >= high) return low - 1;
+	const middle = low + Math.floor((high - low) / 2);
+	return scopes[middle].range.start.offset <= offset
+		? lastScopeStartingAtOrBefore(scopes, offset, middle + 1, high)
+		: lastScopeStartingAtOrBefore(scopes, offset, low, middle);
 }
 
 /** Innermost scope at `offset` first, then its ancestors. */
@@ -275,6 +537,12 @@ export interface BindingIndex {
 	update(uri: string): void;
 	getBinding(uri: string, offset: number, name: string): Binding | undefined;
 	getMemberBinding(uri: string, offset: number, name: string): Binding | undefined;
+	/**
+	 * Binding declared in a scope of `uri`. Unlike `getBinding`, this never falls
+	 * back to a workspace-wide unique name, so a foreign declaration cannot
+	 * answer a query about this file.
+	 */
+	getScopedBinding(uri: string, offset: number, name: string): Binding | undefined;
 	getVisibleBindings(uri: string, offset: number): Binding[];
 	findReferences(bindingId: string): BoundReference[];
 	remove(uri: string): void;
@@ -307,7 +575,7 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	};
 
 	const getBinding = (uri: string, offset: number, name: string): Binding | undefined => {
-		return resolveBinding(uri, offset, name, true);
+		return resolveBinding(uri, offset, name, { allowFunctionScopes: true, allowWorkspaceFallback: true });
 	};
 
 	/**
@@ -317,22 +585,32 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	 */
 
 	const getMemberBinding = (uri: string, offset: number, name: string): Binding | undefined => {
-		return resolveBinding(uri, offset, name, false);
+		return resolveBinding(uri, offset, name, { allowFunctionScopes: false, allowWorkspaceFallback: true });
 	};
+
+	const getScopedBinding = (uri: string, offset: number, name: string): Binding | undefined => {
+		return resolveBinding(uri, offset, name, { allowFunctionScopes: true, allowWorkspaceFallback: false });
+	};
+
+	interface ResolutionOptions {
+		allowFunctionScopes: boolean;
+		allowWorkspaceFallback: boolean;
+	}
 
 	const resolveBinding = (
 		uri: string,
 		offset: number,
 		name: string,
-		allowFunctionScopes: boolean,
+		options: ResolutionOptions,
 	): Binding | undefined => {
 		const root = scopes.get(uri);
 		if (!root) return undefined;
 		const scope = scopeChain(root, offset)
-			.filter((candidate) => allowFunctionScopes || candidate.kind !== "function")
+			.filter((candidate) => options.allowFunctionScopes || candidate.kind !== "function")
 			.map((candidate) => findBinding(candidate, name, offset))
 			.find((binding) => binding !== undefined);
 		if (scope) return scope;
+		if (!options.allowWorkspaceFallback) return undefined;
 		const global = byName.get(name) ?? [];
 		return global.length === 1 ? global[0] : undefined;
 	};
@@ -367,16 +645,27 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	const remove = (uri: string): void => {
 		scopes.delete(uri);
 		const references = referencesByUri.get(uri) ?? [];
-		references.map((reference) =>
+		// One filter per binding: dropping each reference separately re-filtered
+		// the bucket of every identifier in the file, which is quadratic for the
+		// repeated names a large script is full of.
+		const offsetsByBinding = references.reduce<Map<string, Set<number>>>((groups, reference) => {
+			const offsets = groups.get(reference.bindingId) ?? new Set<number>();
+			return groups.set(reference.bindingId, offsets.add(reference.range.start.offset));
+		}, new Map());
+		[...offsetsByBinding].map(([bindingId, offsets]) =>
 			dropFromGroup(
 				referencesByBinding,
-				reference.bindingId,
-				(entry) => entry.uri === uri && entry.range.start.offset === reference.range.start.offset,
+				bindingId,
+				(entry) => entry.uri === uri && offsets.has(entry.range.start.offset),
 			),
 		);
 		referencesByUri.delete(uri);
 		const own = byUri.get(uri) ?? [];
-		own.map((binding) => dropFromGroup(byName, binding.name, (entry) => entry.id === binding.id));
+		const idsByName = own.reduce<Map<string, Set<string>>>((groups, binding) => {
+			const ids = groups.get(binding.name) ?? new Set<string>();
+			return groups.set(binding.name, ids.add(binding.id));
+		}, new Map());
+		[...idsByName].map(([name, ids]) => dropFromGroup(byName, name, (entry) => ids.has(entry.id)));
 		byUri.delete(uri);
 	};
 
@@ -711,6 +1000,7 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 		update,
 		getBinding,
 		getMemberBinding,
+		getScopedBinding,
 		getVisibleBindings,
 		findReferences,
 		remove,

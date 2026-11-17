@@ -56,4 +56,42 @@ describe("UpdateScheduler", () => {
 		assert.equal(applied, 1);
 		scheduler.dispose();
 	});
+
+	it("releases waiters of one document without waiting for the others", async () => {
+		const applied: string[] = [];
+		let releaseStalled: (() => void) | undefined;
+		const scheduler = new UpdateScheduler(10, async (update) => {
+			if (update.uri === "file:///other.gd") {
+				await new Promise<void>((resolve) => {
+					releaseStalled = resolve;
+				});
+			}
+			applied.push(update.uri);
+		});
+
+		const first = scheduler.enqueue({ uri: "file:///player.gd", version: 1, source: "var hp = 1" });
+		scheduler.enqueue({ uri: "file:///other.gd", version: 1, source: "var mp = 1" });
+		assert.ok(first !== undefined);
+
+		await scheduler.whenApplied("file:///player.gd", first!);
+		assert.deepEqual(applied, ["file:///player.gd"]);
+		releaseStalled!();
+		await scheduler.waitForIdle();
+		scheduler.dispose();
+	});
+
+	it("coalesces a burst of requests for the same document into one update", async () => {
+		let applied = 0;
+		const scheduler = new UpdateScheduler(5, () => {
+			applied++;
+		});
+		const sequences = [1, 2, 3, 4, 5].map((version) =>
+			scheduler.enqueue({ uri: "file:///player.gd", version, source: `var hp = ${version}` }),
+		);
+
+		await Promise.all(sequences.map((sequence) => scheduler.whenApplied("file:///player.gd", sequence!)));
+
+		assert.equal(applied, 1);
+		scheduler.dispose();
+	});
 });
