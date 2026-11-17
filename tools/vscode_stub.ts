@@ -517,6 +517,9 @@ const commands = {
 /** Formatting providers currently registered through `languages`, in order. */
 const formattingProviders: Array<{ selector: unknown; provider: unknown }> = [];
 
+/** Document symbol providers currently registered through `languages`, in order. */
+const documentSymbolProviders: Array<{ selector: unknown; provider: unknown }> = [];
+
 const languages = {
 	createDiagnosticCollection: (name?: string) => {
 		const entries = new Map<string, unknown>();
@@ -534,7 +537,11 @@ const languages = {
 	registerCompletionItemProvider: () => ({ dispose: () => {} }),
 	registerDefinitionProvider: () => ({ dispose: () => {} }),
 	registerHoverProvider: () => ({ dispose: () => {} }),
-	registerDocumentSymbolProvider: () => ({ dispose: () => {} }),
+	registerDocumentSymbolProvider: (selector: unknown, provider: unknown) => {
+		const entry = { selector, provider };
+		documentSymbolProviders.push(entry);
+		return { dispose: () => documentSymbolProviders.splice(documentSymbolProviders.indexOf(entry), 1) };
+	},
 	registerWorkspaceSymbolProvider: () => ({ dispose: () => {} }),
 	registerReferenceProvider: () => ({ dispose: () => {} }),
 	registerRenameProvider: () => ({ dispose: () => {} }),
@@ -671,6 +678,8 @@ const __configuration = configuration;
 const __fireConfigurationChange = fireConfigurationChange;
 /** Formatting providers a test can inspect after an activation or disposal. */
 const __formattingProviders = formattingProviders;
+/** Document symbol providers a test can inspect after an activation or disposal. */
+const __documentSymbolProviders = documentSymbolProviders;
 
 export {
 	Uri,
@@ -721,5 +730,6 @@ export {
 	__configuration,
 	__fireConfigurationChange,
 	__formattingProviders,
+	__documentSymbolProviders,
 };
 export type { StubDisposable, StubTextDocument, UriComponents };

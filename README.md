@@ -34,6 +34,7 @@ Godot development tools for Visual Studio Code with local-first GDScript intelli
   - typed GDScript support
   - optional Smart Mode for dynamically typed scripts
   - function and variable hover information, including doc-comments
+  - nested outline symbols, so breadcrumbs and sticky scroll follow the enclosing class
   - scene/script switching (`Alt+O` by default)
   - script warnings and errors
 - **GDScript Debugger**

@@ -95,14 +95,18 @@ export function declarationToSymbol(
 		containerRange,
 	};
 	if (declaration.kind === "class") symbol.extendsName = declaration.extendsName;
-	if (declaration.kind === "function") {
-		symbol.returnType = declaration.returnType;
-		symbol.static = declaration.static;
+	// A signal carries its argument list the same way a function does, and the
+	// outline renders both through the shared signature formatter.
+	if (declaration.kind === "function" || declaration.kind === "signal") {
 		symbol.parameters = declaration.parameters.map((parameter) => ({
 			name: parameter.name,
 			type: parameter.type,
 			defaultValue: parameter.defaultValue,
 		}));
+	}
+	if (declaration.kind === "function") {
+		symbol.returnType = declaration.returnType;
+		symbol.static = declaration.static;
 	}
 	if (declaration.kind === "constant" || declaration.kind === "variable") symbol.type = declaration.type;
 	if (source) {
