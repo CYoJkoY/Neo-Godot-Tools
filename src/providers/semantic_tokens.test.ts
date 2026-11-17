@@ -149,4 +149,71 @@ describe("semantic tokens", () => {
 			service.dispose();
 		}
 	});
+
+	it("does not color a workspace parameter from another script", () => {
+		const service = createService();
+		try {
+			service.ensureDocumentIndexed(fakeDocument("/game/other.gd", "func greet(name: String) -> void:\n\tprint(name)\n"));
+			const source = "extends Node\nfunc label() -> String:\n\treturn name\n";
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			assert.deepEqual(parameterTexts(source, tokens), []);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("does not color a parameter declared in another function", () => {
+		const source = "func greet(name: String) -> void:\n\tprint(name)\nfunc label() -> String:\n\treturn name\n";
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			assert.deepEqual(parameterTexts(source, tokens), ["name", "name"]);
+			assert.ok(tokens.every((token) => token.type !== "parameter" || token.start < source.indexOf("func label")));
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("does not color node shorthand that shares a parameter name", () => {
+		const source = [
+			"func move(player: Node) -> void:",
+			"\t$player.position = player.position",
+			"\t%Player.show()",
+			'\tprint("%s" % player)',
+		].join("\n");
+		const service = createService();
+		try {
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			assert.deepEqual(parameterTexts(source, tokens), ["player", "player", "player"]);
+			assert.ok(tokens.every((token) => token.type !== "parameter" || source[token.start - 1] !== "$"));
+			assert.ok(
+				tokens.every((token) => token.type !== "parameter" || source[token.start - 1] !== "%"),
+			);
+			assert.ok(
+				tokens.some(
+					(token) => token.type === "parameter" && token.start === source.lastIndexOf("player"),
+				),
+			);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("rebuilds bindings after a dependency-only edit", () => {
+		const service = createService();
+		try {
+			service.ensureDocumentIndexed(fakeDocument("/game/a.gd", "extends Node\n"));
+			service.ensureDocumentIndexed(fakeDocument("/game/b.gd", "extends Node\n"));
+			const stale =
+				'const First = preload("res://a.gd")\nfunc heal(health: int) -> void:\n\thealth += 1\n';
+			const fresh =
+				'const First = preload("res://b.gd")\nfunc heal(health: int) -> void:\n\tvar health := 2\n\thealth += 1\n';
+			service.ensureDocumentIndexed(fakeDocument("/game/player.gd", stale));
+			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", fresh), service);
+			assert.deepEqual(parameterTexts(fresh, tokens), ["health"]);
+			assert.equal(tokens.find((token) => token.type === "parameter")?.start, fresh.indexOf("health"));
+		} finally {
+			service.dispose();
+		}
+	});
 });

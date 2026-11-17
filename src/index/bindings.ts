@@ -275,6 +275,12 @@ export interface BindingIndex {
 	update(uri: string): void;
 	getBinding(uri: string, offset: number, name: string): Binding | undefined;
 	getMemberBinding(uri: string, offset: number, name: string): Binding | undefined;
+	/**
+	 * Binding declared in a scope of `uri`. Unlike `getBinding`, this never falls
+	 * back to a workspace-wide unique name, so a foreign declaration cannot
+	 * answer a query about this file.
+	 */
+	getScopedBinding(uri: string, offset: number, name: string): Binding | undefined;
 	getVisibleBindings(uri: string, offset: number): Binding[];
 	findReferences(bindingId: string): BoundReference[];
 	remove(uri: string): void;
@@ -307,7 +313,7 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	};
 
 	const getBinding = (uri: string, offset: number, name: string): Binding | undefined => {
-		return resolveBinding(uri, offset, name, true);
+		return resolveBinding(uri, offset, name, { allowFunctionScopes: true, allowWorkspaceFallback: true });
 	};
 
 	/**
@@ -317,22 +323,32 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	 */
 
 	const getMemberBinding = (uri: string, offset: number, name: string): Binding | undefined => {
-		return resolveBinding(uri, offset, name, false);
+		return resolveBinding(uri, offset, name, { allowFunctionScopes: false, allowWorkspaceFallback: true });
 	};
+
+	const getScopedBinding = (uri: string, offset: number, name: string): Binding | undefined => {
+		return resolveBinding(uri, offset, name, { allowFunctionScopes: true, allowWorkspaceFallback: false });
+	};
+
+	interface ResolutionOptions {
+		allowFunctionScopes: boolean;
+		allowWorkspaceFallback: boolean;
+	}
 
 	const resolveBinding = (
 		uri: string,
 		offset: number,
 		name: string,
-		allowFunctionScopes: boolean,
+		options: ResolutionOptions,
 	): Binding | undefined => {
 		const root = scopes.get(uri);
 		if (!root) return undefined;
 		const scope = scopeChain(root, offset)
-			.filter((candidate) => allowFunctionScopes || candidate.kind !== "function")
+			.filter((candidate) => options.allowFunctionScopes || candidate.kind !== "function")
 			.map((candidate) => findBinding(candidate, name, offset))
 			.find((binding) => binding !== undefined);
 		if (scope) return scope;
+		if (!options.allowWorkspaceFallback) return undefined;
 		const global = byName.get(name) ?? [];
 		return global.length === 1 ? global[0] : undefined;
 	};
@@ -711,6 +727,7 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 		update,
 		getBinding,
 		getMemberBinding,
+		getScopedBinding,
 		getVisibleBindings,
 		findReferences,
 		remove,

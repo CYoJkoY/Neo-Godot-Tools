@@ -619,7 +619,12 @@ export class LanguageService implements vscode.Disposable {
 			// edit shifted the declarations below it.
 			this.symbolMirror?.upsert(uri, this.symbols.fileSymbols(uri));
 		}
-		if (change.kind === "body_changed" || change.kind === "api_changed" || change.kind === "file_added") {
+		if (
+			change.kind === "body_changed" ||
+			change.kind === "api_changed" ||
+			change.kind === "dependency_changed" ||
+			change.kind === "file_added"
+		) {
 			this.references.update(uri);
 			this.bindings.update(uri);
 		}

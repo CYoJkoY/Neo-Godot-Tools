@@ -7,6 +7,7 @@ import type {
 	TextDocument,
 } from "vscode";
 import type { IndexedFile } from "../index";
+import type { GDScriptToken } from "../analyzer/index";
 import { tokensFor } from "../index/token_cache";
 import type { LanguageService } from "../language/service";
 import { RESOURCE_SELECTOR } from "./selectors";
@@ -19,6 +20,29 @@ const LEGEND = ["nodePath", "parameter"];
  */
 const NODE_PATH_PATTERN =
 	/(?<=(?:get_node|has_node|find_node|get_node_or_null|has_node_and_resource)\(\s?)(("|')((?!\2).)*\2)(?=\s?\))/g;
+
+function endsExpression(token: GDScriptToken): boolean {
+	return (
+		token.kind === "identifier" ||
+		token.kind === "number" ||
+		token.kind === "string" ||
+		token.value === ")" ||
+		token.value === "]" ||
+		token.value === "}"
+	);
+}
+
+/**
+ * `$Player` and `%Player` address nodes, so the name after the sigil is not an
+ * identifier in scope. The lexer drops `$` entirely, hence the source check;
+ * `%` is also the string-format operator, which a preceding value distinguishes.
+ */
+function followsNodeShorthand(tokens: readonly GDScriptToken[], source: string, index: number): boolean {
+	if (source[tokens[index].start - 1] === "$") return true;
+	if (tokens[index - 1]?.value !== "%") return false;
+	const beforeSigil = tokens[index - 2];
+	return beforeSigil === undefined || !endsExpression(beforeSigil);
+}
 
 export type GDSemanticTokensProvider = DocumentSemanticTokensProvider;
 
@@ -40,8 +64,9 @@ function nodePathSemanticTokens(source: string): SemanticToken[] {
 function parameterSemanticTokens(file: IndexedFile, bindings: LanguageService["bindings"]): SemanticToken[] {
 	const tokens = tokensFor(file.uri, file.source, file.sourceFingerprint);
 	return tokens.flatMap((token, index) => {
-		if (token.kind !== "identifier" || tokens[index - 1]?.value === ".") return [];
-		const binding = bindings.getBinding(file.uri, token.start, token.value);
+		if (token.kind !== "identifier") return [];
+		if (tokens[index - 1]?.value === "." || followsNodeShorthand(tokens, file.source, index)) return [];
+		const binding = bindings.getScopedBinding(file.uri, token.start, token.value);
 		return binding?.kind === "parameter" ? [{ start: token.start, end: token.end, type: "parameter" }] : [];
 	});
 }
