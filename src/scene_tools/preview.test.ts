@@ -27,6 +27,16 @@ script = ExtResource("1")
 `;
 }
 
+/** A scene in the nested project that instances `res://deep.tscn`. */
+const NESTED_MID_SCENE = `[gd_scene load_steps=2 format=2]
+
+[ext_resource type="PackedScene" path="res://deep.tscn" id=1]
+
+[node name="Mid" type="Node2D"]
+
+[node name="Child" parent="." instance=ExtResource( 1 )]
+`;
+
 function storedValue<T>(key: string): T | undefined;
 function storedValue<T>(key: string, fallback: T): T;
 function storedValue<T>(_key: string, fallback?: T): T | undefined {
@@ -273,14 +283,7 @@ describe("scene preview project resources", () => {
 			"game/deep.tscn": '[node name="WrongDeep" type="Node2D"]\n',
 			"game/subrepo/project.godot": "config_version=4\n",
 			"game/subrepo/deep.tscn": '[node name="Deep" type="Node2D"]\n',
-			"game/subrepo/mid.tscn": `[gd_scene load_steps=2 format=2]
-
-[ext_resource type="PackedScene" path="res://deep.tscn" id=1]
-
-[node name="Mid" type="Node2D"]
-
-[node name="Child" parent="." instance=ExtResource( 1 )]
-`,
+			"game/subrepo/mid.tscn": NESTED_MID_SCENE,
 		});
 		parseScene(`[gd_scene load_steps=2 format=2]
 
@@ -301,14 +304,7 @@ describe("scene preview project resources", () => {
 			"game/deep.tscn": '[node name="WrongDeep" type="Node2D"]\n',
 			"game/subrepo/project.godot": "config_version=4\n",
 			"game/subrepo/deep.tscn": '[node name="Deep" type="Node2D"]\n',
-			"game/subrepo/mid.tscn": `[gd_scene load_steps=2 format=2]
-
-[ext_resource type="PackedScene" path="res://deep.tscn" id=1]
-
-[node name="Mid" type="Node2D"]
-
-[node name="Child" parent="." instance=ExtResource( 1 )]
-`,
+			"game/subrepo/mid.tscn": NESTED_MID_SCENE,
 		});
 		const scene = `[gd_scene load_steps=2 format=2]
 
