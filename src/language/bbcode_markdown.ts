@@ -270,9 +270,6 @@ const restore = (text: string, blocks: readonly string[]): string =>
  */
 export function bbcodeToMarkdown(bbcode: string): string {
 	const blocks: string[] = [];
-	// A shortcut reference such as `[Node]` resolves through a definition
-	// elsewhere in the docstring, so the label is not a class reference.
-	const labels = new Set(Array.from(bbcode.matchAll(LINK_DEFINITION), (match) => match[1].trim().toLowerCase()));
 	const stashed = bbcode
 		.replaceAll(MARKDOWN_FENCE, (match) => stash(blocks, match))
 		.replaceAll(MARKDOWN_CODE_SPAN, (match) => stash(blocks, match))
@@ -285,6 +282,12 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		// `[kbd]` disables BBCode until its closing tag, so its content is
 		// literal and must not reach the reference rules.
 		.replaceAll(KBD, (_match, content: string) => stash(blocks, codeSpan(content)));
+
+	// A shortcut reference such as `[Node]` resolves through a definition
+	// elsewhere in the docstring, so the label is not a class reference. The
+	// scan runs on the stashed text, because a definition inside code is
+	// literal and Markdown cannot resolve a link through it.
+	const labels = new Set(Array.from(stashed.matchAll(LINK_DEFINITION), (match) => match[1].trim().toLowerCase()));
 
 	const converted = stashed
 		.replaceAll(IMAGE, "")

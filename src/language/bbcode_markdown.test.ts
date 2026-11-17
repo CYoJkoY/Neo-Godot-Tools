@@ -183,6 +183,13 @@ describe("docstring BBCode to Markdown", () => {
 		);
 	});
 
+	it("ignores a link definition that only exists inside code", () => {
+		assert.equal(
+			bbcodeToMarkdown("See [Node].\n\n```\n[Node]: https://example.com\n```"),
+			"See `Node`.\n\n```\n[Node]: https://example.com\n```",
+		);
+	});
+
 	it("keeps BBCode-shaped text inside [kbd] literal", () => {
 		assert.equal(bbcodeToMarkdown("Press [kbd][param amount][/kbd]"), "Press `[param amount]`");
 	});
