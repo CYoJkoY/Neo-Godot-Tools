@@ -39,7 +39,7 @@ describe("docstring BBCode to Markdown", () => {
 
 	it("fences a code block with more backticks than the body contains", () => {
 		const markdown = bbcodeToMarkdown("[codeblock]\n```\nexample\n```\n[/codeblock]");
-		assert.equal(markdown, "````\n```\nexample\n```\n````");
+		assert.equal(markdown, "````gdscript\n```\nexample\n```\n````");
 	});
 
 	it("renders [ul] items as a Markdown list", () => {
@@ -169,5 +169,36 @@ describe("docstring BBCode to Markdown", () => {
 	it("groups table cells by the declared column count", () => {
 		const markdown = bbcodeToMarkdown("[table=2][cell]a[/cell][cell]b[/cell][cell]c[/cell][cell]d[/cell][/table]");
 		assert.equal(markdown, "| a | b |\n| --- | --- |\n| c | d |");
+	});
+
+	it("keeps a Markdown fence inside a block quote literal", () => {
+		const markdown = bbcodeToMarkdown("Quote:\n> ```\n> [param amount]\n> ```");
+		assert.equal(markdown, "Quote:\n> ```\n> [param amount]\n> ```");
+	});
+
+	it("keeps a shortcut reference link label intact", () => {
+		assert.equal(
+			bbcodeToMarkdown("See [Node].\n\n[Node]: https://example.com"),
+			"See [Node].\n\n[Node]: https://example.com",
+		);
+	});
+
+	it("keeps BBCode-shaped text inside [kbd] literal", () => {
+		assert.equal(bbcodeToMarkdown("Press [kbd][param amount][/kbd]"), "Press `[param amount]`");
+	});
+
+	it("keeps the language of a code block", () => {
+		assert.equal(bbcodeToMarkdown("[codeblock]\nvar a = 1\n[/codeblock]"), "```gdscript\nvar a = 1\n```");
+		assert.equal(
+			bbcodeToMarkdown("[codeblock lang=csharp]\nint a = 1;\n[/codeblock]"),
+			"```csharp\nint a = 1;\n```",
+		);
+	});
+
+	it("keeps an escaped tag literal", () => {
+		assert.equal(
+			bbcodeToMarkdown("Write [lb]b[rb]text[lb]/b[rb] to show bold"),
+			"Write \\[b\\]text\\[/b\\] to show bold",
+		);
 	});
 });

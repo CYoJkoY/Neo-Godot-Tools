@@ -14,10 +14,13 @@ const PLACEHOLDER = "\u0000";
 const placeholder = (index: number): string => `${PLACEHOLDER}${index}${PLACEHOLDER}`;
 
 /** Fenced blocks: `[codeblock]`, `[codeblock lang=…]`, `[gdscript]`, `[csharp]`. */
-const FENCED_BLOCK = /\[(codeblock|gdscript|csharp)(?:\s[^\]]*)?\]\n?([\s\S]*?)\[\/\1\]/g;
+const FENCED_BLOCK = /\[(codeblock|gdscript|csharp)((?:\s[^\]]*)?)\]\n?([\s\S]*?)\[\/\1\]/g;
 
 /** Inline `[code]` and `[code skip-lint]` spans. */
 const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
+
+/** A keyboard key span, whose content Godot treats as literal text. */
+const KBD = /\[kbd\]([\s\S]*?)\[\/kbd\]/g;
 
 /**
  * Markdown a docstring may already contain; its content is literal for
@@ -27,9 +30,16 @@ const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
  * A fence closes on a run of the same character that is at least as long as
  * the opener: `\2` repeats the opener and `\3*` allows extra characters, so a
  * fence opened with three backticks may close with four.
+ *
+ * Each line may also start with block quote markers, because Markdown allows a
+ * fence inside a quote. The prefixes are part of the opener and the closer but
+ * not of the fence length, which the backreference counts on its own.
  */
-const MARKDOWN_FENCE = /^( {0,3})((`|~)\3{2,})[^\n]*\n[\s\S]*?^ {0,3}\2\3*[ \t]*$/gm;
+const MARKDOWN_FENCE = /^(?: {0,3}>[ \t]?)* {0,3}((`|~)\2{2,})[^\n]*\n[\s\S]*?^(?: {0,3}>[ \t]?)* {0,3}\1\2*[ \t]*$/gm;
 const MARKDOWN_CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n\n)[\s\S])*?(?<!`)\1(?!`)/g;
+
+/** A Markdown link definition, whose label a shortcut reference may reuse. */
+const LINK_DEFINITION = /^ {0,3}\[([^\[\]\n]+)\]:/gm;
 
 /** Table rows; each `[cell]` of a row is a column, and `[table=N]` declares them. */
 const TABLE = /\[table(?:=(\d+))?(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/table\]/g;
@@ -58,7 +68,8 @@ const REFERENCE =
  * A bare class reference. A preceding identifier keeps `Array[Node]` intact,
  * and a trailing `(`, `[` or `:` keeps a Markdown link label such as
  * `[Node](url)`, its reference-style form `[Node][api]`, and a link definition
- * such as `[Node]: url` intact.
+ * such as `[Node]: url` intact. A label that a definition elsewhere in the
+ * docstring declares is kept by `bbcodeToMarkdown`, which alone can see it.
  */
 const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?![([:])/g;
 
@@ -147,17 +158,22 @@ const referenceSpan = (match: string, name: string): string => {
 };
 
 /**
- * A fenced block; the language is only known for the two language tags.
+ * A fenced block and the language it declares. `[gdscript]` and `[csharp]`
+ * name their language, and `[codeblock]` documents GDScript as its default
+ * unless a `lang` attribute says otherwise, so the fence keeps the syntax
+ * highlighting the docstring asked for.
  *
  * The fence is longer than any backtick run in the body, so a Markdown example
  * that already ends a line with three backticks stays inside the block instead
  * of closing it early.
  */
-const fenced = (tag: string, code: string): string => {
+const fenced = (tag: string, attributes: string, code: string): string => {
 	const body = stripWrapperNewlines(code);
 	const longestRun = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
 	const fence = "`".repeat(Math.max(3, longestRun + 1));
-	return `${fence}${tag === "gdscript" || tag === "csharp" ? tag : ""}\n${body}\n${fence}`;
+	const declared = /(?:^|\s)lang=([\w+#.-]+)/.exec(attributes)?.[1];
+	const language = tag === "codeblock" ? (declared ?? "gdscript") : tag;
+	return `${fence}${language}\n${body}\n${fence}`;
 };
 
 /**
@@ -254,15 +270,21 @@ const restore = (text: string, blocks: readonly string[]): string =>
  */
 export function bbcodeToMarkdown(bbcode: string): string {
 	const blocks: string[] = [];
+	// A shortcut reference such as `[Node]` resolves through a definition
+	// elsewhere in the docstring, so the label is not a class reference.
+	const labels = new Set(Array.from(bbcode.matchAll(LINK_DEFINITION), (match) => match[1].trim().toLowerCase()));
 	const stashed = bbcode
 		.replaceAll(MARKDOWN_FENCE, (match) => stash(blocks, match))
 		.replaceAll(MARKDOWN_CODE_SPAN, (match) => stash(blocks, match))
 		// The body is resolved first: a Markdown fence inside it is already
 		// stashed, and only its restored backticks tell the real fence length.
-		.replaceAll(FENCED_BLOCK, (_match, tag: string, code: string) =>
-			stash(blocks, fenced(tag, restore(code, blocks))),
+		.replaceAll(FENCED_BLOCK, (_match, tag: string, attributes: string, code: string) =>
+			stash(blocks, fenced(tag, attributes, restore(code, blocks))),
 		)
-		.replaceAll(INLINE_CODE, (_match, content: string) => stash(blocks, codeSpan(content)));
+		.replaceAll(INLINE_CODE, (_match, content: string) => stash(blocks, codeSpan(content)))
+		// `[kbd]` disables BBCode until its closing tag, so its content is
+		// literal and must not reach the reference rules.
+		.replaceAll(KBD, (_match, content: string) => stash(blocks, codeSpan(content)));
 
 	const converted = stashed
 		.replaceAll(IMAGE, "")
@@ -274,14 +296,16 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		.replace(LINE_BREAK_RUN, line_break)
 		.replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/g, "[$2]($1)")
 		.replace(/\[url\]([\s\S]*?)\[\/url\]/g, "<$1>")
-		.replace(/\[kbd\]([\s\S]*?)\[\/kbd\]/g, (_match, content: string) => codeSpan(content))
-		.replaceAll("[lb]", "\\[")
-		.replaceAll("[rb]", "\\]")
 		.replace(REFERENCE, referenceSpan)
-		.replace(CLASS_REFERENCE, (_match, name: string) => codeSpan(name))
+		.replace(CLASS_REFERENCE, (match, name: string) => (labels.has(name.toLowerCase()) ? match : codeSpan(name)))
 		.replace(LAYOUT_TAG, "");
 
-	return restore(formatTags(converted), blocks)
+	// `[lb]` and `[rb]` escape BBCode markup, so their output is only a pair of
+	// brackets once every tag is gone; escaping them before this point would
+	// hand `[lb]b[rb]` to the emphasis rule as if it were a real `[b]` tag.
+	const formatted = formatTags(converted).replaceAll("[lb]", "\\[").replaceAll("[rb]", "\\]");
+
+	return restore(formatted, blocks)
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
 }
