@@ -199,6 +199,17 @@ describe("document symbols", () => {
 		}
 	});
 
+	it("keeps the declared parameters in a signal detail", async () => {
+		const source = ["signal damaged(amount: int, source: Node)", "", "signal healed", ""].join("\n");
+		const { symbols, service } = await outline(source);
+		try {
+			assert.equal(find(symbols, "damaged")?.detail, "damaged(amount: int, source: Node)");
+			assert.equal(find(symbols, "healed")?.detail, "healed()");
+		} finally {
+			service.dispose();
+		}
+	});
+
 	it("keeps the members of an unnamed enum at their declaring class", async () => {
 		const source = [
 			"class Player:",
