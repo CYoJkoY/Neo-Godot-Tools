@@ -17,7 +17,7 @@ import {
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
 import type { ZigSymbolMirror } from "../index/zig_symbol_mirror";
-import { resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
+import { isBuiltinSymbol, resolveBuiltinSymbol, resolveBuiltinSymbols } from "./semantic/builtin_symbols";
 import { getGDScriptBuiltin } from "./semantic/gdscript_builtins";
 import { SemanticQueryEngine } from "./semantic/query_engine";
 import { isSafeLocalConfidence } from "./semantic/resolution_policy";
@@ -176,13 +176,17 @@ export class LanguageService implements vscode.Disposable {
 	 * Providers call this before consulting engine documentation so that a
 	 * project symbol (an inner class method that shares its name with a builtin,
 	 * for example) always wins over the engine's own catalog.
+	 *
+	 * A builtin resolves to a synthetic `gdscript://builtin/...` symbol that is
+	 * not a document on disk, so it is reported as "no project definition" and
+	 * the caller falls through to the engine documentation instead.
 	 */
 	getLocalDefinition(document: vscode.TextDocument, position: vscode.Position): vscode.Location | undefined {
 		const result = languageProfiler.measure("semantic.definition", () =>
 			this.semantic.getDefinition(document.uri.toString(), { offset: document.offsetAt(position) }),
 		);
-		if (result.value && isSafeLocalConfidence(result.confidence)) return this.toLocation(result.value);
-		return undefined;
+		if (!result.value || !isSafeLocalConfidence(result.confidence) || isBuiltinSymbol(result.value)) return undefined;
+		return this.toLocation(result.value);
 	}
 
 	async getReferences(
