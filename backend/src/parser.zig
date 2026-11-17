@@ -74,6 +74,7 @@ pub const Declaration = struct {
     range: Range,
     name: ?[]const u16 = null,
     name_offset: ?usize = null,
+    annotation_start_line: ?usize = null,
     type_name: ?[]const u16 = null,
     value: ?[]const u16 = null,
     extends_name: ?[]const u16 = null,
@@ -177,12 +178,16 @@ const Parser = struct {
     fn parseDeclaration(self: *Parser, indent: usize) ParserError!?Declaration {
         const start = self.current();
         if (start.indent != indent) return null;
-        if (self.atValue("@")) {
-            self.skipAnnotations();
-            if (self.atLineEnd()) return null;
-        }
+        const annotation_start_line = if (self.atValue("@")) self.skipAnnotations() else null;
+        if (self.atLineEnd()) return null;
         const token = self.current();
         if (token.indent != indent) return null;
+        var declaration = try self.parseDeclarationAt(indent) orelse return null;
+        declaration.annotation_start_line = annotation_start_line;
+        return declaration;
+    }
+
+    fn parseDeclarationAt(self: *Parser, indent: usize) ParserError!?Declaration {
         if (self.isKeyword("class_name")) return try self.parseClassName();
         if (self.isKeyword("extends")) return try self.parseExtends();
         if (self.isKeyword("signal")) return try self.parseSignal();
@@ -549,12 +554,25 @@ const Parser = struct {
         return self.range(body_start, body_end);
     }
 
-    fn skipAnnotations(self: *Parser) void {
+    fn skipAnnotations(self: *Parser) ?usize {
+        const indent = self.current().indent;
+        var member_line: ?usize = null;
         while (self.atValue("@") and !self.at(.eof)) {
-            _ = self.advance();
+            const start = self.advance();
+            const standalone = self.atValue("tool") or self.atValue("icon") or self.atValue("static_unload") or
+                self.atValue("export_group") or self.atValue("export_category") or self.atValue("export_subgroup") or
+                self.atValue("warning_ignore_start") or self.atValue("warning_ignore_restore");
+            if (!standalone and member_line == null) member_line = start.line;
             if (self.at(.identifier)) _ = self.advance();
             if (self.atValue("(")) self.skipBalanced("(", ")");
+            const line_end = self.index;
+            self.skipNewlines();
+            if (self.index != line_end and self.current().indent != indent) {
+                self.index = line_end;
+                return member_line;
+            }
         }
+        return member_line;
     }
 
     fn skipBalanced(self: *Parser, open: []const u8, close: []const u8) void {
@@ -878,8 +896,8 @@ test "handles empty and whitespace-only sources" {
 
 test "accepts non-ASCII strings and lone surrogates" {
     const units = [_]u16{
-        'v', 'a', 'r', ' ', 'l', 'a', 'b', 'e', 'l', ' ', '=', ' ', '"', 0x4f60, 0x597d, '"', '\n',
-        'v', 'a', 'r', ' ', 'l', 'o', 'n', 'e', ' ', '=', ' ', '"', 0xd83d, '"', '\n',
+        'v', 'a', 'r', ' ', 'l', 'a', 'b', 'e', 'l', ' ', '=', ' ', '"',    0x4f60, 0x597d, '"', '\n',
+        'v', 'a', 'r', ' ', 'l', 'o', 'n', 'e', ' ', '=', ' ', '"', 0xd83d, '"',    '\n',
     };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

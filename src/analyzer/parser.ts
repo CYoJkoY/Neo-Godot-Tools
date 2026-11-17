@@ -18,6 +18,17 @@ import {
 } from "./ast.js";
 import { GDScriptToken, lexGDScript } from "./lexer.js";
 
+const NON_MEMBER_ANNOTATIONS: ReadonlySet<string> = new Set([
+	"tool",
+	"icon",
+	"static_unload",
+	"export_group",
+	"export_category",
+	"export_subgroup",
+	"warning_ignore_start",
+	"warning_ignore_restore",
+]);
+
 export function parseGDScript(source: string): GDScriptParseResult {
 	return new Parser(source).parse();
 }
@@ -79,14 +90,16 @@ class Parser {
 	private parseDeclaration(indent: number): GDScriptDeclaration | undefined {
 		const start = this.current();
 		if (start.indent !== indent) return undefined;
-		if (this.atValue("@")) {
-			// Annotations decorate the declaration that follows them; skipping the
-			// prefix keeps `@export var speed := 1.0` visible to the index.
-			this.skipAnnotations();
-			if (this.atLineEnd()) return undefined;
-		}
+		const annotationStartLine = this.atValue("@") ? this.skipAnnotations() : undefined;
+		if (this.atLineEnd()) return undefined;
 		const token = this.current();
 		if (token.indent !== indent) return undefined;
+		const declaration = this.parseDeclarationAt(indent);
+		if (declaration === undefined || annotationStartLine === undefined) return declaration;
+		return { ...declaration, annotationStartLine };
+	}
+
+	private parseDeclarationAt(indent: number): GDScriptDeclaration | undefined {
 		if (this.isKeyword("class_name")) return this.parseClassName();
 		if (this.isKeyword("extends")) return this.parseExtends();
 		if (this.isKeyword("signal")) return this.parseSignal();
@@ -432,13 +445,23 @@ class Parser {
 	}
 
 	/** Skips `@annotation` prefixes (including their arguments) on a declaration line. */
-	private skipAnnotations(): void {
+	private skipAnnotations(): number | undefined {
+		const indent = this.current().indent;
+		const memberLines: number[] = [];
 		// perf: annotation cursor.
 		while (this.atValue("@") && !this.at("eof")) {
-			this.advance();
+			const start = this.advance();
+			if (!NON_MEMBER_ANNOTATIONS.has(this.current().value)) memberLines.push(start.line);
 			if (this.at("identifier")) this.advance();
 			if (this.atValue("(")) this.skipBalanced("(", ")");
+			const lineEnd = this.index;
+			this.skipNewlines();
+			if (this.index !== lineEnd && this.current().indent !== indent) {
+				this.index = lineEnd;
+				return memberLines[0];
+			}
 		}
+		return memberLines[0];
 	}
 
 	private skipBalanced(open: string, close: string): void {

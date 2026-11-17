@@ -229,6 +229,151 @@ func heal(amount: int) -> void:
 		service.dispose();
 	});
 
+	it("renders the script description written after extends on the class_name", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## A brief description of the class's role and functionality.
+##
+## The description of the script, what it can do,
+## and any further detail.
+
+## The description of a signal.
+signal my_signal
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.match(markdown, /class_name SampleClass/);
+		assert.match(markdown, /A brief description of the class's role and functionality\./);
+		assert.match(markdown, /and any further detail\./);
+		assert.doesNotMatch(markdown, /The description of a signal\./);
+		service.dispose();
+	});
+
+	it("keeps the script description off the members that follow it", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## A brief description of the class's role and functionality.
+
+## The description of a signal.
+signal my_signal
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("my_signal")) ?? "";
+		assert.match(markdown, /The description of a signal\./);
+		assert.doesNotMatch(markdown, /A brief description of the class's role and functionality\./);
+		service.dispose();
+	});
+
+	it("does not promote the docstring of the first member to the script", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## Restores health over time.
+func heal() -> void:
+	pass
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.doesNotMatch(markdown, /Restores health over time\./);
+		service.dispose();
+	});
+
+	it("does not promote the docstring of a member whose annotation spans lines", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+## How fast the actor moves, in pixels per second.
+@export_range(
+	0,
+	100,
+) var speed: float = 1.0
+`;
+		index(service, mainUri, source);
+		const hoveredClass = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.doesNotMatch(hoveredClass, /How fast the actor moves/);
+		const hoveredMember = hoverMarkdown(service, mainUri, source, source.indexOf("speed: float") + 2) ?? "";
+		assert.match(hoveredMember, /How fast the actor moves/);
+		service.dispose();
+	});
+
+	it("keeps the docstring written above class_name as the script description", () => {
+		const service = createService();
+		const source = `## Describes the script from the top of the file.
+class_name SampleClass
+extends Node
+
+var health: int = 1
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+		assert.match(markdown, /Describes the script from the top of the file\./);
+		service.dispose();
+	});
+
+	for (const [name, body, expected] of [
+		["multiline annotation on its own lines", '## Member detail.\n@export_range(\n\t0, 10\n)\nvar speed = 1\n', false],
+		["multiple annotations", '## Member detail.\n@export_range(0, 10)\n@onready\nvar speed = 1\n', false],
+		["standalone export group", '## Script detail.\n@export_group("Stats")\n@export var speed = 1\n', true],
+		["comment after the first export group", '@export_group("Stats")\n## Fake detail.\n\nvar speed = 1\n', false],
+		["standalone warning annotation", '## Script detail.\n@warning_ignore_start("unused_private_class_variable")\nvar speed = 1\n', true],
+		["member with trailing documentation", '## Script detail.\nvar speed = 1 ## Member detail.\n', true],
+		["hashes inside a regular comment", '## Member detail.\nvar speed = 1 # Regular comment includes ## marker\n', false],
+		["hashes inside an initializer", '## Member detail.\nvar speed = "## not a comment"\n', false],
+		["triple hash script comment", '### Script detail.\n\nvar speed = 1\n', true],
+		["multiline string", '"""\n## Fake detail.\n"""\n## Script detail.\n\nvar speed = 1\n', true],
+		["declaration text in a multiline string", '"""\nvar fake = 1\n"""\n## Script detail.\n\nvar speed = 1\n', true],
+		["unterminated multiline string", '"""\n## Fake detail.\n', false],
+		["double quoted string with escaped LF", '"first\\\n## Fake detail.\\\nlast"\n## Script detail.\n\nvar speed = 1\n', true],
+		["double quoted string with escaped CRLF", '"first\\\r\n## Fake detail.\\\r\nlast"\r\n## Script detail.\r\n\r\nvar speed = 1\r\n', true],
+		["single quoted string with escaped LF", "'first\\\n## Fake detail.\\\nlast'\n## Script detail.\n\nvar speed = 1\n", true],
+		["single quoted string with escaped CRLF", "'first\\\r\n## Fake detail.\\\r\nlast'\r\n## Script detail.\r\n\r\nvar speed = 1\r\n", true],
+		["quotes in a comment", '# """\n## Script detail.\n\nvar speed = 1\n', true],
+		["later member comment", 'var speed = 1\n\n## Fake detail.\nvar later = 2\n', false],
+	] as const) {
+		it(`keeps script documentation ownership for ${name}`, () => {
+			assert.equal(typeof body, "string");
+			const source = `class_name SampleClass\nextends Node\n${body}`;
+			const service = createService();
+			index(service, mainUri, source);
+			const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3) ?? "";
+			assert.equal(markdown.includes("Script detail."), expected);
+			assert.doesNotMatch(markdown, /Member detail\.|Fake detail\./);
+			service.dispose();
+		});
+	}
+
+	it("adds no documentation paragraph to a script without a docstring", () => {
+		const service = createService();
+		const source = `class_name SampleClass
+extends Node
+var health: int = 1
+`;
+		index(service, mainUri, source);
+		const markdown = hoverMarkdown(service, mainUri, source, source.indexOf("SampleClass") + 3);
+		assert.equal(markdown, "```gdscript\nclass_name SampleClass\n```\n");
+		service.dispose();
+	});
+
+	it("renders the script description when hovering the class name of a typed variable", () => {
+		const service = createService();
+		const documented = `class_name Documented
+extends Node
+## Describes the script from the documentation block.
+
+var health: int = 1
+`;
+		const consumer = `extends Node
+var instance: Documented
+`;
+		index(service, "file:///project/documented.gd", documented);
+		index(service, mainUri, consumer);
+		const markdown = hoverMarkdown(service, mainUri, consumer, consumer.indexOf("Documented") + 3) ?? "";
+		assert.match(markdown, /Describes the script from the documentation block\./);
+		service.dispose();
+	});
+
 	it("keeps builtin hover descriptions intact", () => {
 		const service = createService();
 		const source = `extends Node

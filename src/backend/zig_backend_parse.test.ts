@@ -47,6 +47,22 @@ test("rejects malformed base64 in backend payloads", () => {
 
 const parseCases: readonly ParseCase[] = [
 	{
+		name: "multiline decorating annotations with CRLF and blank lines",
+		source: 'class_name Sample\r\n@export_group("Stats")\r\n## Speed.\r\n@export_range(\r\n\t0, 10\r\n)\r\n@onready\r\n\r\nvar speed = 1\r\nvar plain = 2\r\n',
+	},
+	{
+		name: "nested multiline annotations and orphaned annotation before dedent",
+		source: 'class Inner:\n\t@export_range(\n\t\t0, 10\n\t) var speed = 1\n\t@export\nvar outer = 2\n',
+	},
+	{
+		name: "script and standalone annotations without decorating metadata",
+		source: '@tool\n@icon("res://icon.svg")\nclass_name Sample\n@export_category("Stats")\n@export_subgroup("Speed")\n@warning_ignore_start("unused_private_class_variable")\nvar value = 1\n@warning_ignore_restore("unused_private_class_variable")\n',
+	},
+	{
+		name: "annotation ending at EOF inside an inner class",
+		source: "class Inner:\n\t@export\n",
+	},
+	{
 		name: "top level declarations",
 		source: [
 			"class_name Player",
