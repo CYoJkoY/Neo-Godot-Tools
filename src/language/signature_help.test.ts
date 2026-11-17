@@ -19,12 +19,16 @@ func method3(text: String, flag: bool, count: int) -> void:
 func method4(first: int, second: int, third: int) -> void:
 	pass
 
+func method5(text: String, flag: bool, count: int) -> void:
+	pass
+
 func run() -> void:
 	method1([1, 2, 3], true, 0)
 	method2({"first": 1, "second": 2}, true, 0)
 	method3("first, second", true, 0)
 	method4(1, # user's value
 		2, 3)
+	method5("""text " here""", true, 0)
 `;
 
 function createService(): LanguageService {
@@ -111,6 +115,15 @@ describe("local signature help", () => {
 		const service = createService();
 		try {
 			assert.equal(signatureHelpAt(service, "# user's value\n\t\t2, ")?.activeParameter, 2);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("treats a triple-quoted string as one argument", () => {
+		const service = createService();
+		try {
+			assert.equal(signatureHelpAt(service, '"""text " here""", ')?.activeParameter, 1);
 		} finally {
 			service.dispose();
 		}

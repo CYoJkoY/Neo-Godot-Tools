@@ -84,20 +84,40 @@ function parameterLabel(parameter: IndexedParameter): string {
 interface ArgumentScan {
 	depth: number;
 	separators: number;
+	/** The opening delimiter: `"`, `'`, `"""`, or `'''`. */
 	quote: string | undefined;
 	escaped: boolean;
 	comment: boolean;
+	/** Remaining characters of a multi-character quote delimiter. */
+	skip: number;
 }
 
 function activeParameterIndex(argumentText: string): number {
-	const scan = Array.from(argumentText).reduce<ArgumentScan>(
-		(previous, char) => nextArgumentScan(char, previous),
-		{ depth: 0, separators: 0, quote: undefined, escaped: false, comment: false },
+	const characters = Array.from(argumentText);
+	const scan = characters.reduce<ArgumentScan>(
+		(previous, _char, index) => nextArgumentScan(characters, index, previous),
+		{ depth: 0, separators: 0, quote: undefined, escaped: false, comment: false, skip: 0 },
 	);
 	return scan.separators;
 }
 
-function nextArgumentScan(char: string, scan: ArgumentScan): ArgumentScan {
+/** A quote character opens a triple-quoted string when repeated three times. */
+function quoteDelimiter(characters: readonly string[], index: number): string | undefined {
+	const char = characters[index];
+	if (char !== '"' && char !== "'") return undefined;
+	const triple = characters[index + 1] === char && characters[index + 2] === char;
+	return triple ? char.repeat(3) : char;
+}
+
+function matchesDelimiter(characters: readonly string[], index: number, delimiter: string): boolean {
+	const char = characters[index];
+	if (char !== delimiter[0]) return false;
+	return delimiter.length === 1 || (characters[index + 1] === char && characters[index + 2] === char);
+}
+
+function nextArgumentScan(characters: readonly string[], index: number, scan: ArgumentScan): ArgumentScan {
+	if (scan.skip > 0) return { ...scan, skip: scan.skip - 1 };
+	const char = characters[index] ?? "";
 	if (scan.comment) {
 		if (char === "\n") return { ...scan, comment: false };
 		return scan;
@@ -105,11 +125,13 @@ function nextArgumentScan(char: string, scan: ArgumentScan): ArgumentScan {
 	if (scan.quote) {
 		if (scan.escaped) return { ...scan, escaped: false };
 		if (char === "\\") return { ...scan, escaped: true };
-		if (char === scan.quote) return { ...scan, quote: undefined };
+		if (matchesDelimiter(characters, index, scan.quote))
+			return { ...scan, quote: undefined, skip: scan.quote.length - 1 };
 		return scan;
 	}
 	if (char === "#") return { ...scan, comment: true };
-	if (char === '"' || char === "'") return { ...scan, quote: char };
+	const delimiter = quoteDelimiter(characters, index);
+	if (delimiter) return { ...scan, quote: delimiter, skip: delimiter.length - 1 };
 	if (char === "(" || char === "[" || char === "{") return { ...scan, depth: scan.depth + 1 };
 	if (char === ")" || char === "]" || char === "}") return { ...scan, depth: Math.max(0, scan.depth - 1) };
 	if (char === "," && scan.depth === 0) return { ...scan, separators: scan.separators + 1 };
