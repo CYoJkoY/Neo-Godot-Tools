@@ -52,6 +52,25 @@ function contains(range: SourceRange, offset: number): boolean {
 	return range.start.offset <= offset && offset <= range.end.offset;
 }
 
+/**
+ * First token index whose start is at or after `offset`.
+ *
+ * Range-scoped passes used `tokens.findIndex` over the whole stream, which is
+ * linear per call and therefore quadratic per file. Token starts are sorted, so
+ * the position is a binary search.
+ */
+function firstTokenAtOrAfter(tokens: readonly GDScriptToken[], offset: number): number {
+	return lowerBound(tokens, 0, tokens.length, offset);
+}
+
+function lowerBound(tokens: readonly GDScriptToken[], low: number, high: number, offset: number): number {
+	if (low >= high) return low;
+	const middle = low + Math.floor((high - low) / 2);
+	return tokens[middle].start < offset
+		? lowerBound(tokens, middle + 1, high, offset)
+		: lowerBound(tokens, low, middle, offset);
+}
+
 function tokenRange(token: GDScriptToken): SourceRange {
 	return {
 		start: { offset: token.start, line: token.line, character: token.character },
@@ -132,17 +151,26 @@ interface LocalDeclarationRequest {
 
 function addLocalDeclarations({ source, body, scope, excluded = [] }: LocalDeclarationRequest): void {
 	const { tokens, uri } = source;
+	// Only the body is inspected, and the token before it is kept so a declaration
+	// on the first body line still sees its `var`/`const` keyword.
+	const from = Math.max(0, firstTokenAtOrAfter(tokens, body.start.offset) - 1);
+	const to = firstTokenAtOrAfter(tokens, body.end.offset + 1);
 	tokens
-		.map((token, index) => ({ token, index, previous: tokens[index - 1] }))
+		.slice(from, to)
+		.map((token, offset) => ({ token, index: from + offset }))
 		.filter(
-			({ token, previous }) =>
-				previous !== undefined &&
-				token.kind === "identifier" &&
-				(previous.value === "var" || previous.value === "const") &&
-				previous.line === token.line &&
-				token.start >= body.start.offset &&
-				token.end <= body.end.offset &&
-				!excluded.some((range) => contains(range, token.start)),
+			({ token, index }) => {
+				const previous = tokens[index - 1];
+				return (
+					previous !== undefined &&
+					token.kind === "identifier" &&
+					(previous.value === "var" || previous.value === "const") &&
+					previous.line === token.line &&
+					token.start >= body.start.offset &&
+					token.end <= body.end.offset &&
+					!excluded.some((range) => contains(range, token.start))
+				);
+			},
 		)
 		.map(({ token, index }) =>
 			addBinding(scope, {
@@ -304,15 +332,14 @@ function readLambdaScope(tokens: readonly GDScriptToken[], funcIndex: number): L
  * skipped so nested lambdas are returned from that lambda's own scan only.
  */
 function lambdasIn(tokens: readonly GDScriptToken[], startOffset: number, endOffset: number): LambdaScope[] {
-	const first = tokens.findIndex((token) => token.start >= startOffset);
-	if (first < 0) return [];
+	const first = firstTokenAtOrAfter(tokens, startOffset);
+	if (first >= tokens.length) return [];
 	const scan = (index: number, found: LambdaScope[]): LambdaScope[] => {
 		const token = tokens[index];
 		if (!token || token.start > endOffset) return found;
 		const lambda = token.kind === "identifier" && token.value === "func" ? readLambdaScope(tokens, index) : undefined;
 		if (!lambda) return scan(index + 1, found);
-		const next = tokens.findIndex((candidate) => candidate.start >= lambda.range.end.offset);
-		return scan(next < 0 ? tokens.length : next, [...found, lambda]);
+		return scan(firstTokenAtOrAfter(tokens, lambda.range.end.offset), [...found, lambda]);
 	};
 	return scan(first, []);
 }
@@ -423,10 +450,31 @@ function buildScopes(file: IndexedFile, uri: string): Scope {
 	visit(file.ast.declarations, root);
 	return root;
 }
-
+/**
+ * Innermost scope containing `offset`.
+ *
+ * Scopes are visited in declaration order, so a scope's `children` are sorted by
+ * start offset. The lookup binary-searches the one child that can contain the
+ * offset instead of scanning siblings at every level.
+ */
 function findInnermostScope(scope: Scope, offset: number): Scope {
-	const child = scope.children.find((candidate) => contains(candidate.range, offset));
+	const child = childContaining(scope.children, offset);
 	return child ? findInnermostScope(child, offset) : scope;
+}
+
+function childContaining(children: readonly Scope[], offset: number): Scope | undefined {
+	const index = lastScopeStartingAtOrBefore(children, offset, 0, children.length);
+	const candidate = index < 0 ? undefined : children[index];
+	return candidate && contains(candidate.range, offset) ? candidate : undefined;
+}
+
+/** Index of the last scope whose start offset is at or before `offset`. */
+function lastScopeStartingAtOrBefore(scopes: readonly Scope[], offset: number, low: number, high: number): number {
+	if (low >= high) return low - 1;
+	const middle = low + Math.floor((high - low) / 2);
+	return scopes[middle].range.start.offset <= offset
+		? lastScopeStartingAtOrBefore(scopes, offset, middle + 1, high)
+		: lastScopeStartingAtOrBefore(scopes, offset, low, middle);
 }
 
 /** Innermost scope at `offset` first, then its ancestors. */
@@ -597,16 +645,27 @@ export function createBindingIndex(files: FileIndex): BindingIndex {
 	const remove = (uri: string): void => {
 		scopes.delete(uri);
 		const references = referencesByUri.get(uri) ?? [];
-		references.map((reference) =>
+		// One filter per binding: dropping each reference separately re-filtered
+		// the bucket of every identifier in the file, which is quadratic for the
+		// repeated names a large script is full of.
+		const offsetsByBinding = references.reduce<Map<string, Set<number>>>((groups, reference) => {
+			const offsets = groups.get(reference.bindingId) ?? new Set<number>();
+			return groups.set(reference.bindingId, offsets.add(reference.range.start.offset));
+		}, new Map());
+		[...offsetsByBinding].map(([bindingId, offsets]) =>
 			dropFromGroup(
 				referencesByBinding,
-				reference.bindingId,
-				(entry) => entry.uri === uri && entry.range.start.offset === reference.range.start.offset,
+				bindingId,
+				(entry) => entry.uri === uri && offsets.has(entry.range.start.offset),
 			),
 		);
 		referencesByUri.delete(uri);
 		const own = byUri.get(uri) ?? [];
-		own.map((binding) => dropFromGroup(byName, binding.name, (entry) => entry.id === binding.id));
+		const idsByName = own.reduce<Map<string, Set<string>>>((groups, binding) => {
+			const ids = groups.get(binding.name) ?? new Set<string>();
+			return groups.set(binding.name, ids.add(binding.id));
+		}, new Map());
+		[...idsByName].map(([name, ids]) => dropFromGroup(byName, name, (entry) => ids.has(entry.id)));
 		byUri.delete(uri);
 	};
 

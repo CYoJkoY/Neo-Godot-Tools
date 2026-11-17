@@ -44,22 +44,22 @@ function parameterTexts(source: string, tokens: SemanticToken[]): string[] {
 }
 
 describe("semantic tokens", () => {
-	it("marks a parameter declaration and its uses in the function body", () => {
+	it("marks a parameter declaration and its uses in the function body", async () => {
 		const source = "func heal(health: int) -> void:\n\thealth += 1\n\tprint(health)\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["health", "health", "health"]);
 		} finally {
 			service.dispose();
 		}
 	});
 
-	it("does not mark the member side of self.health", () => {
+	it("does not mark the member side of self.health", async () => {
 		const source = "var health: int\nfunc heal(health: int) -> void:\n\tself.health = health\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			const starts = tokens.filter((token) => token.type === "parameter").map((token) => token.start);
 			assert.deepEqual(parameterTexts(source, tokens), ["health", "health"]);
 			assert.ok(!starts.includes(source.indexOf("self.health") + "self.".length));
@@ -69,7 +69,7 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("keeps same-named locals in another function out of the parameter token", () => {
+	it("keeps same-named locals in another function out of the parameter token", async () => {
 		const source = [
 			"func first(health: int) -> void:",
 			"\thealth += 1",
@@ -79,7 +79,7 @@ describe("semantic tokens", () => {
 		].join("\n");
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["health", "health"]);
 			assert.ok(
 				tokens.every((token) => token.type !== "parameter" || token.start < source.indexOf("func second")),
@@ -89,11 +89,11 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("lets a local declaration shadow the parameter in the body", () => {
+	it("lets a local declaration shadow the parameter in the body", async () => {
 		const source = "func heal(health: int) -> void:\n\tvar health := 2\n\thealth += 1\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["health"]);
 			assert.equal(tokens.find((token) => token.type === "parameter")?.start, source.indexOf("health"));
 		} finally {
@@ -101,13 +101,13 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("refreshes a stale index before producing parameter tokens", () => {
+	it("refreshes a stale index before producing parameter tokens", async () => {
 		const stale = "func heal(health: int) -> void:\n\thealth += 1\n";
 		const fresh = "func heal(stamina: int) -> void:\n\tstamina += 1\n";
 		const service = createService();
 		try {
-			service.ensureDocumentIndexed(fakeDocument("/game/player.gd", stale));
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", fresh), service);
+			await service.ensureDocumentIndexed(fakeDocument("/game/player.gd", stale));
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", fresh), service);
 			assert.deepEqual(parameterTexts(fresh, tokens), ["stamina", "stamina"]);
 			assert.ok(
 				tokens.every((token) => token.type !== "parameter" || fresh.slice(token.start, token.end) !== "health"),
@@ -117,11 +117,11 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("keeps node path literals while adding parameter tokens", () => {
+	it("keeps node path literals while adding parameter tokens", async () => {
 		const source = 'func move(path: String) -> void:\n\tget_node("Player/Camera")\n\tprint(path)\n';
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["path", "path"]);
 			assert.deepEqual(
 				tokens
@@ -134,11 +134,11 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("covers only the parameter name, not its type or default value", () => {
+	it("covers only the parameter name, not its type or default value", async () => {
 		const source = "func heal(health: int = 10) -> void:\n\thealth += 1\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["health", "health"]);
 			assert.ok(
 				tokens.every(
@@ -150,23 +150,23 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("does not color a workspace parameter from another script", () => {
+	it("does not color a workspace parameter from another script", async () => {
 		const service = createService();
 		try {
-			service.ensureDocumentIndexed(fakeDocument("/game/other.gd", "func greet(name: String) -> void:\n\tprint(name)\n"));
+			await service.ensureDocumentIndexed(fakeDocument("/game/other.gd", "func greet(name: String) -> void:\n\tprint(name)\n"));
 			const source = "extends Node\nfunc label() -> String:\n\treturn name\n";
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), []);
 		} finally {
 			service.dispose();
 		}
 	});
 
-	it("does not color a parameter declared in another function", () => {
+	it("does not color a parameter declared in another function", async () => {
 		const source = "func greet(name: String) -> void:\n\tprint(name)\nfunc label() -> String:\n\treturn name\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["name", "name"]);
 			assert.ok(tokens.every((token) => token.type !== "parameter" || token.start < source.indexOf("func label")));
 		} finally {
@@ -174,7 +174,7 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("does not color node shorthand that shares a parameter name", () => {
+	it("does not color node shorthand that shares a parameter name", async () => {
 		const source = [
 			"func move(player: Node) -> void:",
 			"\t$player.position = player.position",
@@ -183,7 +183,7 @@ describe("semantic tokens", () => {
 		].join("\n");
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["player", "player", "player"]);
 			assert.ok(tokens.every((token) => token.type !== "parameter" || source[token.start - 1] !== "$"));
 			assert.ok(
@@ -199,7 +199,7 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("treats keywords as non-values before node shorthand", () => {
+	it("treats keywords as non-values before node shorthand", async () => {
 		const source = [
 			"func move(player: Node) -> void:",
 			"\treturn %player",
@@ -207,7 +207,7 @@ describe("semantic tokens", () => {
 		].join("\n");
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			const starts = tokens.filter((token) => token.type === "parameter").map((token) => token.start);
 			assert.deepEqual(parameterTexts(source, tokens), ["player", "player"]);
 			assert.ok(!starts.includes(source.indexOf("%player") + 1));
@@ -217,18 +217,18 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("marks inline lambda parameters", () => {
+	it("marks inline lambda parameters", async () => {
 		const source = "func outer() -> void:\n\tvar cb = func(value: int) -> int: return value\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["value", "value"]);
 		} finally {
 			service.dispose();
 		}
 	});
 
-	it("marks block lambda parameters without capturing lambda locals", () => {
+	it("marks block lambda parameters without capturing lambda locals", async () => {
 		const source = [
 			"func outer(outer_value: int) -> void:",
 			"\tvar cb = func(value: int) -> int:",
@@ -237,14 +237,14 @@ describe("semantic tokens", () => {
 		].join("\n");
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["outer_value", "value", "value", "outer_value"]);
 		} finally {
 			service.dispose();
 		}
 	});
 
-	it("marks nested lambda parameters and their outer bindings", () => {
+	it("marks nested lambda parameters and their outer bindings", async () => {
 		const source = [
 			"func outer(a: int) -> void:",
 			"\tvar cb = func(b: int) -> void:",
@@ -253,18 +253,18 @@ describe("semantic tokens", () => {
 		].join("\n");
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			assert.deepEqual(parameterTexts(source, tokens), ["a", "b", "c", "a", "b", "c"]);
 		} finally {
 			service.dispose();
 		}
 	});
 
-	it("does not color a function name that matches its parameter", () => {
+	it("does not color a function name that matches its parameter", async () => {
 		const source = "func process(process: int) -> void:\n\tprint(process)\n";
 		const service = createService();
 		try {
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", source), service);
 			const starts = tokens.filter((token) => token.type === "parameter").map((token) => token.start);
 			const declaration = source.indexOf("process", source.indexOf("("));
 			const use = source.lastIndexOf("process");
@@ -275,17 +275,17 @@ describe("semantic tokens", () => {
 		}
 	});
 
-	it("rebuilds bindings after a dependency-only edit", () => {
+	it("rebuilds bindings after a dependency-only edit", async () => {
 		const service = createService();
 		try {
-			service.ensureDocumentIndexed(fakeDocument("/game/a.gd", "extends Node\n"));
-			service.ensureDocumentIndexed(fakeDocument("/game/b.gd", "extends Node\n"));
+			await service.ensureDocumentIndexed(fakeDocument("/game/a.gd", "extends Node\n"));
+			await service.ensureDocumentIndexed(fakeDocument("/game/b.gd", "extends Node\n"));
 			const stale =
 				'const First = preload("res://a.gd")\nfunc heal(health: int) -> void:\n\thealth += 1\n';
 			const fresh =
 				'const First = preload("res://b.gd")\nfunc heal(health: int) -> void:\n\tvar health := 2\n\thealth += 1\n';
-			service.ensureDocumentIndexed(fakeDocument("/game/player.gd", stale));
-			const tokens = collectSemanticTokens(fakeDocument("/game/player.gd", fresh), service);
+			await service.ensureDocumentIndexed(fakeDocument("/game/player.gd", stale));
+			const tokens = await collectSemanticTokens(fakeDocument("/game/player.gd", fresh), service);
 			assert.deepEqual(parameterTexts(fresh, tokens), ["health"]);
 			assert.equal(tokens.find((token) => token.type === "parameter")?.start, fresh.indexOf("health"));
 		} finally {

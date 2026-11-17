@@ -1,6 +1,8 @@
 import { GDScriptToken, lexGDScript } from "../analyzer/index.js";
+import { dropFromGroup } from "./collections.js";
 import { FileIndex } from "./file_index.js";
 import { IndexedSymbol } from "./symbol.js";
+import { tokensFor } from "./token_cache.js";
 
 export interface IndexedReference {
 	name: string;
@@ -68,10 +70,14 @@ function isDeclaration(reference: IndexedReference, symbol: IndexedSymbol): bool
 	);
 }
 
-export function collectReferences(source: string, uri: string): IndexedReference[] {
-	return lexGDScript(source)
+function referencesFromTokens(tokens: readonly GDScriptToken[], uri: string): IndexedReference[] {
+	return tokens
 		.filter((token) => token.kind === "identifier" && !keywords.has(token.value))
 		.map((token) => toReference(token, uri));
+}
+
+export function collectReferences(source: string, uri: string): IndexedReference[] {
+	return referencesFromTokens(lexGDScript(source), uri);
 }
 
 export interface ReferenceIndex {
@@ -91,7 +97,9 @@ export function createReferenceIndex(files: FileIndex): ReferenceIndex {
 		remove(uri);
 		const file = files.get(uri);
 		if (!file) return;
-		const references = collectReferences(file.source, uri);
+		// The binding and type layers already lexed this exact text, so the
+		// reference pass reads the shared token stream instead of lexing again.
+		const references = referencesFromTokens(tokensFor(uri, file.source, file.sourceFingerprint), uri);
 		byUri.set(uri, references);
 		for (const reference of references) {
 			const key = reference.name.toLowerCase();
@@ -112,15 +120,11 @@ export function createReferenceIndex(files: FileIndex): ReferenceIndex {
 	const remove = (uri: string): void => {
 		const references = byUri.get(uri);
 		if (!references) return;
-		for (const reference of references) {
-			const key = reference.name.toLowerCase();
-			const entries = byName.get(key);
-			if (!entries) continue;
-			const remaining = entries.filter(
-				(entry) => entry.uri !== uri || entry.range.start.offset !== reference.range.start.offset,
-			);
-			if (remaining.length) byName.set(key, remaining);
-			else byName.delete(key);
+		// One filter per distinct name: filtering the bucket once per reference
+		// made removing a file quadratic in its repeated identifiers (`alpha`
+		// appearing 8 000 times filtered an 8 000-entry bucket 8 000 times).
+		for (const key of new Set(references.map((reference) => reference.name.toLowerCase()))) {
+			dropFromGroup(byName, key, (entry) => entry.uri === uri);
 		}
 		byUri.delete(uri);
 	};

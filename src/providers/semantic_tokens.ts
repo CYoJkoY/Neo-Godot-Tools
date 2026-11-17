@@ -115,16 +115,24 @@ function parameterSemanticTokens(file: IndexedFile, bindings: LanguageService["b
 /**
  * Semantic ranges for one document, ordered by offset.
  *
- * The binding index is refreshed from the document itself first: semantic
- * tokens are requested while the user types, and the debounced index update may
- * still describe the previous text.
+ * Semantic tokens are requested while the user types, so the index may still
+ * describe the previous text. The refresh goes through the debounced update
+ * queue, which coalesces a burst of keystrokes into one parse; the request only
+ * waits for that update instead of parsing on its own thread of execution. If
+ * the queue hands back an older text (a newer edit superseded ours), the node
+ * path literals are still emitted from the document and the binding-dependent
+ * tokens wait for the next request.
  */
-export function collectSemanticTokens(document: TextDocument, languageService: LanguageService): SemanticToken[] {
-	languageService.ensureDocumentIndexed(document);
-	const file = document.languageId === "gdscript" ? languageService.files.get(document.uri.toString()) : undefined;
-	const source = file?.source ?? document.getText();
+export async function collectSemanticTokens(
+	document: TextDocument,
+	languageService: LanguageService,
+): Promise<SemanticToken[]> {
+	await languageService.ensureDocumentIndexed(document);
+	const indexed = document.languageId === "gdscript" ? languageService.files.get(document.uri.toString()) : undefined;
+	const text = document.getText();
+	const file = indexed?.source === text ? indexed : undefined;
 	const parameters = file ? parameterSemanticTokens(file, languageService.bindings) : [];
-	return [...nodePathSemanticTokens(source), ...parameters].sort((left, right) => left.start - right.start);
+	return [...nodePathSemanticTokens(text), ...parameters].sort((left, right) => left.start - right.start);
 }
 
 export function createSemanticTokensProvider(
@@ -133,9 +141,10 @@ export function createSemanticTokensProvider(
 ): GDSemanticTokensProvider {
 	const legend = new vscode.SemanticTokensLegend(LEGEND);
 	const provider: GDSemanticTokensProvider = {
-		provideDocumentSemanticTokens(document: TextDocument, _token: CancellationToken): SemanticTokens {
+		async provideDocumentSemanticTokens(document: TextDocument, _token: CancellationToken): Promise<SemanticTokens> {
+			const tokens = await collectSemanticTokens(document, options.languageService);
 			const builder = new vscode.SemanticTokensBuilder(legend);
-			collectSemanticTokens(document, options.languageService).map((token) =>
+			tokens.map((token) =>
 				builder.push(
 					new vscode.Range(document.positionAt(token.start), document.positionAt(token.end)),
 					token.type,

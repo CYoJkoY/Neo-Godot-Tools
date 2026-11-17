@@ -203,14 +203,20 @@ export class LanguageService implements vscode.Disposable {
 	 * Brings the index up to date with the document a provider is answering for.
 	 *
 	 * Editor events arrive after the request that already reflects the latest
-	 * keystroke, so a provider must not render ranges from an older source.
+	 * keystroke, so a provider must not render ranges from an older source. The
+	 * refresh joins the debounced update queue instead of parsing inline: a
+	 * request that arrives mid-typing waits for the update the debounce was
+	 * already going to run, so a burst of keystrokes is parsed once instead of
+	 * once per request, and the work stays off the request's synchronous path.
 	 */
-	ensureDocumentIndexed(document: vscode.TextDocument): void {
+	async ensureDocumentIndexed(document: vscode.TextDocument): Promise<void> {
 		if (document.languageId !== "gdscript" || document.uri.scheme !== "file") return;
 		const uri = document.uri.toString();
 		const source = document.getText();
 		if (this.files.get(uri)?.source === source) return;
-		this.updateText(uri, source, document.version);
+		if (this.disposed) return;
+		const sequence = this.updateScheduler.enqueue({ uri, source, version: document.version });
+		if (sequence !== undefined) await this.updateScheduler.whenApplied(uri, sequence);
 	}
 
 	/**

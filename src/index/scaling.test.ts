@@ -78,6 +78,38 @@ describe("project index scaling", () => {
 		const elapsed = performance.now() - start;
 		assert.ok(elapsed < 500, `single edit took ${elapsed.toFixed(1)}ms with 600 indexed files`);
 	});
+
+	it("re-indexes a file whose identifiers repeat across functions", () => {
+		// A single large script repeats the same parameter and local names in every
+		// function, so each name bucket holds thousands of entries. Removing the
+		// previous entries one reference at a time re-filtered the bucket per
+		// reference, which is quadratic in the file size.
+		const files = createFileIndex();
+		const symbols = createSymbolIndex(files);
+		const bindings = createBindingIndex(files);
+		const references = createReferenceIndex(files);
+		const uri = "file:///workspace/big.gd";
+		const functions = Array.from(
+			{ length: 2000 },
+			(_, index) =>
+				`func handler_${index}(alpha: int, beta: String) -> void:\n\tvar local := alpha\n\tprint(beta, local)\n`,
+		);
+		const source = `extends Node\n\n${functions.join("\n")}`;
+		files.update(uri, source, 1);
+		symbols.update(uri);
+		references.update(uri);
+		bindings.update(uri);
+
+		const start = performance.now();
+		for (let round = 0; round < 3; round++) {
+			files.update(uri, `${source}\n# edit ${round}\n`, round + 2);
+			symbols.update(uri);
+			references.update(uri);
+			bindings.update(uri);
+		}
+		const elapsed = performance.now() - start;
+		assert.ok(elapsed < 1500, `three re-indexes took ${elapsed.toFixed(1)}ms`);
+	});
 });
 
 describe("script path lookup", () => {
