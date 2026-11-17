@@ -14,6 +14,7 @@ import {
 	createSymbolIndex,
 	createTypeResolutionIndex,
 } from "../index";
+import { functionSignature, parameterLabel } from "../index/symbol_label";
 import { languageProfiler } from "../performance/profiler";
 import { forEachWithTimeBudget } from "../utils/scheduling";
 import type { ZigSymbolMirror } from "../index/zig_symbol_mirror";
@@ -74,10 +75,6 @@ function appendDocumentation(markdown: vscode.MarkdownString, symbol: IndexedSym
  */
 function completionSortText(priority: number): string {
 	return String(Math.max(0, priority)).padStart(6, "0");
-}
-
-function parameterLabel(parameter: IndexedParameter): string {
-	return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 }
 
 /**
@@ -499,7 +496,7 @@ export class LanguageService implements vscode.Disposable {
 			for (const { builtin } of resolveBuiltinSymbols(prefix)) {
 				if (existing.has(builtin.name)) continue;
 				const completion = new vscode.CompletionItem(builtin.name, vscode.CompletionItemKind.Function);
-				completion.detail = `${builtin.name}(${builtin.parameters.map(parameterLabel).join(", ")})${builtin.returnType ? ` -> ${builtin.returnType}` : ""}`;
+				completion.detail = functionSignature(builtin);
 				completion.documentation = new vscode.MarkdownString(builtin.description);
 				completion.sortText = completionSortText(items.length);
 				items.push(completion);
@@ -553,9 +550,7 @@ export class LanguageService implements vscode.Disposable {
 		returnType: string | undefined,
 		activeParameter: number,
 	): vscode.SignatureHelp {
-		const signature = new vscode.SignatureInformation(
-			`${name}(${parameters.map(parameterLabel).join(", ")})${returnType ? ` -> ${returnType}` : ""}`,
-		);
+		const signature = new vscode.SignatureInformation(functionSignature({ name, parameters, returnType }));
 		signature.parameters = parameters.map(
 			(parameter) => new vscode.ParameterInformation(parameterLabel(parameter)),
 		);
@@ -578,10 +573,7 @@ export class LanguageService implements vscode.Disposable {
 		const builtin = resolveBuiltinSymbol(symbol.name);
 		if (builtin && builtin.symbol.uri === symbol.uri) {
 			const markdown = new vscode.MarkdownString();
-			markdown.appendCodeblock(
-				`${builtin.builtin.name}(${builtin.builtin.parameters.map(parameterLabel).join(", ")})${builtin.builtin.returnType ? ` -> ${builtin.builtin.returnType}` : ""}`,
-				"gdscript",
-			);
+			markdown.appendCodeblock(functionSignature(builtin.builtin), "gdscript");
 			markdown.appendMarkdown(`\n\n${builtin.builtin.description}`);
 			return new vscode.Hover(markdown);
 		}
@@ -617,7 +609,7 @@ export class LanguageService implements vscode.Disposable {
 	}
 
 	private symbolLabel(symbol: IndexedSymbol): string {
-		if (symbol.kind === "function") return this.signatureLabel(symbol);
+		if (symbol.kind === "function") return functionSignature(symbol);
 		if (symbol.kind === "variable" || symbol.kind === "constant")
 			return `${symbol.kind} ${symbol.name}${symbol.type ? `: ${symbol.type}` : ""}`;
 		if (symbol.containerName) return `${symbol.containerName}.${symbol.name}`;
@@ -628,11 +620,6 @@ export class LanguageService implements vscode.Disposable {
 		if (binding.kind === "function")
 			return `${binding.name}()${binding.returnType ? ` -> ${binding.returnType}` : ""}`;
 		return `${binding.kind} ${binding.name}${binding.type ? `: ${binding.type}` : ""}`;
-	}
-
-	private signatureLabel(symbol: IndexedSymbol): string {
-		const parameters = (symbol.parameters ?? []).map(parameterLabel).join(", ");
-		return `${symbol.name}(${parameters})${symbol.returnType ? ` -> ${symbol.returnType}` : ""}`;
 	}
 
 	private toLocation(symbol: IndexedSymbol): vscode.Location {
