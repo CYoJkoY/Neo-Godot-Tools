@@ -67,15 +67,59 @@ const MEMBER_REFERENCE_KINDS: Readonly<Record<string, string>> = {
 	signal: "signal",
 	theme_item: "theme-item",
 	annotation: "annotation",
+	constructor: "constructor",
+	method: "method",
 };
 
-/** Renders one `[member name]`-style reference as a link to the current class. */
-function make_member_reference(classname: string | undefined, tag: string, name: string): string {
-	if (!classname) return `[${tag} ${name}]`;
+/** The symbols of the documentation page a short reference may resolve to. */
+interface PageContext {
+	readonly classname?: string;
+	/** Only a class page declares the constants and enums a short reference may name. */
+	readonly classPage: boolean;
+	readonly constants: ReadonlySet<string>;
+	readonly enums: ReadonlySet<string>;
+}
+
+/** `@GlobalScope` documents the engine-wide constants and enums. */
+const GLOBAL_SCOPE = "@GlobalScope";
+
+/** Collects the constants and enums declared by one page. */
+function page_context(symbol: GodotNativeSymbol): PageContext {
+	const children = (symbol.children ?? []) as GodotNativeSymbol[];
+	const constants = children
+		.filter((child) => child.kind === SymbolKind.Constant)
+		.map((child) => child.name);
+	// const Control.FOCUS_ALL: FocusMode = 2 -> FocusMode
+	const typed = children
+		.filter((child) => child.kind === SymbolKind.Constant)
+		.map((child) => /:\s*([\w.]+)\s*=/.exec(child.detail ?? "")?.[1])
+		.filter((name): name is string => name !== undefined);
+	const enums = children.filter((child) => child.kind === SymbolKind.Enum).map((child) => child.name);
+	return {
+		classname: symbol.native_class,
+		classPage: symbol.kind === SymbolKind.Class,
+		constants: new Set(constants),
+		enums: new Set([...enums, ...typed]),
+	};
+}
+
+/** Godot resolves a short constant/enum on the page first, then in `@GlobalScope`. */
+function member_reference_class(context: PageContext, tag: string, name: string): string {
+	const declared = tag === "constant" ? context.constants : tag === "enum" ? context.enums : undefined;
+	const classname = context.classname ?? "";
+	if (!context.classPage || !declared || declared.has(name)) return classname;
+	return GLOBAL_SCOPE;
+}
+
+/** Renders one `[member name]`-style reference as a link to its documentation. */
+function make_member_reference(context: PageContext, tag: string, name: string): string {
+	if (!context.classname) return `[${tag} ${name}]`;
+	const target = member_reference_class(context, tag, name);
 	const anchor = doc_symbol_anchor(MEMBER_REFERENCE_KINDS[tag], name);
+	// Only a symbol of the current page can be reached through a local anchor.
 	return element("a", name, {
-		href: `#${anchor}`,
-		onclick: `inspect('${classname}', '${name}')`,
+		href: target === context.classname ? `#${anchor}` : "",
+		onclick: `inspect('${target}', '${name}')`,
 	});
 }
 
@@ -231,9 +275,10 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 
 export function make_symbol_document(symbol: GodotNativeSymbol): string {
 	const classlink = make_link(symbol.native_class, undefined);
+	const context = page_context(symbol);
 	return symbol.kind === SymbolKind.Class
-		? make_class_document(symbol, classlink)
-		: make_member_document(symbol, classlink);
+		? make_class_document(symbol, classlink, context)
+		: make_member_document(symbol, classlink, context);
 }
 
 /** Signature line of a function-like member, linking the return type and name. */
@@ -253,6 +298,7 @@ function make_function_signature(s: GodotNativeSymbol, classlink: string, with_c
 function make_symbol_elements(
 	s: GodotNativeSymbol,
 	classlink: string,
+	context: PageContext,
 	with_class = false,
 ): { index?: string; body: string } {
 	switch (s.kind) {
@@ -266,7 +312,7 @@ function make_symbol_elements(
 			const title = element("h4", `${type} ${with_class ? `${classlink}.` : ""}${s.name}`);
 			return {
 				index: `${type} ${name}`,
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		case SymbolKind.Constant: {
@@ -278,7 +324,7 @@ function make_symbol_elements(
 			const value = element("code", parts[4]);
 			const title = element("p", `${type} ${with_class ? `${classlink}.` : ""}${parts[1]} = ${value}`);
 			return {
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		case SymbolKind.Event: {
@@ -291,7 +337,7 @@ function make_symbol_elements(
 			const prefix = with_class ? "signal " : "";
 			const title = element("p", `${prefix}${with_class ? `${classlink}.` : ""}${s.name}( ${args} )`);
 			return {
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		case SymbolKind.Method:
@@ -302,7 +348,7 @@ function make_symbol_elements(
 			const title = element("h4", signature);
 			return {
 				index: signature,
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		default:
@@ -337,7 +383,7 @@ function section_of(kind: SymbolKind | undefined): string {
 	);
 }
 
-function make_class_document(symbol: GodotNativeSymbol, classlink: string): string {
+function make_class_document(symbol: GodotNativeSymbol, classlink: string, context: PageContext): string {
 	// Two lists per section: the anchor index at the top, the descriptions below.
 	const index: Record<string, string[]> = {};
 	const body: Record<string, string[]> = {};
@@ -362,7 +408,7 @@ function make_class_document(symbol: GodotNativeSymbol, classlink: string): stri
 
 	((symbol.children ?? []) as GodotNativeSymbol[]).map((child) => {
 		const key = section_of(child.kind);
-		const elements = make_symbol_elements(child, classlink);
+		const elements = make_symbol_elements(child, classlink, context);
 		const attributes = { id: symbol_element_id(child), "data-symbol": child.name };
 		if (MEMBER_SECTIONS.some((section) => section.key === key && section.index))
 			push(index, key, element("li", elements.index ?? ""));
@@ -384,7 +430,7 @@ function make_class_document(symbol: GodotNativeSymbol, classlink: string): stri
 	return [
 		element("h2", `Class: ${symbol.name}`),
 		inheritance,
-		element("p", format_documentation(symbol.documentation, symbol.native_class)),
+		element("p", format_documentation(symbol.documentation, context)),
 		sections,
 		descriptions,
 		add_group("Other Members", bodies[OTHER_SECTION] ?? ""),
@@ -392,8 +438,8 @@ function make_class_document(symbol: GodotNativeSymbol, classlink: string): stri
 	].join("");
 }
 
-function make_member_document(symbol: GodotNativeSymbol, classlink: string): string {
-	const elements = make_symbol_elements(symbol, classlink, true);
+function make_member_document(symbol: GodotNativeSymbol, classlink: string, context: PageContext): string {
+	const elements = make_symbol_elements(symbol, classlink, context, true);
 	const is_callable = symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Method;
 	const heading = elements.index && !is_callable ? element("h2", elements.index) : "";
 	return heading + element("div", elements.body);
@@ -472,7 +518,7 @@ function replace_references(html: string, patterns: ReadonlyArray<readonly [RegE
 		.join("");
 }
 
-function format_documentation(bbcode: string | undefined, classname: string | undefined) {
+function format_documentation(bbcode: string | undefined, context: PageContext) {
 	// ya-bbcode doesn't parse [code skip-lint] as a [code] tag
 	const stripCodeSkipLint = (text: string): string => text.replaceAll("[code skip-lint]", "[code]").trim();
 
@@ -506,11 +552,10 @@ function format_documentation(bbcode: string | undefined, classname: string | un
 	const reference_patterns: Array<[RegExp, ReferenceReplacement]> = [
 		// [param <name>]
 		[/\[param\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, "<code>$1</code>"],
-		// [method <name>]
-		[/\[method\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, `<a href="" onclick="inspect('${classname}', '$1')">$1</a>`],
-		// [member <name>], [constant <name>], [enum <name>], [signal <name>],
-		// [theme_item <name>] and [annotation <name>]
-		[/(?:\[(member|constant|enum|signal|theme_item|annotation)\s+(@?[A-Z_a-z][A-Z_a-z0-9]*)\])/g, (_match: string, tag = "", name = "") => make_member_reference(classname, tag, name)],
+		// [method <name>], [member <name>], [constant <name>], [enum <name>],
+		// [signal <name>], [theme_item <name>], [annotation <name>],
+		// and [constructor <name>]
+		[/(?:\[(method|constructor|member|constant|enum|signal|theme_item|annotation)\s+(@?[A-Z_a-z][A-Z_a-z0-9]*)\])/g, (_match: string, tag = "", name = "") => make_member_reference(context, tag, name)],
 		// [<reference>]
 		[/\[(\w+)\]/g, `<a href="" onclick="inspect('$1')">$1</a>`],
 		// [method <class>.<name>]

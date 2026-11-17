@@ -157,9 +157,10 @@ describe("documentation anchors", () => {
 });
 
 /** Renders only the documentation paragraph of a single method. */
-function render_documentation(bbcode: string): string {
+function render_documentation(bbcode: string, children: Array<Partial<GodotNativeSymbol>> = []): string {
 	const html = make_symbol_document(
 		classSymbol([
+			...children,
 			{ name: "abs", kind: SymbolKind.Method, detail: "abs(x: float) -> float", documentation: bbcode, native_class: "Node" },
 		]),
 	);
@@ -215,13 +216,17 @@ describe("documentation bbcode", () => {
 });
 
 describe("documentation references", () => {
+	/** The constants and enums a `Control` page declares for short references. */
+	const control_members: Array<Partial<GodotNativeSymbol>> = [
+		{ name: "FOCUS_ALL", kind: SymbolKind.Constant, detail: "const Control.FOCUS_ALL: FocusMode = 2", documentation: "" },
+		{ name: "FocusMode", kind: SymbolKind.Enum, detail: "", documentation: "" },
+	];
 	const cases = [
 		{ bbcode: "[member mouse_filter]", tag: "member", name: "mouse_filter", anchor: "property-mouse_filter" },
-		{ bbcode: "[constant FOCUS_ALL]", tag: "constant", name: "FOCUS_ALL", anchor: "constant-focus_all" },
-		{ bbcode: "[enum Error]", tag: "enum", name: "Error", anchor: "enum-error" },
 		{ bbcode: "[signal changed]", tag: "signal", name: "changed", anchor: "signal-changed" },
 		{ bbcode: "[theme_item normal]", tag: "theme_item", name: "normal", anchor: "theme-item-normal" },
 		{ bbcode: "[annotation export]", tag: "annotation", name: "export", anchor: "annotation-export" },
+		{ bbcode: "[constructor _init]", tag: "constructor", name: "_init", anchor: "constructor-_init" },
 	] as const;
 
 	for (const item of cases) {
@@ -236,10 +241,36 @@ describe("documentation references", () => {
 		});
 	}
 
+	it("links a declared constant and enum to the current class", () => {
+		const constant = render_documentation("[constant FOCUS_ALL]", control_members);
+		assert.ok(constant.includes('href="#constant-focus_all"'), "the declared constant keeps its local anchor");
+		assert.ok(constant.includes("inspect('Node', 'FOCUS_ALL')"), "and resolves on the current page");
+
+		const enumeration = render_documentation("[enum FocusMode]", control_members);
+		assert.ok(enumeration.includes('href="#enum-focusmode"'), "the declared enum keeps its local anchor");
+		assert.ok(enumeration.includes("inspect('Node', 'FocusMode')"), "and resolves on the current page");
+	});
+
+	it("falls back to @GlobalScope for constants and enums the page does not declare", () => {
+		const constant = render_documentation("[constant OK]");
+		assert.ok(constant.includes("inspect('@GlobalScope', 'OK')"), "a global constant resolves in @GlobalScope");
+		assert.ok(!constant.includes('href="#constant-ok"'), "a foreign page has no local anchor to jump to");
+
+		const enumeration = render_documentation("[enum Error]");
+		assert.ok(enumeration.includes("inspect('@GlobalScope', 'Error')"), "a global enum resolves in @GlobalScope");
+		assert.ok(!enumeration.includes("inspect('Node', 'Error')"), "the current page is not used as a guess");
+	});
+
 	it("keeps dotted member references class-aware", () => {
 		const html = render_documentation("[member Control.size]");
 		assert.ok(html.includes("inspect('Control', 'size')"), "dotted references keep their explicit class");
 		assert.ok(!html.includes("inspect('Node', 'size')"), "the current class is not substituted");
+
+		const constructor_link = render_documentation("[constructor Vector2.Vector2]");
+		assert.ok(
+			constructor_link.includes("inspect('Vector2', 'Vector2')"),
+			"a dotted constructor keeps its explicit class",
+		);
 	});
 
 	for (const tag of ["codeblock", "gdscript", "csharp"] as const) {
