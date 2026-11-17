@@ -19,6 +19,14 @@ const FENCED_BLOCK = /\[(codeblock|gdscript|csharp)(?:\s[^\]]*)?\]\n?([\s\S]*?)\
 /** Inline `[code]` and `[code skip-lint]` spans. */
 const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
 
+/** Markdown a docstring may already contain; its content is literal for Markdown. */
+const MARKDOWN_FENCE = /```[\s\S]*?```/g;
+const MARKDOWN_CODE_SPAN = /`[^`\n]+`/g;
+
+/** Lists, whose items Godot writes one per line. */
+const UNORDERED_LIST = /\[ul\]([\s\S]*?)\[\/ul\]/g;
+const ORDERED_LIST = /\[ol\]([\s\S]*?)\[\/ol\]/g;
+
 /** Reference tags that name a symbol; `[param]` shares the shape. */
 const REFERENCE =
 	/\[(?:method|constructor|member|constant|enum|signal|theme_item|annotation|param)\s+(@?[A-Za-z_][\w.]*)\]/g;
@@ -31,7 +39,7 @@ const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\]/g;
  * itself carries nothing a hover can show.
  */
 const LAYOUT_TAG =
-	/\[\/?(?:center|color|bgcolor|fgcolor|font|font_size|outline_size|outline_color|table|cell|ul|ol|indent|img|u|codeblocks)(?:[=\s][^\]]*)?\]/g;
+	/\[\/?(?:center|color|bgcolor|fgcolor|font|font_size|outline_size|outline_color|table|cell|indent|img|u|codeblocks)(?:[=\s][^\]]*)?\]/g;
 
 /** A run of `[br]` and the whitespace around it. */
 const LINE_BREAK_RUN = /\s*(?:\[br\]\s*)+/g;
@@ -49,7 +57,23 @@ const line_break = (run: string): string => {
 
 /** A fenced block; the language is only known for the two language tags. */
 const fenced = (tag: string, code: string): string =>
-	`\`\`\`${tag === "gdscript" || tag === "csharp" ? tag : ""}\n${code.trim()}\n\`\`\``;
+	`\`\`\`${tag === "gdscript" || tag === "csharp" ? tag : ""}\n${stripWrapperNewlines(code)}\n\`\`\``;
+
+/**
+ * Removes the newlines that separate the body from its tags. Only those are
+ * removed: the first line of a GDScript sample may carry the indentation that
+ * makes it readable, and trimming would shift that line out of its block.
+ */
+const stripWrapperNewlines = (code: string): string => code.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+
+/** A list block; `-` for bullets, `1.` for the ordered form Markdown renumbers. */
+const listBlock = (marker: string, content: string): string =>
+	`\n\n${content
+		.split("\n")
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0)
+		.map((item) => `${marker} ${item}`)
+		.join("\n")}\n\n`;
 
 /**
  * Wraps `content` in a code span. Content that already holds a backtick needs a
@@ -67,8 +91,13 @@ const stash = (blocks: string[], rendered: string): string => {
 	return placeholder(blocks.length - 1);
 };
 
+/**
+ * Puts the stashed blocks back. The walk goes from the last block to the first
+ * because a block can contain an earlier one: a Markdown fence inside a
+ * `[codeblock]` is stashed before the block that wraps it.
+ */
 const restore = (text: string, blocks: readonly string[]): string =>
-	blocks.reduce((result, block, index) => result.replace(placeholder(index), () => block), text);
+	blocks.reduceRight((result, block, index) => result.replace(placeholder(index), () => block), text);
 
 /**
  * Markdown for one docstring. Code is stashed first so no later rule rewrites
@@ -77,10 +106,14 @@ const restore = (text: string, blocks: readonly string[]): string =>
 export function bbcodeToMarkdown(bbcode: string): string {
 	const blocks: string[] = [];
 	const stashed = bbcode
+		.replaceAll(MARKDOWN_FENCE, (match) => stash(blocks, match))
+		.replaceAll(MARKDOWN_CODE_SPAN, (match) => stash(blocks, match))
 		.replaceAll(FENCED_BLOCK, (_match, tag: string, code: string) => stash(blocks, fenced(tag, code)))
 		.replaceAll(INLINE_CODE, (_match, content: string) => stash(blocks, codeSpan(content)));
 
 	const converted = stashed
+		.replace(UNORDERED_LIST, (_match, content: string) => listBlock("-", content))
+		.replace(ORDERED_LIST, (_match, content: string) => listBlock("1.", content))
 		.replace(LINE_BREAK_RUN, line_break)
 		.replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/g, "[$2]($1)")
 		.replace(/\[url\]([\s\S]*?)\[\/url\]/g, "<$1>")

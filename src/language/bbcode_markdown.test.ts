@@ -32,6 +32,27 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(markdown, "```gdscript\nvar speed := 1\n```");
 	});
 
+	it("keeps the indentation of a fenced code block", () => {
+		const markdown = bbcodeToMarkdown("[gdscript]\n\tvar speed := 1\n\tif speed > 0:\n\t\tpass\n[/gdscript]");
+		assert.equal(markdown, "```gdscript\n\tvar speed := 1\n\tif speed > 0:\n\t\tpass\n```");
+	});
+
+	it("renders [ul] items as a Markdown list", () => {
+		assert.equal(bbcodeToMarkdown("Options:[ul]\nFirst\nSecond\n[/ul]"), "Options:\n\n- First\n- Second");
+	});
+
+	it("renders [ol] items as a numbered Markdown list", () => {
+		assert.equal(bbcodeToMarkdown("[ol]\nFirst\nSecond\n[/ol]"), "1. First\n1. Second");
+	});
+
+	it("keeps Markdown code spans literal", () => {
+		assert.equal(bbcodeToMarkdown("Set `offset` to `[param amount]`."), "Set `offset` to `[param amount]`.");
+	});
+
+	it("keeps Markdown fences literal", () => {
+		assert.equal(bbcodeToMarkdown("```\n[br] stays\n```"), "```\n[br] stays\n```");
+	});
+
 	it("renders [param] as inline code", () => {
 		assert.equal(bbcodeToMarkdown("Returns [param amount] unchanged."), "Returns `amount` unchanged.");
 	});
