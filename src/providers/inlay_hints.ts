@@ -29,6 +29,9 @@ export interface InlayHintSource {
 /** Characters a type name is made of; brackets delimit its type arguments. */
 const TYPE_NAME_CHARACTER = /[\w.]/;
 
+/** A script qualifier in a detail, e.g. `player.gd.` or `res://actors/player.gd.`. */
+const SCRIPT_QUALIFIER = /(?:(?:res|user):\/\/|[A-Za-z]:[\\/]|[\\/]?)(?:[\w.-]+[\\/])*[\w.-]+\.gd\./g;
+
 /**
  * The declared type of a detail string, e.g. `int` for `var a: int`.
  *
@@ -57,8 +60,8 @@ function declaredType(detail: string): string | undefined {
 function hintType(detail: string): string | undefined {
 	const type = declaredType(detail);
 	if (!type) return undefined;
-	// A detail may name the script that declares the type: `player.gd.Player`.
-	return type.replace(/[\w.]+\.gd\./g, "");
+	// A detail may name the script that declares the type, and its resource path.
+	return type.replace(SCRIPT_QUALIFIER, "");
 }
 
 type HoverResult = {

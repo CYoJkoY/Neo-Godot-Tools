@@ -161,11 +161,12 @@ describe("inlay hints", () => {
 	});
 
 	it("drops the script qualifier of a detail and keeps nested arguments", async () => {
-		const source = "var hero := null\nvar party := []\n";
+		const source = "var hero := null\nvar party := []\nvar squad := []\n";
 		const document = fakeDocument("/game/player.gd", source);
 		const symbols = [
 			{ name: "hero", detail: "var hero: player.gd.Player" },
 			{ name: "party", detail: "var party: Array[player.gd.Player]" },
+			{ name: "squad", detail: "var squad: Array[res://actors/player.gd.Player]" },
 		] as unknown as vscode.DocumentSymbol[];
 		const hints = await gdscriptHints(
 			document,
@@ -177,7 +178,7 @@ describe("inlay hints", () => {
 
 		assert.deepEqual(
 			hints.map((hint) => hint.label),
-			["Player", "Array[Player]"],
+			["Player", "Array[Player]", "Array[Player]"],
 			"the written type is valid GDScript",
 		);
 	});
