@@ -24,6 +24,7 @@ export interface GDScriptNode {
 	kind: GDScriptNodeKind;
 	name?: string;
 	range: SourceRange;
+	readonly annotationStartLine?: number;
 	/**
 	 * Offset of the identifier that declares the node.
 	 *

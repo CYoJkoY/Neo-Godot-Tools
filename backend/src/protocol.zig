@@ -526,6 +526,10 @@ fn writeDeclaration(
     try stringify.beginObject();
     try stringify.objectField("kind");
     try stringify.write(declaration.kind.wireName());
+    if (declaration.annotation_start_line) |line| {
+        try stringify.objectField("annotationStartLine");
+        try stringify.print("{d}", .{line});
+    }
     switch (declaration.kind) {
         .script => {},
         .class => {

@@ -2,6 +2,24 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { parseGDScript } from "./parser.js";
 
+test("records decorating annotations without changing declaration ranges", () => {
+	const source = 'class_name Sample\r\n@export_group("Stats")\r\n## Speed.\r\n@export_range(\r\n\t0, 10\r\n)\r\n@onready\r\n\r\nvar speed = 1\r\nvar plain = 2\r\n';
+	const declarations = parseGDScript(source).ast.declarations;
+	assert.deepEqual(declarations.map((node) => [node.name, node.annotationStartLine, node.range.start.line]), [
+		["Sample", undefined, 0],
+		["speed", 3, 8],
+		["plain", undefined, 9],
+	]);
+});
+
+test("keeps an enclosing declaration after an orphaned inner annotation", () => {
+	const result = parseGDScript("class Inner:\n\t@export\nvar outer = 1\n");
+	assert.deepEqual(result.ast.declarations.map((node) => node.name), ["Inner", "outer"]);
+	const inner = result.ast.declarations[0];
+	assert.equal(inner.kind, "class");
+	if (inner.kind === "class") assert.deepEqual(inner.declarations, []);
+});
+
 test("parses top-level GDScript declarations", () => {
 	const source = `class_name Player\nextends CharacterBody2D\n\nsignal damaged(amount: int)\nconst SPEED: float = 10.0\nvar health: int = 100\n\nfunc move(direction: Vector2, speed := SPEED) -> void:\n\tposition += direction * speed\n`;
 	const result = parseGDScript(source);

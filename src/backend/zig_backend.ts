@@ -713,7 +713,7 @@ const decodeEnumMembers = (value: unknown, reader: StringTableReader): GDScriptE
 		return { name, value: memberValue ?? undefined, range: memberRange };
 	});
 
-const decodeDeclaration = (value: unknown, reader: StringTableReader): GDScriptDeclaration | undefined => {
+const decodeDeclarationFields = (value: unknown, reader: StringTableReader): GDScriptDeclaration | undefined => {
 	if (!isRecord(value)) return undefined;
 	const kind = value["kind"];
 	if (!isNodeKind(kind) || kind === "script") return undefined;
@@ -801,6 +801,15 @@ const decodeDeclaration = (value: unknown, reader: StringTableReader): GDScriptD
 		default:
 			return undefined;
 	}
+};
+
+const decodeDeclaration = (value: unknown, reader: StringTableReader): GDScriptDeclaration | undefined => {
+	if (!isRecord(value)) return undefined;
+	const declaration = decodeDeclarationFields(value, reader);
+	if (declaration === undefined || value["annotationStartLine"] === undefined) return declaration;
+	const annotationStartLine = readOffset(value, "annotationStartLine");
+	if (annotationStartLine === undefined || annotationStartLine > declaration.range.start.line) return undefined;
+	return { ...declaration, annotationStartLine };
 };
 
 const decodeDeclarations = (value: unknown, reader: StringTableReader): GDScriptDeclaration[] | undefined =>

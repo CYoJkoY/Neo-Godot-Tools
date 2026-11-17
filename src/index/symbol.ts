@@ -55,11 +55,11 @@ export interface IndexedFile {
  * the declaration, so they are skipped while walking upwards.
  */
 export function extractDocumentation(source: string, line: number): string | undefined {
-	return extractDocumentationFromLines(source.split(/\r?\n/), line);
+	return extractDocumentationFromLines(withoutStrings(source).split(/\r?\n/), line);
 }
 
-const DOCUMENTATION_LINE = /^\s*##(?!#)(.*)$/;
-const ANNOTATION_LINE = /^\s*@/;
+const SCRIPT_DOCUMENTATION_LINE = /^\s*##(.*)$/;
+const COMMENTS_AND_STRINGS = /#[^\r\n]*|"""(?:\\[\s\S]|(?!""")[^\\])*(?:"""|$)|'''(?:\\[\s\S]|(?!''')[^\\])*(?:'''|$)|"(?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*"?|'(?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*'?/g;
 
 function extractDocumentationFromLines(lines: readonly string[], line: number): string | undefined {
 	if (line <= 0) return undefined;
@@ -79,26 +79,14 @@ function extractDocumentationFromLines(lines: readonly string[], line: number): 
 	return documentation.length ? documentation : undefined;
 }
 
-/** Text of the `##` run from `start` to `end`, both included. */
-function documentationText(lines: readonly string[], start: number, end: number): string | undefined {
-	const parts = lines.slice(start, end + 1).map((text) => {
-		const match = text.match(DOCUMENTATION_LINE);
-		return (match?.[1] ?? "").replace(/^ /, "").trimEnd();
-	});
-	const documentation = parts.join("\n").replace(/\s+$/, "");
-	return documentation.length ? documentation : undefined;
-}
-
 /**
- * End of the `##` run that starts at `start`.
- *
- * Only the first documentation line of a file can describe the script, and a
- * documentation block is a run of adjacent lines, so the run is walked forward
- * instead of collecting every block in the file.
+ * Blank out multi-line string contents so `##` inside a string is not read as a
+ * comment. Line breaks survive, which keeps line numbers aligned with the file.
  */
-function documentationEnd(lines: readonly string[], start: number): number {
-	const following = lines.findIndex((text, index) => index > start && !DOCUMENTATION_LINE.test(text));
-	return following === -1 ? lines.length - 1 : following - 1;
+function withoutStrings(source: string): string {
+	return source.replace(COMMENTS_AND_STRINGS, (text) =>
+		text.startsWith("#") ? text : text.replace(/[^\r\n]/g, " "),
+	);
 }
 
 /**
@@ -112,17 +100,31 @@ function documentationEnd(lines: readonly string[], start: number): number {
  */
 function extractScriptDocumentation(
 	lines: readonly string[],
-	firstMemberLine: number | undefined,
+	firstMember: GDScriptDeclaration | undefined,
 ): string | undefined {
-	const limit = firstMemberLine ?? lines.length;
-	const start = lines.findIndex((text, index) => index < limit && DOCUMENTATION_LINE.test(text));
+	const groupLine = lines.findIndex((text) => /^\s*@(?:export_group|export_category|export_subgroup)\b/.test(text));
+	const limit = Math.min(firstMember?.range.start.line ?? lines.length, groupLine === -1 ? lines.length : groupLine);
+	const start = lines.findIndex((text, index) => index < limit && SCRIPT_DOCUMENTATION_LINE.test(text));
 	if (start === -1) return undefined;
-	const end = documentationEnd(lines, start);
-	// Annotations of the member sit between its documentation and its declaration,
-	// which is the only way a block above the first member still documents a member.
-	const linesToMember = lines.slice(end + 1, limit);
-	if (firstMemberLine !== undefined && linesToMember.every((text) => ANNOTATION_LINE.test(text))) return undefined;
-	return documentationText(lines, start, end);
+	const end = lines.findIndex((text, index) => index > start && !SCRIPT_DOCUMENTATION_LINE.test(text));
+	const documentationEndLine = end === -1 ? limit - 1 : end - 1;
+	// A block that ends right before the first member documents that member, not
+	// the script. Annotations belong to the declaration, so the block also stops
+	// documenting the script when it ends just before them. The parser reports
+	// where the decorating annotations start because one can span several lines.
+	// A member that carries its own trailing `##` comment keeps the block as the
+	// script description, which is what Godot's parser does.
+	if (firstMember !== undefined) {
+		const memberStart = firstMember.annotationStartLine ?? firstMember.range.start.line;
+		const memberLine = lines[firstMember.range.start.line];
+		const inlineDocumentation = /^[^#]*##/.test(memberLine ?? "");
+		if (documentationEndLine + 1 === memberStart && !inlineDocumentation) return undefined;
+	}
+	const parts = lines.slice(start, documentationEndLine + 1).map((text) =>
+		(text.match(SCRIPT_DOCUMENTATION_LINE)?.[1] ?? "").replace(/^ /, "").trimEnd(),
+	);
+	const documentation = parts.join("\n").replace(/\s+$/, "");
+	return documentation.length > 0 ? documentation : undefined;
 }
 
 export function declarationToSymbol(
@@ -159,10 +161,11 @@ export function declarationToSymbol(
 	}
 	if (declaration.kind === "constant" || declaration.kind === "variable") symbol.type = declaration.type;
 	if (source) {
+		const documentationLine = declaration.annotationStartLine ?? declaration.range.start.line;
 		const documentation = sourceLines
-			? extractDocumentationFromLines(sourceLines, declaration.range.start.line)
-			: extractDocumentation(source, declaration.range.start.line);
-		if (documentation) symbol.documentation = documentation;
+			? extractDocumentationFromLines(sourceLines, documentationLine)
+			: extractDocumentation(source, documentationLine);
+		if (documentation !== undefined) symbol.documentation = documentation;
 	}
 	return symbol;
 }
@@ -171,7 +174,7 @@ export function collectSymbols(ast: GDScriptScript, uri: string, source?: string
 	const symbols: IndexedSymbol[] = [];
 	// Split once per file. Splitting in declarationToSymbol made symbol collection
 	// quadratic for scripts with many methods and documentation comments.
-	const sourceLines = source?.split(/\r?\n/);
+	const sourceLines = source === undefined ? undefined : withoutStrings(source).split(/\r?\n/);
 	const visit = (declarations: GDScriptDeclaration[], containerName?: string, containerRange?: SourceRange) => {
 		for (const declaration of declarations) {
 			if (declaration.kind === "enum") {
@@ -229,10 +232,13 @@ function applyScriptDocumentation(
 ): void {
 	if (!sourceLines) return;
 	const className = symbols.find((symbol) => symbol.kind === "class_name");
-	if (!className || className.documentation) return;
+	if (className === undefined || className.documentation !== undefined) return;
 	const firstMember = ast.declarations.find(
-		(declaration) => declaration.kind !== "class_name" && declaration.kind !== "extends",
+		(declaration) =>
+			declaration.kind !== "class_name" &&
+			declaration.kind !== "extends" &&
+			/\S/.test(sourceLines[declaration.range.start.line]?.[declaration.range.start.character] ?? ""),
 	);
-	const documentation = extractScriptDocumentation(sourceLines, firstMember?.range.start.line);
-	if (documentation) className.documentation = documentation;
+	const documentation = extractScriptDocumentation(sourceLines, firstMember);
+	if (documentation !== undefined) className.documentation = documentation;
 }
