@@ -86,23 +86,29 @@ interface ArgumentScan {
 	separators: number;
 	quote: string | undefined;
 	escaped: boolean;
+	comment: boolean;
 }
 
 function activeParameterIndex(argumentText: string): number {
 	const scan = Array.from(argumentText).reduce<ArgumentScan>(
 		(previous, char) => nextArgumentScan(char, previous),
-		{ depth: 0, separators: 0, quote: undefined, escaped: false },
+		{ depth: 0, separators: 0, quote: undefined, escaped: false, comment: false },
 	);
 	return scan.separators;
 }
 
 function nextArgumentScan(char: string, scan: ArgumentScan): ArgumentScan {
+	if (scan.comment) {
+		if (char === "\n") return { ...scan, comment: false };
+		return scan;
+	}
 	if (scan.quote) {
 		if (scan.escaped) return { ...scan, escaped: false };
 		if (char === "\\") return { ...scan, escaped: true };
 		if (char === scan.quote) return { ...scan, quote: undefined };
 		return scan;
 	}
+	if (char === "#") return { ...scan, comment: true };
 	if (char === '"' || char === "'") return { ...scan, quote: char };
 	if (char === "(" || char === "[" || char === "{") return { ...scan, depth: scan.depth + 1 };
 	if (char === ")" || char === "]" || char === "}") return { ...scan, depth: Math.max(0, scan.depth - 1) };

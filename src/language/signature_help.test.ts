@@ -16,10 +16,15 @@ func method2(values: Dictionary, flag: bool, count: int) -> void:
 func method3(text: String, flag: bool, count: int) -> void:
 	pass
 
+func method4(first: int, second: int, third: int) -> void:
+	pass
+
 func run() -> void:
 	method1([1, 2, 3], true, 0)
 	method2({"first": 1, "second": 2}, true, 0)
 	method3("first, second", true, 0)
+	method4(1, # user's value
+		2, 3)
 `;
 
 function createService(): LanguageService {
@@ -97,6 +102,15 @@ describe("local signature help", () => {
 		try {
 			assert.equal(signatureHelpAt(service, "true")?.activeParameter, 1);
 			assert.equal(signatureHelpAt(service, "[1, 2, 3], true, 0")?.activeParameter, 2);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it("keeps apostrophes in line comments out of the string state", () => {
+		const service = createService();
+		try {
+			assert.equal(signatureHelpAt(service, "# user's value\n\t\t2, ")?.activeParameter, 2);
 		} finally {
 			service.dispose();
 		}
