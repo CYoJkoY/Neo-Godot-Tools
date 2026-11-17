@@ -31,8 +31,11 @@ const ORDERED_LIST = /\[ol\]([\s\S]*?)\[\/ol\]/g;
 const REFERENCE =
 	/\[(?:method|constructor|member|constant|enum|signal|theme_item|annotation|param)\s+(@?[A-Za-z_][\w.]*)\]/g;
 
-/** A bare class reference. A preceding identifier keeps `Array[Node]` intact. */
-const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\]/g;
+/**
+ * A bare class reference. A preceding identifier keeps `Array[Node]` intact,
+ * and a trailing `(` keeps a Markdown link label such as `[Node](url)` intact.
+ */
+const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?!\()/g;
 
 /**
  * Tags that only affect the Godot editor layout. Their content stays; the tag

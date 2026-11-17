@@ -69,6 +69,10 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("An Array[int] of values"), "An Array[int] of values");
 	});
 
+	it("keeps a Markdown link label intact", () => {
+		assert.equal(bbcodeToMarkdown("See [Node](https://example.com)."), "See [Node](https://example.com).");
+	});
+
 	it("renders [lb] and [rb] as brackets", () => {
 		assert.equal(bbcodeToMarkdown("Write [lb]literal[rb] here"), "Write \\[literal\\] here");
 	});
