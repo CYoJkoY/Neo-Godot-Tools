@@ -77,6 +77,39 @@ function parameterLabel(parameter: IndexedParameter): string {
 	return `${parameter.name}${parameter.type ? `: ${parameter.type}` : ""}${parameter.defaultValue !== undefined ? ` = ${parameter.defaultValue}` : ""}`;
 }
 
+/**
+ * Number of argument separators before the cursor. Commas inside containers
+ * and string literals belong to the argument, not to the call.
+ */
+interface ArgumentScan {
+	depth: number;
+	separators: number;
+	quote: string | undefined;
+	escaped: boolean;
+}
+
+function activeParameterIndex(argumentText: string): number {
+	const scan = Array.from(argumentText).reduce<ArgumentScan>(
+		(previous, char) => nextArgumentScan(char, previous),
+		{ depth: 0, separators: 0, quote: undefined, escaped: false },
+	);
+	return scan.separators;
+}
+
+function nextArgumentScan(char: string, scan: ArgumentScan): ArgumentScan {
+	if (scan.quote) {
+		if (scan.escaped) return { ...scan, escaped: false };
+		if (char === "\\") return { ...scan, escaped: true };
+		if (char === scan.quote) return { ...scan, quote: undefined };
+		return scan;
+	}
+	if (char === '"' || char === "'") return { ...scan, quote: char };
+	if (char === "(" || char === "[" || char === "{") return { ...scan, depth: scan.depth + 1 };
+	if (char === ")" || char === "]" || char === "}") return { ...scan, depth: Math.max(0, scan.depth - 1) };
+	if (char === "," && scan.depth === 0) return { ...scan, separators: scan.separators + 1 };
+	return scan;
+}
+
 export class LanguageService implements vscode.Disposable {
 	readonly files = createFileIndex();
 	readonly symbols = createSymbolIndex(this.files);
@@ -341,7 +374,7 @@ export class LanguageService implements vscode.Disposable {
 			if (!match) return undefined;
 			const name = match[1];
 			const argumentText = match[2];
-			const activeParameter = argumentText.trim() ? argumentText.split(",").length - 1 : 0;
+			const activeParameter = argumentText.trim() ? activeParameterIndex(argumentText) : 0;
 			const builtin = resolveBuiltinSymbol(name);
 			if (builtin)
 				return this.signatureHelpForParameters(
