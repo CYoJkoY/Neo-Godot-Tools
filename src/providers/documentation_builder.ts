@@ -59,6 +59,26 @@ const theme_options: Partial<Record<vscode.ColorThemeKind, string>> = {
 /** Pagemap options for the current theme; empty for the high-contrast themes. */
 const options = theme_options[vscode.window.activeColorTheme.kind] ?? "";
 
+/** Documentation tags that reference another symbol on the same class page. */
+const MEMBER_REFERENCE_KINDS: Readonly<Record<string, string>> = {
+	member: "property",
+	constant: "constant",
+	enum: "enum",
+	signal: "signal",
+	theme_item: "theme-item",
+	annotation: "annotation",
+};
+
+/** Renders one `[member name]`-style reference as a link to the current class. */
+function make_member_reference(classname: string | undefined, tag: string, name: string): string {
+	if (!classname) return `[${tag} ${name}]`;
+	const anchor = doc_symbol_anchor(MEMBER_REFERENCE_KINDS[tag], name);
+	return element("a", name, {
+		href: `#${anchor}`,
+		onclick: `inspect('${classname}', '${name}')`,
+	});
+}
+
 /**
  * Scrolls the documentation page to a symbol. Anchors are kind-prefixed
  * (`method-abs`), so the lookup also falls back to plain names and to the
@@ -436,36 +456,67 @@ function highlight_blocks(html: string, tag: string, language: string): string {
 const RENDERED_CODE = /(<pre[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/;
 
 /** Applies the reference patterns to everything that is not rendered code. */
-function replace_references(html: string, patterns: ReadonlyArray<readonly [RegExp, string]>): string {
+type ReferenceReplacement = string | ((substring: string, ...args: any[]) => string);
+
+/** Applies the reference patterns to everything that is not rendered code. */
+function replace_references(html: string, patterns: ReadonlyArray<readonly [RegExp, ReferenceReplacement]>): string {
 	return html
 		.split(RENDERED_CODE)
 		.map((part) => {
 			if (part.startsWith("<pre") || part.startsWith("<code>")) return part;
-			return patterns.reduce((text, [pattern, replacement]) => text.replaceAll(pattern, replacement), part);
+			return patterns.reduce((text, [pattern, replacement]) => {
+				if (typeof replacement === "string") return text.replaceAll(pattern, replacement);
+				return text.replace(pattern, replacement);
+			}, part);
 		})
 		.join("");
 }
 
 function format_documentation(bbcode: string | undefined, classname: string | undefined) {
 	// ya-bbcode doesn't parse [code skip-lint] as a [code] tag
-	const parsed = parser.parse((bbcode ?? "").replaceAll("[code skip-lint]", "[code]").trim());
+	const stripCodeSkipLint = (text: string): string => text.replaceAll("[code skip-lint]", "[code]").trim();
+
+	// Pre-extract code blocks before parsing, because ya-bbcode splits attributes on "=".
+	// For [codeblock lang=text], it sees "codeblock lang" as the opening tag and "codeblock" as closing, so they never pair.
+	const code_blocks: Array<{code: string, language: string}> = [];
+	const codeblock_pattern = /\[(codeblock|gdscript|csharp)(?:\s+lang=([^\]]+))?\]\n?([\s\S]*?)\[\/\1\]/g;
+	const extractCodeBlock = (_match: string, tag: string, lang: string | undefined, code: string): string => {
+		const language = lang === "text" ? "text" : lang === "csharp" ? "csharp" : lang === "gdscript" ? "gdscript" : tag === "csharp" ? "csharp" : "gdscript";
+		const idx = code_blocks.length;
+		code_blocks.push({code, language});
+		return `@@CODEBLOCK_PLACEHOLDER_${idx}@@`;
+	};
+	const text = stripCodeSkipLint(bbcode ?? "").replace(codeblock_pattern, extractCodeBlock);
+	const parsed = parser.parse(text);
 	// Code blocks first: their content is already HTML and must not be re-scanned
 	// by the reference patterns below.
-	const code = (["codeblock", "gdscript", "csharp"] as const).reduce(
+	const code = parsed.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "").replaceAll("&quot;", '"');
+
+	// Restore pre-extracted code blocks
+	const restoreCodeBlock = (html: string, block: {code: string, language: string}, index: number): string =>
+		html.replace(`@@CODEBLOCK_PLACEHOLDER_${index}@@`, () => make_codeblock(block.code, block.language));
+	const restored_code = code_blocks.reduceRight(restoreCodeBlock, code);
+
+	// Fallback: process remaining non-attributed code blocks (for compatibility)
+	const fallback_code = (["codeblock", "gdscript", "csharp"] as const).reduce(
 		(html, tag) => highlight_blocks(html, tag, tag === "csharp" ? "csharp" : "gdscript"),
-		parsed.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "").replaceAll("&quot;", '"'),
+		restored_code,
 	);
-	const reference_patterns: Array<[RegExp, string]> = [
+
+	const reference_patterns: Array<[RegExp, ReferenceReplacement]> = [
 		// [param <name>]
 		[/\[param\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, "<code>$1</code>"],
 		// [method <name>]
 		[/\[method\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, `<a href="" onclick="inspect('${classname}', '$1')">$1</a>`],
+		// [member <name>], [constant <name>], [enum <name>], [signal <name>],
+		// [theme_item <name>] and [annotation <name>]
+		[/(?:\[(member|constant|enum|signal|theme_item|annotation)\s+(@?[A-Z_a-z][A-Z_a-z0-9]*)\])/g, (_match: string, tag: string, name: string) => make_member_reference(classname, tag, name)],
 		// [<reference>]
 		[/\[(\w+)\]/g, `<a href="" onclick="inspect('$1')">$1</a>`],
 		// [method <class>.<name>]
 		[/\[\w+\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\.(\w+)\]/g, `<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`],
 	];
-	return replace_references(code.replaceAll("<br/>		", ""), reference_patterns);
+	return replace_references(fallback_code.replaceAll("<br/>		", ""), reference_patterns);
 }
 
 const GDScriptGrammar = {

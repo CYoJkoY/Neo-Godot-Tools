@@ -113,7 +113,8 @@ describe("documentation anchors", () => {
 		);
 		// `$&` reaches the page as `$&amp;` (bbcode escape) and prism escapes the `&`
 		// again; what matters is that the marker is not expanded by the replacement.
-		assert.ok(html.includes("$&amp;amp; and $1"), "replacement sequences stay inside the code block");
+		// Code blocks are now extracted before bbcode parsing, so `&` is escaped once by Prism.
+		assert.ok(html.includes("$&amp; and $1"), "replacement sequences stay inside the code block");
 		assert.ok(!html.includes("inspect('codeblock')"), "the block marker is not re-expanded into a link");
 	});
 
@@ -159,7 +160,7 @@ describe("documentation anchors", () => {
 function render_documentation(bbcode: string): string {
 	const html = make_symbol_document(
 		classSymbol([
-			{ name: "abs", kind: SymbolKind.Method, detail: "abs(x: float) -> float", documentation: bbcode },
+			{ name: "abs", kind: SymbolKind.Method, detail: "abs(x: float) -> float", documentation: bbcode, native_class: "Node" },
 		]),
 	);
 	const start = html.indexOf("Method Descriptions");
@@ -211,4 +212,43 @@ describe("documentation bbcode", () => {
 		assert.ok(html.includes(`inspect('Node2D')`), "plain references keep becoming links");
 		assert.ok(html.includes("<code>Array[int]</code>"), "inline code stays literal next to a link");
 	});
+});
+
+describe("documentation references", () => {
+	const cases = [
+		{ bbcode: "[member mouse_filter]", tag: "member", name: "mouse_filter", anchor: "property-mouse_filter" },
+		{ bbcode: "[constant FOCUS_ALL]", tag: "constant", name: "FOCUS_ALL", anchor: "constant-focus_all" },
+		{ bbcode: "[enum Error]", tag: "enum", name: "Error", anchor: "enum-error" },
+		{ bbcode: "[signal changed]", tag: "signal", name: "changed", anchor: "signal-changed" },
+		{ bbcode: "[theme_item normal]", tag: "theme_item", name: "normal", anchor: "theme-item-normal" },
+		{ bbcode: "[annotation export]", tag: "annotation", name: "export", anchor: "annotation-export" },
+	] as const;
+
+	for (const item of cases) {
+		it(`links ${item.bbcode} to the current class`, () => {
+			const html = render_documentation(item.bbcode);
+			assert.ok(html.includes(`href="#${item.anchor}"`), "the anchor uses the documented kind prefix");
+			assert.ok(
+				html.includes(`onclick="inspect('Node', '${item.name}')"`),
+				"the link focuses the member on the current class page",
+			);
+			assert.ok(!html.includes(`[${item.tag}`), "the reference tag is not left as literal text");
+		});
+	}
+
+	it("keeps dotted member references class-aware", () => {
+		const html = render_documentation("[member Control.size]");
+		assert.ok(html.includes("inspect('Control', 'size')"), "dotted references keep their explicit class");
+		assert.ok(!html.includes("inspect('Node', 'size')"), "the current class is not substituted");
+	});
+
+	for (const tag of ["codeblock", "gdscript", "csharp"] as const) {
+		it(`renders [${tag}] blocks with language attributes`, () => {
+			const html = render_documentation(`[${tag} lang=text]value[/${tag}]`);
+			assert.ok(html.includes("<pre"), "the attributed block becomes a code block");
+			assert.ok(html.includes("value"), "the code text is preserved");
+			assert.ok(!html.includes(`[${tag} lang=text]`), "the opening attribute tag does not leak");
+			assert.ok(!html.includes(`[/${tag}]`), "the closing tag does not leak");
+		});
+	}
 });
