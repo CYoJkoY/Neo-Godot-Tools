@@ -455,8 +455,8 @@ function highlight_blocks(html: string, tag: string, language: string): string {
  */
 const RENDERED_CODE = /(<pre[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/;
 
-/** Applies the reference patterns to everything that is not rendered code. */
-type ReferenceReplacement = string | ((substring: string, ...args: any[]) => string);
+/** A literal replacement or a replacer that receives the match and its groups. */
+type ReferenceReplacement = string | ((substring: string, tag?: string, name?: string) => string);
 
 /** Applies the reference patterns to everything that is not rendered code. */
 function replace_references(html: string, patterns: ReadonlyArray<readonly [RegExp, ReferenceReplacement]>): string {
@@ -510,7 +510,7 @@ function format_documentation(bbcode: string | undefined, classname: string | un
 		[/\[method\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, `<a href="" onclick="inspect('${classname}', '$1')">$1</a>`],
 		// [member <name>], [constant <name>], [enum <name>], [signal <name>],
 		// [theme_item <name>] and [annotation <name>]
-		[/(?:\[(member|constant|enum|signal|theme_item|annotation)\s+(@?[A-Z_a-z][A-Z_a-z0-9]*)\])/g, (_match: string, tag: string, name: string) => make_member_reference(classname, tag, name)],
+		[/(?:\[(member|constant|enum|signal|theme_item|annotation)\s+(@?[A-Z_a-z][A-Z_a-z0-9]*)\])/g, (_match: string, tag = "", name = "") => make_member_reference(classname, tag, name)],
 		// [<reference>]
 		[/\[(\w+)\]/g, `<a href="" onclick="inspect('$1')">$1</a>`],
 		// [method <class>.<name>]
