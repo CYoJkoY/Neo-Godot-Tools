@@ -26,15 +26,39 @@ export interface InlayHintSource {
 	sendRequest(method: string, params?: unknown): Promise<unknown>;
 }
 
+/** Characters a type name is made of; brackets delimit its type arguments. */
+const TYPE_NAME_CHARACTER = /[\w.]/;
+
 /**
- * Returns a label from a detail string.
- * E.g. `var a: int` gets parsed to ` int `.
+ * The declared type of a detail string, e.g. `int` for `var a: int`.
+ *
+ * Type arguments may nest (`Array[Dictionary[String, int]]`), so the type ends
+ * at the first character outside the brackets that is neither a name character
+ * nor a dot.
  */
-function fromDetail(detail: string): string {
-	const match = detail.match(/: ([\w\d_.]+)/);
-	const label = match ? match[1] : "unknown";
-	// fix when detail includes a script name
-	return label.includes(".gd.") ? label.split(".gd.")[1] : label;
+function typeEnd(text: string, index: number, depth: number): number {
+	if (index >= text.length) return text.length;
+	const char = text[index];
+	if (char === "[") return typeEnd(text, index + 1, depth + 1);
+	if (char === "]") return typeEnd(text, index + 1, Math.max(0, depth - 1));
+	if (depth === 0 && !TYPE_NAME_CHARACTER.test(char)) return index;
+	return typeEnd(text, index + 1, depth);
+}
+
+function declaredType(detail: string): string | undefined {
+	const start = detail.indexOf(": ");
+	if (start < 0) return undefined;
+	const begin = start + 2;
+	const type = detail.slice(begin, typeEnd(detail, begin, 0)).trim();
+	return type || undefined;
+}
+
+/** The type a detail declares as valid GDScript, e.g. `int` for `var a: int`. */
+function hintType(detail: string): string | undefined {
+	const type = declaredType(detail);
+	if (!type) return undefined;
+	// A detail may name the script that declares the type: `player.gd.Player`.
+	return type.replace(/[\w.]+\.gd\./g, "");
 }
 
 type HoverResult = {
@@ -59,12 +83,11 @@ async function addByHover(
 	return response.contents?.value;
 }
 
-function buildHint(start: Position, detail: string): InlayHint {
-	const label = fromDetail(detail);
-	const hint = new vscode.InlayHint(start, label, vscode.InlayHintKind.Type);
+function buildHint(start: Position, type: string): InlayHint {
+	const hint = new vscode.InlayHint(start, type, vscode.InlayHintKind.Type);
 	hint.paddingLeft = true;
 	hint.paddingRight = true;
-	hint.textEdits = [vscode.TextEdit.insert(start, ` ${label} `)];
+	hint.textEdits = [vscode.TextEdit.insert(start, ` ${type} `)];
 	return hint;
 }
 
@@ -112,10 +135,12 @@ export async function gdscriptHints(
 		if (token.isCancellationRequested) return hints;
 		const start = document.positionAt(textStartOffset + match.index + match[0].length - 1);
 		const symbol = hasDetail ? symbols.find((entry) => entry.name === match[3]) : undefined;
-		if (symbol?.detail) return [...hints, buildHint(start, symbol.detail)];
+		const symbolType = symbol?.detail ? hintType(symbol.detail) : undefined;
+		if (symbolType) return [...hints, buildHint(start, symbolType)];
 		const hoverPosition = document.positionAt(textStartOffset + match.index + match[1].length);
 		const detail = await addByHover(document, hoverPosition, client);
-		return detail ? [...hints, buildHint(start, detail)] : hints;
+		const hoverType = detail ? hintType(detail) : undefined;
+		return hoverType ? [...hints, buildHint(start, hoverType)] : hints;
 	}, Promise.resolve([]));
 }
 
