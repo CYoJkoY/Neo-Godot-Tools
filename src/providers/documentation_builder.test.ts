@@ -113,7 +113,8 @@ describe("documentation anchors", () => {
 		);
 		// `$&` reaches the page as `$&amp;` (bbcode escape) and prism escapes the `&`
 		// again; what matters is that the marker is not expanded by the replacement.
-		assert.ok(html.includes("$&amp;amp; and $1"), "replacement sequences stay inside the code block");
+		// Code blocks are now extracted before bbcode parsing, so `&` is escaped once by Prism.
+		assert.ok(html.includes("$&amp; and $1"), "replacement sequences stay inside the code block");
 		assert.ok(!html.includes("inspect('codeblock')"), "the block marker is not re-expanded into a link");
 	});
 
@@ -172,10 +173,11 @@ describe("documentation anchors", () => {
 });
 
 /** Renders only the documentation paragraph of a single method. */
-function render_documentation(bbcode: string): string {
+function render_documentation(bbcode: string, children: Array<Partial<GodotNativeSymbol>> = []): string {
 	const html = make_symbol_document(
 		classSymbol([
-			{ name: "abs", kind: SymbolKind.Method, detail: "abs(x: float) -> float", documentation: bbcode },
+			...children,
+			{ name: "abs", kind: SymbolKind.Method, detail: "abs(x: float) -> float", documentation: bbcode, native_class: "Node" },
 		]),
 	);
 	const start = html.indexOf("Method Descriptions");
@@ -227,4 +229,73 @@ describe("documentation bbcode", () => {
 		assert.ok(html.includes(`inspect('Node2D')`), "plain references keep becoming links");
 		assert.ok(html.includes("<code>Array[int]</code>"), "inline code stays literal next to a link");
 	});
+});
+
+describe("documentation references", () => {
+	/** The constants and enums a `Control` page declares for short references. */
+	const control_members: Array<Partial<GodotNativeSymbol>> = [
+		{ name: "FOCUS_ALL", kind: SymbolKind.Constant, detail: "const Control.FOCUS_ALL: FocusMode = 2", documentation: "" },
+		{ name: "FocusMode", kind: SymbolKind.Enum, detail: "", documentation: "" },
+	];
+	const cases = [
+		{ bbcode: "[member mouse_filter]", tag: "member", name: "mouse_filter", anchor: "property-mouse_filter" },
+		{ bbcode: "[signal changed]", tag: "signal", name: "changed", anchor: "signal-changed" },
+		{ bbcode: "[theme_item normal]", tag: "theme_item", name: "normal", anchor: "theme-item-normal" },
+		{ bbcode: "[annotation export]", tag: "annotation", name: "export", anchor: "annotation-export" },
+		{ bbcode: "[constructor _init]", tag: "constructor", name: "_init", anchor: "constructor-_init" },
+	] as const;
+
+	for (const item of cases) {
+		it(`links ${item.bbcode} to the current class`, () => {
+			const html = render_documentation(item.bbcode);
+			assert.ok(html.includes(`href="#${item.anchor}"`), "the anchor uses the documented kind prefix");
+			assert.ok(
+				html.includes(`onclick="inspect('Node', '${item.name}')"`),
+				"the link focuses the member on the current class page",
+			);
+			assert.ok(!html.includes(`[${item.tag}`), "the reference tag is not left as literal text");
+		});
+	}
+
+	it("links a declared constant and enum to the current class", () => {
+		const constant = render_documentation("[constant FOCUS_ALL]", control_members);
+		assert.ok(constant.includes('href="#constant-focus_all"'), "the declared constant keeps its local anchor");
+		assert.ok(constant.includes("inspect('Node', 'FOCUS_ALL')"), "and resolves on the current page");
+
+		const enumeration = render_documentation("[enum FocusMode]", control_members);
+		assert.ok(enumeration.includes('href="#enum-focusmode"'), "the declared enum keeps its local anchor");
+		assert.ok(enumeration.includes("inspect('Node', 'FocusMode')"), "and resolves on the current page");
+	});
+
+	it("falls back to @GlobalScope for constants and enums the page does not declare", () => {
+		const constant = render_documentation("[constant OK]");
+		assert.ok(constant.includes("inspect('@GlobalScope', 'OK')"), "a global constant resolves in @GlobalScope");
+		assert.ok(!constant.includes('href="#constant-ok"'), "a foreign page has no local anchor to jump to");
+
+		const enumeration = render_documentation("[enum Error]");
+		assert.ok(enumeration.includes("inspect('@GlobalScope', 'Error')"), "a global enum resolves in @GlobalScope");
+		assert.ok(!enumeration.includes("inspect('Node', 'Error')"), "the current page is not used as a guess");
+	});
+
+	it("keeps dotted member references class-aware", () => {
+		const html = render_documentation("[member Control.size]");
+		assert.ok(html.includes("inspect('Control', 'size')"), "dotted references keep their explicit class");
+		assert.ok(!html.includes("inspect('Node', 'size')"), "the current class is not substituted");
+
+		const constructor_link = render_documentation("[constructor Vector2.Vector2]");
+		assert.ok(
+			constructor_link.includes("inspect('Vector2', 'Vector2')"),
+			"a dotted constructor keeps its explicit class",
+		);
+	});
+
+	for (const tag of ["codeblock", "gdscript", "csharp"] as const) {
+		it(`renders [${tag}] blocks with language attributes`, () => {
+			const html = render_documentation(`[${tag} lang=text]value[/${tag}]`);
+			assert.ok(html.includes("<pre"), "the attributed block becomes a code block");
+			assert.ok(html.includes("value"), "the code text is preserved");
+			assert.ok(!html.includes(`[${tag} lang=text]`), "the opening attribute tag does not leak");
+			assert.ok(!html.includes(`[/${tag}]`), "the closing tag does not leak");
+		});
+	}
 });

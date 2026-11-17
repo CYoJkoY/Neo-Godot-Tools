@@ -59,6 +59,70 @@ const theme_options: Partial<Record<vscode.ColorThemeKind, string>> = {
 /** Pagemap options for the current theme; empty for the high-contrast themes. */
 const options = theme_options[vscode.window.activeColorTheme.kind] ?? "";
 
+/** Documentation tags that reference another symbol on the same class page. */
+const MEMBER_REFERENCE_KINDS: Readonly<Record<string, string>> = {
+	member: "property",
+	constant: "constant",
+	enum: "enum",
+	signal: "signal",
+	theme_item: "theme-item",
+	annotation: "annotation",
+	constructor: "constructor",
+	method: "method",
+};
+
+/** The symbols of the documentation page a short reference may resolve to. */
+interface PageContext {
+	readonly classname?: string;
+	/** Only a class page declares the constants and enums a short reference may name. */
+	readonly classPage: boolean;
+	readonly constants: ReadonlySet<string>;
+	readonly enums: ReadonlySet<string>;
+}
+
+/** `@GlobalScope` documents the engine-wide constants and enums. */
+const GLOBAL_SCOPE = "@GlobalScope";
+
+/** Collects the constants and enums declared by one page. */
+function page_context(symbol: GodotNativeSymbol): PageContext {
+	const children = (symbol.children ?? []) as GodotNativeSymbol[];
+	const constants = children
+		.filter((child) => child.kind === SymbolKind.Constant)
+		.map((child) => child.name);
+	// const Control.FOCUS_ALL: FocusMode = 2 -> FocusMode
+	const typed = children
+		.filter((child) => child.kind === SymbolKind.Constant)
+		.map((child) => /:\s*([\w.]+)\s*=/.exec(child.detail ?? "")?.[1])
+		.filter((name): name is string => name !== undefined);
+	const enums = children.filter((child) => child.kind === SymbolKind.Enum).map((child) => child.name);
+	return {
+		classname: symbol.native_class,
+		classPage: symbol.kind === SymbolKind.Class,
+		constants: new Set(constants),
+		enums: new Set([...enums, ...typed]),
+	};
+}
+
+/** Godot resolves a short constant/enum on the page first, then in `@GlobalScope`. */
+function member_reference_class(context: PageContext, tag: string, name: string): string {
+	const declared = tag === "constant" ? context.constants : tag === "enum" ? context.enums : undefined;
+	const classname = context.classname ?? "";
+	if (!context.classPage || !declared || declared.has(name)) return classname;
+	return GLOBAL_SCOPE;
+}
+
+/** Renders one `[member name]`-style reference as a link to its documentation. */
+function make_member_reference(context: PageContext, tag: string, name: string): string {
+	if (!context.classname) return `[${tag} ${name}]`;
+	const target = member_reference_class(context, tag, name);
+	const anchor = doc_symbol_anchor(MEMBER_REFERENCE_KINDS[tag], name);
+	// Only a symbol of the current page can be reached through a local anchor.
+	return element("a", name, {
+		href: target === context.classname ? `#${anchor}` : "",
+		onclick: `inspect('${target}', '${name}')`,
+	});
+}
+
 /**
  * Scrolls the documentation page to a symbol. Anchors are kind-prefixed
  * (`method-abs`), so the lookup also falls back to plain names and to the
@@ -211,9 +275,10 @@ export function make_html_content(webview: vscode.Webview, symbol: GodotNativeSy
 
 export function make_symbol_document(symbol: GodotNativeSymbol): string {
 	const classlink = make_link(symbol.native_class, undefined);
+	const context = page_context(symbol);
 	return symbol.kind === SymbolKind.Class
-		? make_class_document(symbol, classlink)
-		: make_member_document(symbol, classlink);
+		? make_class_document(symbol, classlink, context)
+		: make_member_document(symbol, classlink, context);
 }
 
 /** Signature line of a function-like member, linking the return type and name. */
@@ -233,6 +298,7 @@ function make_function_signature(s: GodotNativeSymbol, classlink: string, with_c
 function make_symbol_elements(
 	s: GodotNativeSymbol,
 	classlink: string,
+	context: PageContext,
 	with_class = false,
 ): { index?: string; body: string } {
 	switch (s.kind) {
@@ -248,7 +314,7 @@ function make_symbol_elements(
 			const title = element("h4", `${type} ${with_class ? `${classlink}.` : ""}${s.name}`);
 			return {
 				index: `${type} ${name}`,
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		case SymbolKind.Constant: {
@@ -260,7 +326,7 @@ function make_symbol_elements(
 			const value = element("code", parts[4]);
 			const title = element("p", `${type} ${with_class ? `${classlink}.` : ""}${parts[1]} = ${value}`);
 			return {
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		case SymbolKind.Event: {
@@ -273,7 +339,7 @@ function make_symbol_elements(
 			const prefix = with_class ? "signal " : "";
 			const title = element("p", `${prefix}${with_class ? `${classlink}.` : ""}${s.name}( ${args} )`);
 			return {
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		case SymbolKind.Method:
@@ -284,7 +350,7 @@ function make_symbol_elements(
 			const title = element("h4", signature);
 			return {
 				index: signature,
-				body: element("div", title + element("p", format_documentation(s.documentation, s.native_class))),
+				body: element("div", title + element("p", format_documentation(s.documentation, context))),
 			};
 		}
 		default:
@@ -319,7 +385,7 @@ function section_of(kind: SymbolKind | undefined): string {
 	);
 }
 
-function make_class_document(symbol: GodotNativeSymbol, classlink: string): string {
+function make_class_document(symbol: GodotNativeSymbol, classlink: string, context: PageContext): string {
 	// Two lists per section: the anchor index at the top, the descriptions below.
 	const index: Record<string, string[]> = {};
 	const body: Record<string, string[]> = {};
@@ -344,7 +410,7 @@ function make_class_document(symbol: GodotNativeSymbol, classlink: string): stri
 
 	((symbol.children ?? []) as GodotNativeSymbol[]).map((child) => {
 		const key = section_of(child.kind);
-		const elements = make_symbol_elements(child, classlink);
+		const elements = make_symbol_elements(child, classlink, context);
 		const attributes = { id: symbol_element_id(child), "data-symbol": child.name };
 		if (MEMBER_SECTIONS.some((section) => section.key === key && section.index))
 			push(index, key, element("li", elements.index ?? ""));
@@ -366,7 +432,7 @@ function make_class_document(symbol: GodotNativeSymbol, classlink: string): stri
 	return [
 		element("h2", `Class: ${symbol.name}`),
 		inheritance,
-		element("p", format_documentation(symbol.documentation, symbol.native_class)),
+		element("p", format_documentation(symbol.documentation, context)),
 		sections,
 		descriptions,
 		add_group("Other Members", bodies[OTHER_SECTION] ?? ""),
@@ -374,8 +440,8 @@ function make_class_document(symbol: GodotNativeSymbol, classlink: string): stri
 	].join("");
 }
 
-function make_member_document(symbol: GodotNativeSymbol, classlink: string): string {
-	const elements = make_symbol_elements(symbol, classlink, true);
+function make_member_document(symbol: GodotNativeSymbol, classlink: string, context: PageContext): string {
+	const elements = make_symbol_elements(symbol, classlink, context, true);
 	const is_callable = symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Method;
 	const heading = elements.index && !is_callable ? element("h2", elements.index) : "";
 	return heading + element("div", elements.body);
@@ -437,37 +503,67 @@ function highlight_blocks(html: string, tag: string, language: string): string {
  */
 const RENDERED_CODE = /(<pre[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/;
 
+/** A literal replacement or a replacer that receives the match and its groups. */
+type ReferenceReplacement = string | ((substring: string, tag?: string, name?: string) => string);
+
 /** Applies the reference patterns to everything that is not rendered code. */
-function replace_references(html: string, patterns: ReadonlyArray<readonly [RegExp, string]>): string {
+function replace_references(html: string, patterns: ReadonlyArray<readonly [RegExp, ReferenceReplacement]>): string {
 	return html
 		.split(RENDERED_CODE)
 		.map((part) => {
 			if (part.startsWith("<pre") || part.startsWith("<code>")) return part;
-			return patterns.reduce((text, [pattern, replacement]) => text.replaceAll(pattern, replacement), part);
+			return patterns.reduce((text, [pattern, replacement]) => {
+				if (typeof replacement === "string") return text.replaceAll(pattern, replacement);
+				return text.replace(pattern, replacement);
+			}, part);
 		})
 		.join("");
 }
 
-function format_documentation(bbcode: string | undefined, classname: string | undefined) {
+function format_documentation(bbcode: string | undefined, context: PageContext) {
 	// ya-bbcode doesn't parse [code skip-lint] as a [code] tag
-	const parsed = parser.parse((bbcode ?? "").replaceAll("[code skip-lint]", "[code]").trim());
+	const stripCodeSkipLint = (text: string): string => text.replaceAll("[code skip-lint]", "[code]").trim();
+
+	// Pre-extract code blocks before parsing, because ya-bbcode splits attributes on "=".
+	// For [codeblock lang=text], it sees "codeblock lang" as the opening tag and "codeblock" as closing, so they never pair.
+	const code_blocks: Array<{code: string, language: string}> = [];
+	const codeblock_pattern = /\[(codeblock|gdscript|csharp)(?:\s+lang=([^\]]+))?\]\n?([\s\S]*?)\[\/\1\]/g;
+	const extractCodeBlock = (_match: string, tag: string, lang: string | undefined, code: string): string => {
+		const language = lang === "text" ? "text" : lang === "csharp" ? "csharp" : lang === "gdscript" ? "gdscript" : tag === "csharp" ? "csharp" : "gdscript";
+		const idx = code_blocks.length;
+		code_blocks.push({code, language});
+		return `@@CODEBLOCK_PLACEHOLDER_${idx}@@`;
+	};
+	const text = stripCodeSkipLint(bbcode ?? "").replace(codeblock_pattern, extractCodeBlock);
+	const parsed = parser.parse(text);
 	// Code blocks first: their content is already HTML and must not be re-scanned
 	// by the reference patterns below.
-	const code = (["codeblock", "gdscript", "csharp"] as const).reduce(
+	const code = parsed.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "").replaceAll("&quot;", '"');
+
+	// Restore pre-extracted code blocks
+	const restoreCodeBlock = (html: string, block: {code: string, language: string}, index: number): string =>
+		html.replace(`@@CODEBLOCK_PLACEHOLDER_${index}@@`, () => make_codeblock(block.code, block.language));
+	const restored_code = code_blocks.reduceRight(restoreCodeBlock, code);
+
+	// Fallback: process remaining non-attributed code blocks (for compatibility)
+	const fallback_code = (["codeblock", "gdscript", "csharp"] as const).reduce(
 		(html, tag) => highlight_blocks(html, tag, tag === "csharp" ? "csharp" : "gdscript"),
-		parsed.replaceAll(/\[\/?codeblocks\](<br\/>)?/g, "").replaceAll("&quot;", '"'),
+		restored_code,
 	);
-	const reference_patterns: Array<[RegExp, string]> = [
+
+	const reference_patterns: Array<[RegExp, ReferenceReplacement]> = [
 		// [param <name>]
 		[/\[param\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, "<code>$1</code>"],
-		// [method <name>]
-		[/\[method\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\]/g, `<a href="" onclick="inspect('${classname}', '$1')">$1</a>`],
+		// [method <name>], [member <name>], [constant <name>], [enum <name>],
+		// [signal <name>], [theme_item <name>], [annotation <name>],
+		// and [constructor <name>]
+		[/(?:\[(method|constructor|member|constant|enum|signal|theme_item|annotation)\s+(@?[A-Z_a-z][A-Z_a-z0-9]*)\])/g, (_match: string, tag = "", name = "") => make_member_reference(context, tag, name)],
 		// [<reference>]
 		[/\[(\w+)\]/g, `<a href="" onclick="inspect('$1')">$1</a>`],
 		// [method <class>.<name>]
 		[/\[\w+\s+(@?[A-Z_a-z][A-Z_a-z0-9]*?)\.(\w+)\]/g, `<a href="" onclick="inspect('$1', '$2')">$1.$2</a>`],
 	];
-	return replace_references(code.replaceAll("<br/>		", ""), reference_patterns);
+	return replace_references(fallback_code.replaceAll("<br/>		", ""), reference_patterns);
 }
 
 const GDScriptGrammar = {
