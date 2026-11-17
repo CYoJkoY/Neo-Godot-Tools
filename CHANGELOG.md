@@ -2,7 +2,32 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.3.3 — 2026-11-10 (pending)
+### 3.3.4 — 2026-11-18 (pending)
+
+Changes since [v3.3.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.3...v3.3.4).
+
+#### Added
+
+- **semantic:** highlight bound function parameters ([#250](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/250))
+- **formatter:** let users disable the GDScript formatter ([#255](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/255))
+
+#### Fixed
+
+- **process:** keep Godot children attached on Windows (#235) ([#236](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/236))
+- **docs:** render line breaks and keep inline code literal (#237) ([#238](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/238))
+- **definition:** open docs for builtin calls (#241) ([#242](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/242))
+- **docs:** render slash named properties (#243) ([#244](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/244))
+- **inlay:** keep container type arguments (#245) ([#246](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/246))
+- **signature:** ignore commas in nested arguments (#247) ([#248](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/248))
+- **docs:** link same-class member references (#239) ([#240](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/240))
+- **signature:** resolve nested call signature help ([#252](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/252))
+- **hover:** render docstring BBCode as Markdown ([#253](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/253))
+- **parser:** keep function bodies open across blank lines (#257) ([#258](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/258))
+- **outline:** nest symbols for sticky scroll (#259) ([#260](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/260))
+- **hover:** attach script docs to class\_name (#261) ([#262](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/262))
+- **scene-preview:** resolve resources from nearest project (#263) ([#264](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/264))
+
+### 3.3.3 — 2026-11-10
 
 Changes since [v3.3.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.2...v3.3.3).
 
@@ -15,6 +40,10 @@ Changes since [v3.3.2](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.2
 - \[Issue-229\] fix(previews): restore scene and shader preview initialization ([#230](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/230))
 - \[Issue-231\] feat(previews): render scenes and shaders with Godot and refresh panel surfaces ([#232](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/232))
 - \[Issue-233\] fix(symbols): serialize resync after a stale native revision ([#234](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/234))
+
+#### Documentation
+
+- **changelog:** update changelog ([dc34c9e](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/dc34c9ed0a3c2f122e37c88ad077ee5423187d76))
 
 ### 3.3.2 — 2026-11-07
 
