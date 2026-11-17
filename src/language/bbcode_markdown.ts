@@ -23,6 +23,10 @@ const INLINE_CODE = /\[code(?:\s[^\]]*)?\]([\s\S]*?)\[\/code\]/g;
 const MARKDOWN_FENCE = /```[\s\S]*?```/g;
 const MARKDOWN_CODE_SPAN = /`[^`\n]+`/g;
 
+/** Table rows; each `[cell]` of a row is a column. */
+const TABLE = /\[table(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/table\]/g;
+const CELL = /\[cell(?:[=\s][^\]]*)?\]([\s\S]*?)\[\/cell\]/g;
+
 /** Lists, whose items Godot writes one per line. */
 const UNORDERED_LIST = /\[ul\]([\s\S]*?)\[\/ul\]/g;
 const ORDERED_LIST = /\[ol\]([\s\S]*?)\[\/ol\]/g;
@@ -33,16 +37,17 @@ const REFERENCE =
 
 /**
  * A bare class reference. A preceding identifier keeps `Array[Node]` intact,
- * and a trailing `(` keeps a Markdown link label such as `[Node](url)` intact.
+ * and a trailing `(` or `[` keeps a Markdown link label such as `[Node](url)`
+ * and its reference-style form `[Node][api]` intact.
  */
-const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?!\()/g;
+const CLASS_REFERENCE = /(?<![\w])\[([A-Z][A-Za-z0-9_.]*)\](?![([])/g;
 
 /**
  * Tags that only affect the Godot editor layout. Their content stays; the tag
  * itself carries nothing a hover can show.
  */
 const LAYOUT_TAG =
-	/\[\/?(?:center|color|bgcolor|fgcolor|font|font_size|outline_size|outline_color|table|cell|indent|img|u|codeblocks)(?:[=\s][^\]]*)?\]/g;
+	/\[\/?(?:left|center|right|fill|color|bgcolor|fgcolor|font|font_size|outline_size|outline_color|cell|indent|img|u|codeblocks)(?:[=\s][^\]]*)?\]/g;
 
 /** A run of `[br]` and the whitespace around it. */
 const LINE_BREAK_RUN = /\s*(?:\[br\]\s*)+/g;
@@ -79,13 +84,40 @@ const listBlock = (marker: string, content: string): string =>
 		.join("\n")}\n\n`;
 
 /**
+ * A table block as a Markdown pipe table. The first row becomes the header,
+ * because a Markdown table needs one and Godot writes the header the same way.
+ * Column boundaries are what matters: dropping the tags alone would glue
+ * adjacent cells together.
+ */
+const tableBlock = (content: string): string => {
+	const rows = content
+		.split("\n")
+		.filter((line) => line.trim().length > 0)
+		// A table without `[cell]` tags still has one entry per line; keeping the
+		// line whole would otherwise drop it from the hover.
+		.map((line) => {
+			const cells = Array.from(line.matchAll(CELL), (cell) => cell[1].trim());
+			return cells.length > 0 ? cells : [line.trim()];
+		});
+	if (rows.length === 0) return "";
+	const columns = Math.max(...rows.map((cells) => cells.length));
+	const row = (cells: readonly string[]): string =>
+		`| ${Array.from({ length: columns }, (_unused, index) => cells[index] ?? "").join(" | ")} |`;
+	const [header, ...body] = rows;
+	const separator = row(Array.from({ length: columns }, () => "---"));
+	return `\n\n${[row(header), separator, ...body.map(row)].join("\n")}\n\n`;
+};
+
+/**
  * Wraps `content` in a code span. Content that already holds a backtick needs a
  * longer fence, which Markdown expresses with repeated delimiters.
  */
 const codeSpan = (content: string): string => {
-	const fence = content.includes("`") ? "``" : "`";
-	const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
-	return `${fence}${padding}${content.trim()}${padding}${fence}`;
+	const text = content.trim();
+	const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+	const fence = "`".repeat(longestRun + 1);
+	const padding = text.startsWith("`") || text.endsWith("`") ? " " : "";
+	return `${fence}${padding}${text}${padding}${fence}`;
 };
 
 /** Replaces a match with a placeholder and records its rendered form. */
@@ -115,6 +147,7 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		.replaceAll(INLINE_CODE, (_match, content: string) => stash(blocks, codeSpan(content)));
 
 	const converted = stashed
+		.replace(TABLE, (_match, content: string) => tableBlock(content))
 		.replace(UNORDERED_LIST, (_match, content: string) => listBlock("-", content))
 		.replace(ORDERED_LIST, (_match, content: string) => listBlock("1.", content))
 		.replace(LINE_BREAK_RUN, line_break)

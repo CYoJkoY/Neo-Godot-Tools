@@ -73,6 +73,10 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("See [Node](https://example.com)."), "See [Node](https://example.com).");
 	});
 
+	it("keeps a reference-style Markdown link label intact", () => {
+		assert.equal(bbcodeToMarkdown("See [Node][api]."), "See [Node][api].");
+	});
+
 	it("renders [lb] and [rb] as brackets", () => {
 		assert.equal(bbcodeToMarkdown("Write [lb]literal[rb] here"), "Write \\[literal\\] here");
 	});
@@ -85,6 +89,10 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("Press [kbd]Ctrl + A[/kbd]"), "Press `Ctrl + A`");
 	});
 
+	it("fences a code span with more backticks than its content", () => {
+		assert.equal(bbcodeToMarkdown("[code]a `` b[/code]"), "```a `` b```");
+	});
+
 	it("renders a link", () => {
 		assert.equal(
 			bbcodeToMarkdown("Read [url=https://godotengine.org]the docs[/url]"),
@@ -92,8 +100,19 @@ describe("docstring BBCode to Markdown", () => {
 		);
 	});
 
+	it("renders a table as a Markdown table", () => {
+		const markdown = bbcodeToMarkdown("[table]\n[cell]Name[/cell][cell]Value[/cell]\n[/table]");
+		assert.equal(markdown, "| Name | Value |\n| --- | --- |");
+	});
+
+	it("keeps rows of a table written without cell tags", () => {
+		assert.equal(bbcodeToMarkdown("[table]\nheader\nrow\n[/table]"), "| header |\n| --- |\n| row |");
+	});
+
 	it("drops formatting tags that Markdown cannot express", () => {
 		assert.equal(bbcodeToMarkdown("[center]Centered[/center]"), "Centered");
 		assert.equal(bbcodeToMarkdown("[color=red]Red[/color]"), "Red");
+		assert.equal(bbcodeToMarkdown("[right]Right[/right]"), "Right");
+		assert.equal(bbcodeToMarkdown("[fill]Filled[/fill]"), "Filled");
 	});
 });
