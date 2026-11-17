@@ -45,9 +45,14 @@ const IMAGE = /\[img(?:[=\s][^\]]*)?\][\s\S]*?\[\/img\]/g;
 const UNORDERED_LIST = /\[ul\]([\s\S]*?)\[\/ul\]/g;
 const ORDERED_LIST = /\[ol\]([\s\S]*?)\[\/ol\]/g;
 
-/** Reference tags that name a symbol; `[param]` shares the shape. */
+/**
+ * Reference tags that name a symbol; `[param]` shares the shape. The name is
+ * everything up to the closing bracket because Godot writes more than a dotted
+ * path in some forms: `[annotation @GDScript.@rpc]` repeats the `@`, and
+ * `[operator Color.operator *]` ends in the operator symbol.
+ */
 const REFERENCE =
-	/\[(?:method|constructor|member|constant|enum|signal|theme_item|annotation|param)\s+(@?[A-Za-z_][\w.]*)\]/g;
+	/\[(?:method|constructor|operator|member|constant|enum|signal|theme_item|annotation|param)\s+([^\[\]\n]+)\]/g;
 
 /**
  * A bare class reference. A preceding identifier keeps `Array[Node]` intact,
@@ -71,10 +76,20 @@ const LINE_BREAK_RUN = /\s*(?:\[br\]\s*)+/g;
  * hard line break (two trailing spaces), because a plain newline renders as a
  * space; any longer run starts a new paragraph, the closest a hover can get to
  * the blank line Godot draws.
+ *
+ * Only `[br]` counts. Each `##` line is a separate source line, and Godot joins
+ * them as whitespace, so a `[br]` at the end of a line followed by more text is
+ * one break, not a paragraph gap.
  */
 const line_break = (run: string): string => {
-	const breaks = (run.match(/\[br\]|\n/g) ?? []).length;
+	const breaks = (run.match(/\[br\]/g) ?? []).length;
 	return breaks > 1 ? "\n\n" : "  \n";
+};
+
+/** Markdown for one reference tag; a body with no name stays as written. */
+const referenceSpan = (match: string, name: string): string => {
+	const trimmed = name.trim();
+	return trimmed.length > 0 ? codeSpan(trimmed) : match;
 };
 
 /** A fenced block; the language is only known for the two language tags. */
@@ -197,7 +212,7 @@ export function bbcodeToMarkdown(bbcode: string): string {
 		.replace(/\[kbd\]([\s\S]*?)\[\/kbd\]/g, (_match, content: string) => codeSpan(content))
 		.replaceAll("[lb]", "\\[")
 		.replaceAll("[rb]", "\\]")
-		.replace(REFERENCE, (_match, name: string) => codeSpan(name))
+		.replace(REFERENCE, referenceSpan)
 		.replace(CLASS_REFERENCE, (_match, name: string) => codeSpan(name))
 		.replace(LAYOUT_TAG, "");
 

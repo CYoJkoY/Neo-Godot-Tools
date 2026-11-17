@@ -77,6 +77,18 @@ describe("docstring BBCode to Markdown", () => {
 		assert.equal(bbcodeToMarkdown("Requires a [Node] instance."), "Requires a `Node` instance.");
 	});
 
+	it("renders an operator reference as inline code", () => {
+		assert.equal(bbcodeToMarkdown("See [operator Color.operator *]."), "See `Color.operator *`.");
+	});
+
+	it("renders a qualified annotation reference as inline code", () => {
+		assert.equal(bbcodeToMarkdown("See [annotation @GDScript.@rpc]."), "See `@GDScript.@rpc`.");
+	});
+
+	it("does not count a source newline as a second break", () => {
+		assert.equal(bbcodeToMarkdown("Line one[br]\nLine two"), "Line one  \nLine two");
+	});
+
 	it("leaves an already indexed type alone", () => {
 		assert.equal(bbcodeToMarkdown("An Array[int] of values"), "An Array[int] of values");
 	});
