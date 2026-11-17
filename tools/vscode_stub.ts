@@ -374,6 +374,17 @@ const event = (_listener: (...args: unknown[]) => unknown): StubDisposable => ({
 /** Seed with `vscode.__configuration["neoGodotTools.some.setting"]` from a test. */
 const configuration: Record<string, unknown> = {};
 
+type ConfigurationListener = (event: { affectsConfiguration: (section: string) => boolean }) => unknown;
+
+const configurationListeners: ConfigurationListener[] = [];
+
+/** Fires `onDidChangeConfiguration` as VS Code does after a setting is written. */
+function fireConfigurationChange(section: string): void {
+	const change = { affectsConfiguration: (name: string) => name === section };
+	// biome-ignore lint/complexity/noForEach: the snapshot keeps the fan-out stable when a listener unsubscribes.
+	[...configurationListeners].forEach((listener) => listener(change));
+}
+
 interface StubTextDocument {
 	uri: Uri;
 	languageId: string;
@@ -407,7 +418,10 @@ const workspace = {
 	onDidChangeTextDocument: event,
 	onDidSaveTextDocument: event,
 	onDidCloseTextDocument: event,
-	onDidChangeConfiguration: event,
+	onDidChangeConfiguration: (listener: ConfigurationListener): StubDisposable => {
+		configurationListeners.push(listener);
+		return { dispose: () => configurationListeners.splice(configurationListeners.indexOf(listener), 1) };
+	},
 	onDidChangeWorkspaceFolders: event,
 	createFileSystemWatcher: () => ({
 		onDidCreate: event,
@@ -500,6 +514,9 @@ const commands = {
 	getCommands: async (_filterInternal?: boolean): Promise<string[]> => [],
 };
 
+/** Formatting providers currently registered through `languages`, in order. */
+const formattingProviders: Array<{ selector: unknown; provider: unknown }> = [];
+
 const languages = {
 	createDiagnosticCollection: (name?: string) => {
 		const entries = new Map<string, unknown>();
@@ -524,7 +541,11 @@ const languages = {
 	registerSignatureHelpProvider: () => ({ dispose: () => {} }),
 	registerDocumentLinkProvider: () => ({ dispose: () => {} }),
 	registerDocumentDropEditProvider: () => ({ dispose: () => {} }),
-	registerDocumentFormattingEditProvider: () => ({ dispose: () => {} }),
+	registerDocumentFormattingEditProvider: (selector: unknown, provider: unknown) => {
+		const entry = { selector, provider };
+		formattingProviders.push(entry);
+		return { dispose: () => formattingProviders.splice(formattingProviders.indexOf(entry), 1) };
+	},
 	registerDocumentRangeFormattingEditProvider: () => ({ dispose: () => {} }),
 	registerDocumentSemanticTokensProvider: () => ({ dispose: () => {} }),
 	registerInlayHintsProvider: () => ({ dispose: () => {} }),
@@ -646,6 +667,10 @@ const UIKind = { Desktop: 1, Web: 2 };
 const version = "1.96.0";
 const __stub = true;
 const __configuration = configuration;
+/** Lets a test fire a configuration change the way VS Code would. */
+const __fireConfigurationChange = fireConfigurationChange;
+/** Formatting providers a test can inspect after an activation or disposal. */
+const __formattingProviders = formattingProviders;
 
 export {
 	Uri,
@@ -694,5 +719,7 @@ export {
 	DiagnosticSeverity,
 	__stub,
 	__configuration,
+	__fireConfigurationChange,
+	__formattingProviders,
 };
 export type { StubDisposable, StubTextDocument, UriComponents };
