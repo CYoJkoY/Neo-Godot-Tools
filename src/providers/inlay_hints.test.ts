@@ -142,6 +142,62 @@ describe("inlay hints", () => {
 		);
 	});
 
+	it("keeps the type arguments of container types", async () => {
+		const source = "var names := []\nvar lookup := {}\n";
+		const document = fakeDocument("/game/player.gd", source);
+		const detail = (value: string) => () => value;
+		const symbols = [
+			{ name: "names", detail: "var names: Array[String]" },
+			{ name: "lookup", detail: "var lookup: Dictionary[String, int]" },
+		] as unknown as vscode.DocumentSymbol[];
+		const hints = await gdscriptHints(document, source, 0, TOKEN, fakeClient(detail(""), symbols));
+
+		assert.deepEqual(hints.map((hint) => hint.label), ["Array[String]", "Dictionary[String, int]"]);
+		assert.deepEqual(
+			hints.map((hint) => hint.textEdits?.[0].newText),
+			[" Array[String] ", " Dictionary[String, int] "],
+			"accepting the hint writes the full type, not a bare container name",
+		);
+	});
+
+	it("drops the script qualifier of a detail and keeps nested arguments", async () => {
+		const source = "var hero := null\nvar party := []\nvar squad := []\n";
+		const document = fakeDocument("/game/player.gd", source);
+		const symbols = [
+			{ name: "hero", detail: "var hero: player.gd.Player" },
+			{ name: "party", detail: "var party: Array[player.gd.Player]" },
+			{ name: "squad", detail: "var squad: Array[res://actors/player.gd.Player]" },
+		] as unknown as vscode.DocumentSymbol[];
+		const hints = await gdscriptHints(
+			document,
+			source,
+			0,
+			TOKEN,
+			fakeClient(() => undefined, symbols),
+		);
+
+		assert.deepEqual(
+			hints.map((hint) => hint.label),
+			["Player", "Array[Player]", "Array[Player]"],
+			"the written type is valid GDScript",
+		);
+	});
+
+	it("falls back to hover when a detail has no type", async () => {
+		const source = "var value := 1\n";
+		const document = fakeDocument("/game/player.gd", source);
+		const symbols = [{ name: "value", detail: "var value" }] as unknown as vscode.DocumentSymbol[];
+		const hints = await gdscriptHints(
+			document,
+			source,
+			0,
+			TOKEN,
+			fakeClient(() => "var value: int", symbols),
+		);
+
+		assert.deepEqual(hints.map((hint) => hint.label), ["int"]);
+	});
+
 	it("does not touch the server without a client, symbols or a live request", async () => {
 		const document = fakeDocument("/game/player.gd", GDSCRIPT);
 		assert.deepEqual(await gdscriptHints(document, GDSCRIPT, 0, TOKEN, undefined), []);
