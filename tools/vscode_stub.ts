@@ -468,6 +468,8 @@ const window = {
 	showInputBox: async (_options?: unknown): Promise<string | undefined> => undefined,
 	showOpenDialog: async (_options?: unknown): Promise<Uri[] | undefined> => undefined,
 	showTextDocument: async (_uri: Uri, _options?: unknown): Promise<unknown> => undefined,
+	createTreeView: (_id: string, _options?: unknown) => ({ dispose: () => {} }),
+	registerFileDecorationProvider: (_provider: unknown) => ({ dispose: () => {} }),
 	registerCustomEditorProvider: () => ({ dispose: () => {} }),
 	registerWebviewViewProvider: () => ({ dispose: () => {} }),
 	registerWebviewPanelSerializer: () => ({ dispose: () => {} }),

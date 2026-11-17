@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
-import { TextDocument, Uri, workspace } from "vscode";
-import { createLogger } from "../utils";
+import { TextDocument, Uri } from "vscode";
+import { createLogger, resolve_resource_file } from "../utils";
 import { createLruCache } from "../utils/lru_cache";
 import { parseNodeProperties } from "./properties";
 import { Scene, SceneNode, SceneResource } from "./types";
@@ -333,9 +333,7 @@ export class SceneParser {
 	private resolve_resource_path(filePath: string, resourcePath: string): string | undefined {
 		if (!resourcePath) return undefined;
 		if (resourcePath.startsWith("res://")) {
-			const folder = workspace.getWorkspaceFolder(Uri.file(filePath));
-			if (!folder) return undefined;
-			return resolve(folder.uri.fsPath, resourcePath.slice("res://".length));
+			return resolve_resource_file(filePath, resourcePath);
 		}
 		if (resourcePath.startsWith("user://")) return undefined;
 		if (isAbsolute(resourcePath)) return resourcePath;

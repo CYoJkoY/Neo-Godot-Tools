@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { PropertyMetadata, defaultValueForType, widgetForProperty } from "../resource_inspector/metadata.js";
 import { resourceInspectorHtml } from "../resource_inspector/panel_html.js";
 import { parseVariant } from "../resource_inspector/values.js";
-import { convert_resource_path_to_uri, convert_uri_to_resource_path, convert_uid_to_uri, createLogger } from "../utils";
+import { convert_uid_to_uri, createLogger, project_resource_path, resolve_resource_file } from "../utils";
 import { SceneParser } from "./parser.js";
 import {
 	NodePropertyMetadata,
@@ -474,15 +474,16 @@ async function readResourceText(uri: vscode.Uri): Promise<string | undefined> {
 
 async function externalResourceUri(target: InspectorTarget, resourcePath: string): Promise<vscode.Uri | undefined> {
 	try {
-		return resourcePath.startsWith("uid://")
-			? await convert_uid_to_uri(resourcePath)
-			: resourcePath.startsWith("res://")
-				? await convert_resource_path_to_uri(resourcePath)
-				: vscode.Uri.file(
-						path.isAbsolute(resourcePath)
-							? resourcePath
-							: path.resolve(path.dirname(target.uri.fsPath), resourcePath),
-					);
+		if (resourcePath.startsWith("uid://")) return await convert_uid_to_uri(resourcePath);
+		if (resourcePath.startsWith("res://")) {
+			const resolved = resolve_resource_file(target.uri.fsPath, resourcePath);
+			return resolved === undefined ? undefined : vscode.Uri.file(resolved);
+		}
+		return vscode.Uri.file(
+			path.isAbsolute(resourcePath)
+				? resourcePath
+				: path.resolve(path.dirname(target.uri.fsPath), resourcePath),
+		);
 	} catch {
 		return undefined;
 	}
@@ -571,12 +572,9 @@ function resourceExtensions(type: string | undefined): string[] {
 }
 
 async function scenePathForUri(sceneUri: vscode.Uri, resourceUri: vscode.Uri): Promise<string> {
-	try {
-		const resourcePath = await convert_uri_to_resource_path(resourceUri);
-		if (!resourcePath.includes("../")) return resourcePath;
-	} catch {
-		/* fall back to a path relative to the scene */
-	}
+	const resourcePath = project_resource_path(sceneUri.fsPath, resourceUri.fsPath);
+	if (resourcePath !== undefined) return resourcePath;
+	/* Outside the owning project: store a path relative to the scene instead. */
 	const relative = path.relative(path.dirname(sceneUri.fsPath), resourceUri.fsPath).split(path.sep).join("/");
 	return relative.startsWith(".") ? relative : `./${relative}`;
 }

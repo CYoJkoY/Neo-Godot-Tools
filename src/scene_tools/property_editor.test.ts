@@ -1,5 +1,9 @@
 import { strict as assert } from "node:assert";
-import { describe, it } from "node:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, it, mock } from "node:test";
+import * as vscode from "vscode";
 import { SceneNode } from "./types.js";
 import { NodePropertyMetadata } from "./property_editor.js";
 import { Scene } from "./types.js";
@@ -135,5 +139,62 @@ describe("scene property metadata fallback", () => {
 
 		const metadata = await new NodePropertyMetadata().forNode(scene, node);
 		assert.equal(metadata.find((property) => property.name === "materials")?.type, "Array[StandardMaterial3D]");
+	});
+
+	describe("script metadata for a nested project", () => {
+		let root: string | undefined;
+
+		afterEach(() => {
+			mock.restoreAll();
+			if (root !== undefined) fs.rmSync(root, { recursive: true, force: true });
+			root = undefined;
+		});
+
+		it("reads @export properties from the scene's own project instead of a workspace collision", async () => {
+			const temp = fs.mkdtempSync(path.join(os.tmpdir(), "ngdt-property-script-"));
+			root = temp;
+			const project = path.join(temp, "game");
+			fs.mkdirSync(path.join(project, "scenes"), { recursive: true });
+			fs.writeFileSync(path.join(project, "project.godot"), "config_version=4\n");
+			fs.writeFileSync(path.join(temp, "player.gd"), "extends Node2D\n@export var outside_value: int\n");
+			fs.writeFileSync(path.join(project, "player.gd"), "extends Node2D\n@export var project_value: float\n");
+			mock.method(vscode.workspace, "getWorkspaceFolder", () => ({
+				uri: vscode.Uri.file(temp),
+				name: "workspace",
+				index: 0,
+			}));
+
+			const nested = new Scene({
+				path: path.join(project, "scenes", "main.tscn"),
+				title: "main.tscn",
+				mtime: 0,
+				source: "",
+				fingerprint: "",
+			});
+			nested.externalResources.set("1", {
+				path: "res://player.gd",
+				type: "Script",
+				id: "1",
+				uid: "",
+				body: "",
+				index: 0,
+				line: 1,
+			});
+			const node = new SceneNode({
+				label: "Player",
+				className: "Node2D",
+				path: "Player",
+				relativePath: "",
+				parent: "",
+				text: '[node name="Player" type="Node2D"]',
+				position: 0,
+				bodyEnd: 100,
+			});
+			node.scriptId = "1";
+
+			const metadata = await new NodePropertyMetadata().forNode(nested, node);
+			assert.ok(metadata.some((property) => property.name === "project_value"));
+			assert.equal(metadata.some((property) => property.name === "outside_value"), false);
+		});
 	});
 });

@@ -20,7 +20,7 @@ import {
 } from "../resource_inspector/metadata.js";
 import type { ResourceDocument } from "../resource_inspector/document.js";
 import { parseVariant, type VariantValue } from "../resource_inspector/values.js";
-import { convert_resource_path_to_uri, createLogger } from "../utils/index.js";
+import { createLogger, resolve_resource_file } from "../utils/index.js";
 import { createLruCache } from "../utils/lru_cache.js";
 import { withTimeout } from "../utils/scheduling.js";
 import { findProperty, planPropertyWrite } from "./properties.js";
@@ -112,12 +112,12 @@ export class NodePropertyMetadata {
 			const resource = scene.externalResources.get(id);
 			if (!resource?.path?.endsWith(".gd")) continue;
 			if (resource.path.startsWith("res://")) {
-				try {
-					return await convert_resource_path_to_uri(resource.path);
-				} catch (error) {
-					log.debug(`Unable to resolve '${resource.path}': ${String(error)}`);
+				const resolved = resolve_resource_file(scene.path, resource.path);
+				if (resolved === undefined) {
+					log.debug(`Unable to resolve '${resource.path}' for '${scene.path}'`);
 					return undefined;
 				}
+				return vscode.Uri.file(resolved);
 			}
 			return vscode.Uri.file(resource.path);
 		}

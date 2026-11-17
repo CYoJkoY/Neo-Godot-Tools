@@ -17,12 +17,12 @@ import {
 } from "vscode";
 import type { LspClientLike } from "../lsp/types";
 import {
-	convert_resource_path_to_uri,
 	createLogger,
 	find_file,
 	get_configuration,
 	make_docs_uri,
 	register_command,
+	resolve_resource_file,
 	set_context,
 } from "../utils";
 import { apply_custom_class_icons, invalidateNodeIconCaches } from "./node_icons";
@@ -290,7 +290,11 @@ export class ScenePreviewProvider
 
 	private async open_scene(item: SceneNode) {
 		if (!item.resourcePath) return;
-		const uri = await convert_resource_path_to_uri(item.resourcePath);
+		const uri = this.resolve_resource_uri(this.scene?.path, item.resourcePath);
+		if (uri === undefined) {
+			log.debug(`Unable to resolve scene resource path '${item.resourcePath}' for '${item.path}'.`);
+			return;
+		}
 		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
@@ -364,9 +368,8 @@ export class ScenePreviewProvider
 		if (!scenePath || !resourcePath) return undefined;
 
 		if (resourcePath.startsWith("res://")) {
-			const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(scenePath));
-			if (!folder) return undefined;
-			const filePath = resolve(folder.uri.fsPath, resourcePath.slice("res://".length));
+			const filePath = resolve_resource_file(scenePath, resourcePath);
+			if (filePath === undefined) return undefined;
 			return fs.existsSync(filePath) ? vscode.Uri.file(filePath) : undefined;
 		}
 
