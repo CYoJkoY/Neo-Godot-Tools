@@ -226,4 +226,23 @@ describe("scene preview project resources", () => {
 		await openScene(sceneRoot);
 		assert.deepEqual(opened, [path.join(root, "game/child.tscn")]);
 	});
+
+	it("opens a script from the project of the instanced scene it belongs to", async () => {
+		writeFiles({
+			"game/player.gd": "extends Node2D\nclass_name OuterPlayer\n",
+			"game/subrepo/project.godot": "config_version=4\n",
+			"game/subrepo/child_player.gd": "extends Node2D\nclass_name InnerPlayer\n",
+			"game/subrepo/child.tscn": scriptScene("res://child_player.gd"),
+		});
+		parseScene(`[gd_scene load_steps=2 format=2]
+
+[ext_resource type="PackedScene" path="res://subrepo/child.tscn" id=1]
+
+[node name="Instance" instance=ExtResource( 1 )]
+`);
+		const sceneRoot = provider.scene?.root;
+		assert.ok(sceneRoot);
+		assert.equal(sceneRoot.className, "InnerPlayer");
+		await checkScriptCommands(path.join(root, "game/subrepo/child_player.gd"));
+	});
 });

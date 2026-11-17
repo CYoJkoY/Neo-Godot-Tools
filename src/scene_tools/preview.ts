@@ -305,7 +305,7 @@ export class ScenePreviewProvider
 			return;
 		}
 
-		const uri = this.resolve_resource_uri(this.scene?.path, resource.path);
+		const uri = this.resolve_resource_uri(resource.scenePath, resource.path);
 		if (!uri) {
 			log.debug(`Unable to resolve script resource path '${resource.path}' for '${item.path}'.`);
 			return;
@@ -313,23 +313,33 @@ export class ScenePreviewProvider
 		await vscode.window.showTextDocument(uri, { preview: true });
 	}
 
-	private resolve_script_resource(scene: Scene | undefined, item: SceneNode): { path: string } | undefined {
+	/**
+	 * Script resource of `item`, together with the scene that declares it.
+	 *
+	 * An instanced node contributes its script from the instance's own scene, so
+	 * a `res://` path must resolve against that scene's project, not the project
+	 * of the previewed scene.
+	 */
+	private resolve_script_resource(
+		scene: Scene | undefined,
+		item: SceneNode,
+	): { path: string; scenePath: string } | undefined {
 		if (!scene) return undefined;
 
-		const findDirect = (source: Scene, node: SceneNode): { path: string } | undefined => {
+		const findDirect = (source: Scene, node: SceneNode): { path: string; scenePath: string } | undefined => {
 			if (node.scriptId) {
 				const resource = source.externalResources.get(node.scriptId);
-				if (resource?.path) return resource;
+				if (resource?.path) return { path: resource.path, scenePath: source.path };
 			}
 
 			if (node.customTypeScriptId) {
 				const resource = source.externalResources.get(node.customTypeScriptId);
-				if (resource?.path) return resource;
+				if (resource?.path) return { path: resource.path, scenePath: source.path };
 			}
 
 			if (node.customTypeScriptUid) {
 				const resource = source.externalResourcesByUid.get(node.customTypeScriptUid);
-				if (resource?.path) return resource;
+				if (resource?.path) return { path: resource.path, scenePath: source.path };
 			}
 
 			if (node.customTypeScriptSubResourceId) {
@@ -339,14 +349,17 @@ export class ScenePreviewProvider
 				)?.[1];
 				if (scriptId) {
 					const resource = source.externalResources.get(scriptId);
-					if (resource?.path) return resource;
+					if (resource?.path) return { path: resource.path, scenePath: source.path };
 				}
 			}
 			return undefined;
 		};
 
 		const visited = new Set<string>();
-		const visit = (currentScene: Scene, currentNode: SceneNode): { path: string } | undefined => {
+		const visit = (
+			currentScene: Scene,
+			currentNode: SceneNode,
+		): { path: string; scenePath: string } | undefined => {
 			const key = `${currentScene.path}:${currentNode.path}`;
 			if (visited.has(key)) return undefined;
 			visited.add(key);
@@ -398,7 +411,7 @@ export class ScenePreviewProvider
 			return;
 		}
 
-		const uri = this.resolve_resource_uri(this.scene.path, resource.path);
+		const uri = this.resolve_resource_uri(resource.scenePath, resource.path);
 		if (!uri) {
 			log.debug(`Unable to resolve main script resource path '${resource.path}' for scene '${this.scene.path}'.`);
 			return;
