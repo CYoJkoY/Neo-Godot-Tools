@@ -16,6 +16,17 @@ script = ExtResource( 1 )
 `;
 }
 
+/** The layout from issue #263: a Godot 4 scene whose workspace is an ancestor. */
+function godot4ScriptScene(resourcePath: string): string {
+	return `[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="${resourcePath}" id="1"]
+
+[node name="Player" type="Node2D"]
+script = ExtResource("1")
+`;
+}
+
 function storedValue<T>(key: string): T | undefined;
 function storedValue<T>(key: string, fallback: T): T;
 function storedValue<T>(_key: string, fallback?: T): T | undefined {
@@ -106,6 +117,17 @@ describe("scene preview project resources", () => {
 			"game/player.gd": "extends Node2D\nclass_name Player\n",
 		});
 		parseScene(scriptScene("res://player.gd"));
+		assert.equal(provider.scene?.root?.className, "Player");
+		await checkScriptCommands(path.join(root, "game/player.gd"));
+	});
+
+	it("resolves a Godot 4 scene from the issue reproduction against its own project", async () => {
+		writeFiles({
+			"player.gd": "extends Node2D\nclass_name OutsidePlayer\n",
+			"game/player.gd": "extends Node2D\nclass_name Player\n",
+		});
+		parseScene(godot4ScriptScene("res://player.gd"));
+		assert.equal(provider.scene?.root?.scriptId, "1");
 		assert.equal(provider.scene?.root?.className, "Player");
 		await checkScriptCommands(path.join(root, "game/player.gd"));
 	});
