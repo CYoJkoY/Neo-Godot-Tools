@@ -2,7 +2,7 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.3.5 — 2026-11-21 (pending)
+### 3.3.5 — 2026-11-21
 
 Changes since [v3.3.4](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.4...v3.3.5).
 
