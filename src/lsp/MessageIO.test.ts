@@ -150,4 +150,22 @@ describe("MessageIO", () => {
 		assert.equal(reported, 2);
 		registration.dispose();
 	});
+
+	it("keeps delivering after the reader was disposed by a stopped client", () => {
+		const io = new MessageIO();
+		const received: string[] = [];
+		const record = (message: Message): void => {
+			if ("method" in message && typeof message.method === "string") received.push(message.method);
+		};
+		// Stopping a client disposes the reader through its JSON-RPC connection;
+		// starting it again reuses the same reader for the new connection.
+		io.reader.listen(record).dispose();
+		io.reader.dispose();
+
+		const registration = io.reader.listen(record);
+		io.emit("data", frame({ jsonrpc: "2.0", method: "restarted" }));
+
+		assert.deepEqual(received, ["restarted"]);
+		registration.dispose();
+	});
 });
