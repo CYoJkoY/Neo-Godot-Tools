@@ -18,6 +18,9 @@ import GDScriptLanguageClient, { ClientStatus, TargetLSP } from "./GDScriptLangu
 
 const log = createLogger("lsp.manager", { output: "Godot LSP" });
 
+/** Text of an error, for logging an `unknown` rejection reason. */
+const describe_error = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 export enum ManagerStatus {
 	INITIALIZING = 0,
 	INITIALIZING_LSP = 1,
@@ -84,7 +87,15 @@ export class ClientConnectionManager implements vscode.Disposable {
 		this.reconnectTimer = undefined;
 		this.stop_language_server();
 		this.client?.events?.removeAllListeners();
-		void this.client?.stop();
+		void this.client
+			?.stop()
+			.catch((error: unknown) => {
+				log.warn(`failed to stop the LSP client: ${describe_error(error)}`);
+			})
+			// Nothing else owns the transport once the manager is gone: leaving the
+			// socket open would keep the server attached to a client that no longer
+			// reads from it.
+			.finally(() => this.client?.io.socket?.destroy());
 		this.statusChanged.dispose();
 	}
 
@@ -93,7 +104,9 @@ export class ClientConnectionManager implements vscode.Disposable {
 		const port = previous?.port ?? -1;
 		if (previous) {
 			previous.events.removeAllListeners();
-			void previous.stop();
+			void previous.stop().catch((error: unknown) => {
+				log.warn(`failed to stop the previous LSP client: ${describe_error(error)}`);
+			});
 		}
 
 		const clientGeneration = ++this.clientGeneration;
@@ -307,7 +320,15 @@ export class ClientConnectionManager implements vscode.Disposable {
 				this.reconnectionAttempts = 0;
 				set_context("connectedToLSP", true);
 				this.status = ManagerStatus.CONNECTED;
-				if (this.client.needsStart()) void this.client.start().then(() => log.info("LSP Client started"));
+				if (this.client.needsStart()) {
+					void this.client.start().then(
+						() => log.info("LSP Client started"),
+						// The client drops its transport when the handshake fails, so
+						// the resulting `disconnected` status already schedules a retry
+						// with a fresh client; this only records the cause.
+						(error: unknown) => log.warn(`LSP client failed to start: ${describe_error(error)}`),
+					);
+				}
 				break;
 			case ClientStatus.DISCONNECTED:
 				this.client = this.create_new_client(this.client);

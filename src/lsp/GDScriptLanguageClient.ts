@@ -1,5 +1,4 @@
 import EventEmitter from "node:events";
-import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
 import {
@@ -18,10 +17,17 @@ import { createLogger, get_configuration, get_project_dir } from "../utils";
 import { createLruCache } from "../utils/lru_cache";
 import { MessageIO } from "./MessageIO";
 import { stopAfterStart } from "./client_lifecycle";
+import { is_same_workspace } from "./workspace_path";
 
 const log = createLogger("lsp.client", { output: "Godot LSP" });
 
 const BUILTIN_SYMBOL_TIMEOUT_MS = 300;
+
+/** Message the language client logs when the handshake with the server fails. */
+const CONNECT_FAILED_MESSAGE = "couldn't create connection to server";
+
+/** Text of an error, for logging an `unknown` rejection reason. */
+const describe_error = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 enum ClientStatus {
 	PENDING = 0,
@@ -110,6 +116,15 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	private readonly requestStarts = createLruCache<string | number, number>({ capacity: 512 });
 	private rejected = false;
 	private startPromise?: Promise<void>;
+	/** Whether `super.start` is still completing the `initialize` handshake. */
+	private starting = false;
+	/**
+	 * Set when the connection must be dropped, but not while the JSON-RPC
+	 * `initialize` request is in flight: disposing the transport at that point
+	 * rejects that request ("Pending response rejected since connection got
+	 * disposed") instead of reporting the intended outcome.
+	 */
+	private releaseWhenStarted = false;
 
 	events = new EventEmitter();
 
@@ -132,6 +147,14 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		};
 
 		const clientOptions: LanguageClientOptions = {
+			// Transport failures are recovered by the connection manager, which
+			// retries with a fresh client. Answering `false` stops this client
+			// without the language client's own error dialog for the rejected
+			// `initialize` request.
+			initializationFailedHandler: (error: Error): boolean => {
+				log.warn(`LSP initialization failed: ${error.message}`);
+				return false;
+			},
 			documentSelector: [
 				{ scheme: "file", language: "gdscript" },
 				{ scheme: "untitled", language: "gdscript" },
@@ -173,10 +196,28 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	override start(): Promise<void> {
 		const starting = super.start();
 		this.startPromise = starting;
-		const clearStart = () => {
-			if (this.startPromise === starting) this.startPromise = undefined;
+		this.starting = true;
+		const settle = (failed: boolean) => {
+			if (this.startPromise !== starting) return;
+			this.startPromise = undefined;
+			this.starting = false;
+			if (failed) {
+				// A failed handshake leaves the transport unusable. Dropping the
+				// socket reports `disconnected`, which makes the manager rebuild
+				// the connection instead of keeping a client that cannot restart.
+				this.releaseWhenStarted = false;
+				this.release_socket();
+				return;
+			}
+			if (this.releaseWhenStarted) {
+				this.releaseWhenStarted = false;
+				this.release_socket();
+			}
 		};
-		void starting.then(clearStart, clearStart);
+		void starting.then(
+			() => settle(false),
+			() => settle(true),
+		);
 		return starting;
 	}
 
@@ -184,19 +225,44 @@ export default class GDScriptLanguageClient extends LanguageClient {
 		await stopAfterStart(this.startPromise, () => this.isRunning(), () => super.stop());
 	}
 
+	/**
+	 * A failed handshake is reported through the connection manager's status
+	 * widget and retried, so it is logged instead of interrupting the user with
+	 * a dialog. The output channel keeps the full message either way.
+	 */
+	override error(message: string, data?: unknown, showNotification?: boolean | "force"): void {
+		if (this.starting && message.includes(CONNECT_FAILED_MESSAGE)) {
+			super.error(message, data, false);
+			return;
+		}
+		super.error(message, data, showNotification);
+	}
+
 	connect(target: TargetLSP = TargetLSP.EDITOR) {
 		this.rejected = false;
+		this.releaseWhenStarted = false;
 		this.target = target;
 		this.status = ClientStatus.PENDING;
 
 		let port = get_configuration("lsp.serverPort", 6008);
 		if (this.port !== -1) port = this.port;
 		if (this.target === TargetLSP.EDITOR && (port === 6005 || port === 6008)) port = 6005;
-		this.lastPortTried = port;
 
 		const host = get_configuration("lsp.serverHost", "127.0.0.1");
 		log.info(`attempting to connect to LSP at ${host}:${port}`);
-		this.io.connect(host, port);
+		if (!this.needsStop()) {
+			this.open_socket(host, port);
+			return;
+		}
+		// A running client owns the transport: replacing it under a live
+		// JSON-RPC connection would leave the old handshake pending.
+		void this.stop().then(
+			() => this.open_socket(host, port),
+			(error: unknown) => {
+				log.warn(`failed to stop the previous LSP connection: ${describe_error(error)}`);
+				this.open_socket(host, port);
+			},
+		);
 	}
 
 	override handleFailedRequest<T>(
@@ -264,20 +330,39 @@ export default class GDScriptLanguageClient extends LanguageClient {
 	}
 
 	private async check_workspace(message: ChangeWorkspaceNotification) {
-		const server_path = path.normalize(message.params.path);
-		const client_path = path.normalize((await get_project_dir()) ?? "");
-		const is_subfolder = client_path.startsWith(server_path + path.sep);
-		const is_same = client_path === server_path;
-		if (!is_same && !is_subfolder) {
-			log.warn("Connected LSP is a different workspace");
-			this.io.socket?.resetAndDestroy();
-			this.rejected = true;
-		}
+		if (this.rejected) return;
+		const client_path = (await get_project_dir()) ?? "";
+		// The server reports the project root whenever its own comparison with the
+		// client root fails, so this check must apply the same rules. A stricter
+		// comparison rejects a healthy connection over case or separator
+		// differences and drops it mid-handshake.
+		if (is_same_workspace(message.params.path, client_path)) return;
+		log.warn(`the connected LSP serves "${message.params.path}", not "${client_path}"`);
+		this.reject_connection();
+	}
+
+	private reject_connection() {
+		this.rejected = true;
+		if (this.starting) this.releaseWhenStarted = true;
+		else this.release_socket();
+	}
+
+	/** Drops the transport; the resulting `disconnected` event reports the status. */
+	private release_socket() {
+		this.io.socket?.resetAndDestroy();
+	}
+
+	private open_socket(host: string, port: number) {
+		this.lastPortTried = port;
+		void this.io.connect(host, port);
 	}
 
 	private notification_filter(message: NotificationMessage) {
-		if (message.method === "gdscript_client/changeWorkspace")
-			this.check_workspace(message as ChangeWorkspaceNotification);
+		if (message.method === "gdscript_client/changeWorkspace") {
+			void this.check_workspace(message as ChangeWorkspaceNotification).catch((error: unknown) => {
+				log.warn(`workspace check failed: ${describe_error(error)}`);
+			});
+		}
 		if (message.method === "gdscript/capabilities") globals.docsProvider?.register_capabilities(message);
 		return message;
 	}
@@ -341,8 +426,7 @@ export default class GDScriptLanguageClient extends LanguageClient {
 				if (this.lastPortTried === 6005) {
 					port = 6008;
 					log.info(`attempting to connect to LSP at ${host}:${port}`);
-					this.lastPortTried = port;
-					this.io.connect(host, port);
+					this.open_socket(host, port);
 					return;
 				}
 			}
