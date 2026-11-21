@@ -87,9 +87,15 @@ export class ClientConnectionManager implements vscode.Disposable {
 		this.reconnectTimer = undefined;
 		this.stop_language_server();
 		this.client?.events?.removeAllListeners();
-		void this.client?.stop().catch((error: unknown) => {
-			log.warn(`failed to stop the LSP client: ${describe_error(error)}`);
-		});
+		void this.client
+			?.stop()
+			.catch((error: unknown) => {
+				log.warn(`failed to stop the LSP client: ${describe_error(error)}`);
+			})
+			// Nothing else owns the transport once the manager is gone: leaving the
+			// socket open would keep the server attached to a client that no longer
+			// reads from it.
+			.finally(() => this.client?.io.socket?.destroy());
 		this.statusChanged.dispose();
 	}
 
