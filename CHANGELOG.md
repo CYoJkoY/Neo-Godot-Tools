@@ -2,7 +2,19 @@
 
 <!-- generated-release-notes:start -->
 
-### 3.3.4 — 2026-11-18 (pending)
+### 3.3.5 — 2026-11-21 (pending)
+
+Changes since [v3.3.4](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.4...v3.3.5).
+
+#### Fixed
+
+- **lsp:** stop tearing down the transport mid-handshake when connecting to the Godot editor ([#266](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/266))
+
+#### Maintenance
+
+- **release:** publish 3.3.5 with the LSP handshake fix ([#267](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/267))
+
+### 3.3.4 — 2026-11-18
 
 Changes since [v3.3.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.3...v3.3.4).
 
@@ -26,6 +38,10 @@ Changes since [v3.3.3](https://github.com/CYoJkoY/Neo-Godot-Tools/compare/v3.3.3
 - **outline:** nest symbols for sticky scroll (#259) ([#260](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/260))
 - **hover:** attach script docs to class\_name (#261) ([#262](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/262))
 - **scene-preview:** resolve resources from nearest project (#263) ([#264](https://github.com/CYoJkoY/Neo-Godot-Tools/pull/264))
+
+#### Documentation
+
+- **changelog:** update changelog ([b5d6318](https://github.com/CYoJkoY/Neo-Godot-Tools/commit/b5d631862cfecfe962f572848baaaea658581542))
 
 ### 3.3.3 — 2026-11-10
 
