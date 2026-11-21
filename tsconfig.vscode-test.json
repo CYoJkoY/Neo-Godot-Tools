@@ -4,6 +4,13 @@
     "outDir": "out-test-host",
     "rootDir": "src"
   },
+  // This project only feeds the extension-host formatter snapshot suite, so it
+  // emits the extension sources plus that one host test. Unit tests are covered
+  // by `tsconfig.test.json`, which allows them to import the `tools/` stubs that
+  // must stay outside this project's `rootDir`.
+  "files": [
+    "src/formatter/formatter.test.ts"
+  ],
   "include": [
     "src/**/*.ts"
   ],
@@ -12,6 +19,7 @@
     "out",
     "out-test",
     "out-test-host",
-    "media"
+    "media",
+    "**/*.test.ts"
   ]
 }
