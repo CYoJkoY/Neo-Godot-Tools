@@ -135,9 +135,15 @@ export default class MessageBuffer {
 	}
 
 	public reset() {
+		// A new connection must not inherit the bytes of a message that the
+		// previous one left half-written: parsing them mixes two sessions into
+		// one frame. The pending partial-message timer belongs to that session
+		// as well, so it is cancelled rather than abandoned.
+		this.clearPartialMessageTimer();
+		this.buffer = Buffer.allocUnsafe(DefaultSize);
+		this.index = 0;
 		this.nextMessageLength = -1;
 		this.messageToken = 0;
-		this.partialMessageTimer = undefined;
 	}
 
 	private clearPartialMessageTimer(): void {
